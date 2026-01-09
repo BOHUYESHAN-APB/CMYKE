@@ -1,5 +1,5 @@
 name: cmyke
-description: "A new Flutter project."
+description: "CMYKE cross-platform agent runtime UI scaffold."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -34,6 +34,12 @@ dependencies:
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
+  google_fonts: ^6.3.0
+  path_provider: ^2.1.5
+  http: ^1.6.0
+  flutter_tts: ^4.2.3
+  speech_to_text: ^7.3.0
+  just_audio: ^0.9.46
 
 dev_dependencies:
   flutter_test:

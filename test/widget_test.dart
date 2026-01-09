@@ -5,26 +5,38 @@
 // gestures. You can also use WidgetTester to find child widgets in the widget
 // tree, read text, and verify that the values of widget properties are correct.
 
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
 
-import 'package:cmyke/main.dart';
+import 'package:cmyke/app.dart';
+
+const MethodChannel _pathProviderChannel =
+    MethodChannel('plugins.flutter.io/path_provider');
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  TestWidgetsFlutterBinding.ensureInitialized();
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+  setUpAll(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      _pathProviderChannel,
+      (MethodCall methodCall) async {
+        switch (methodCall.method) {
+          case 'getApplicationDocumentsDirectory':
+          case 'getTemporaryDirectory':
+            return '.';
+          default:
+            return '.';
+        }
+      },
+    );
+  });
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+  testWidgets('CMYKE app loads the chat shell', (WidgetTester tester) async {
+    await tester.pumpWidget(const CMYKEApp());
+    await tester.pumpAndSettle();
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(find.text('CMYKE'), findsWidgets);
+    expect(find.text('新对话'), findsWidgets);
   });
 }

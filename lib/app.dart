@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import 'core/models/app_settings.dart';
+import 'core/models/provider_config.dart';
 import 'core/repositories/chat_repository.dart';
 import 'core/repositories/memory_repository.dart';
 import 'core/repositories/settings_repository.dart';
+import 'core/services/local_database.dart';
 import 'core/services/local_storage.dart';
 import 'features/chat/chat_screen.dart';
 
@@ -15,20 +18,34 @@ class CMYKEApp extends StatefulWidget {
 }
 
 class _CMYKEAppState extends State<CMYKEApp> {
-  late final LocalStorage _storage;
+  late final LocalDatabase _database;
+  late final LocalStorage _legacyStorage;
   late final ChatRepository _chatRepository;
   late final MemoryRepository _memoryRepository;
   late final SettingsRepository _settingsRepository;
   bool _ready = false;
+  bool _embeddingConfigMissing = false;
   String? _error;
 
   @override
   void initState() {
     super.initState();
-    _storage = LocalStorage();
-    _chatRepository = ChatRepository(storage: _storage);
-    _memoryRepository = MemoryRepository(storage: _storage);
-    _settingsRepository = SettingsRepository(storage: _storage);
+    _database = LocalDatabase();
+    _legacyStorage = LocalStorage();
+    _settingsRepository = SettingsRepository(
+      database: _database,
+      legacyStorage: _legacyStorage,
+    );
+    _chatRepository = ChatRepository(
+      database: _database,
+      legacyStorage: _legacyStorage,
+    );
+    _memoryRepository = MemoryRepository(
+      database: _database,
+      legacyStorage: _legacyStorage,
+      resolveEmbeddingProvider: _resolveEmbeddingProvider,
+    );
+    _settingsRepository.addListener(_refreshEmbeddingConfig);
     _bootstrap();
   }
 
@@ -40,7 +57,10 @@ class _CMYKEAppState extends State<CMYKEApp> {
         _settingsRepository.load(),
       ]);
       if (mounted) {
-        setState(() => _ready = true);
+        setState(() {
+          _embeddingConfigMissing = _isEmbeddingMissing();
+          _ready = true;
+        });
       }
     } catch (error) {
       if (mounted) {
@@ -53,7 +73,9 @@ class _CMYKEAppState extends State<CMYKEApp> {
   void dispose() {
     _chatRepository.dispose();
     _memoryRepository.dispose();
+    _settingsRepository.removeListener(_refreshEmbeddingConfig);
     _settingsRepository.dispose();
+    _database.close();
     super.dispose();
   }
 
@@ -72,7 +94,7 @@ class _CMYKEAppState extends State<CMYKEApp> {
         useMaterial3: true,
         colorScheme: colorScheme,
         scaffoldBackgroundColor: const Color(0xFFF6F2EA),
-        textTheme: GoogleFonts.spaceGroteskTextTheme().apply(
+        textTheme: GoogleFonts.notoSansScTextTheme().apply(
           bodyColor: const Color(0xFF1F2228),
           displayColor: const Color(0xFF1F2228),
         ),
@@ -115,7 +137,62 @@ class _CMYKEAppState extends State<CMYKEApp> {
       chatRepository: _chatRepository,
       memoryRepository: _memoryRepository,
       settingsRepository: _settingsRepository,
+      embeddingConfigMissing: _embeddingConfigMissing,
     );
+  }
+
+  ProviderConfig? _resolveEmbeddingProvider() {
+    try {
+      final provider = _activeLlmProvider();
+      if (provider == null) {
+        return null;
+      }
+      if (provider.protocol == ProviderProtocol.deviceBuiltin) {
+        return null;
+      }
+      final embeddingModel = provider.embeddingModel?.trim();
+      if (embeddingModel == null || embeddingModel.isEmpty) {
+        return null;
+      }
+      return provider;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  ProviderConfig? _activeLlmProvider() {
+    final settings = _settingsRepository.settings;
+    return _settingsRepository.findProvider(settings.llmProviderId);
+  }
+
+  bool _isEmbeddingMissing() {
+    try {
+      final settings = _settingsRepository.settings;
+      if (settings.route != ModelRoute.standard) {
+        return false;
+      }
+      final provider = _activeLlmProvider();
+      if (provider == null) {
+        return true;
+      }
+      if (provider.protocol == ProviderProtocol.deviceBuiltin) {
+        return true;
+      }
+      final embeddingModel = provider.embeddingModel?.trim();
+      return embeddingModel == null || embeddingModel.isEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _refreshEmbeddingConfig() {
+    if (!_ready || !mounted) {
+      return;
+    }
+    final missing = _isEmbeddingMissing();
+    if (missing != _embeddingConfigMissing) {
+      setState(() => _embeddingConfigMissing = missing);
+    }
   }
 }
 

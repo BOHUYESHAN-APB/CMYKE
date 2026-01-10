@@ -95,7 +95,7 @@ class ChatEngine extends ChangeNotifier {
       return;
     }
 
-    final systemPrompt = _buildSystemPrompt();
+    final systemPrompt = await _buildSystemPrompt(trimmed);
     _isStreaming = true;
     notifyListeners();
     final buffer = StringBuffer();
@@ -297,31 +297,54 @@ class ChatEngine extends ChangeNotifier {
     }
   }
 
-  String _buildSystemPrompt() {
-    final cross = _memoryRepository
-        .defaultCollection(MemoryTier.crossSession)
-        .records;
-    final auto = _memoryRepository
-        .defaultCollection(MemoryTier.autonomous)
-        .records;
-    if (cross.isEmpty && auto.isEmpty) {
-      return '你是 CMYKE，一个强调多模态与可扩展能力的智能体。';
+  Future<String> _buildSystemPrompt(String userMessage) async {
+    final base = '你是 CMYKE，一个强调多模态与可扩展能力的智能体。';
+    final relevant =
+        await _memoryRepository.searchRelevant(userMessage, limit: 12);
+    if (relevant.isEmpty) {
+      final cross = _memoryRepository
+          .defaultCollection(MemoryTier.crossSession)
+          .records;
+      final auto = _memoryRepository
+          .defaultCollection(MemoryTier.autonomous)
+          .records;
+      if (cross.isEmpty && auto.isEmpty) {
+        return base;
+      }
+      final buffer = StringBuffer('$base\n');
+      if (cross.isNotEmpty) {
+        buffer.writeln('\n[跨会话记忆]');
+        for (final record in cross.take(12)) {
+          buffer.writeln('- ${record.content}');
+        }
+      }
+      if (auto.isNotEmpty) {
+        buffer.writeln('\n[自主沉淀]');
+        for (final record in auto.take(12)) {
+          buffer.writeln('- ${record.content}');
+        }
+      }
+      return buffer.toString();
     }
-    final buffer = StringBuffer(
-      '你是 CMYKE，一个强调多模态与可扩展能力的智能体。\n',
-    );
-    if (cross.isNotEmpty) {
-      buffer.writeln('\n[跨会话记忆]');
-      for (final record in cross.take(12)) {
-        buffer.writeln('- ${record.content}');
+    final buffer = StringBuffer('$base\n');
+    final byTier = <MemoryTier, List<String>>{};
+    for (final record in relevant) {
+      byTier.putIfAbsent(record.tier, () => []).add(record.content);
+    }
+    void appendTier(MemoryTier tier, String label) {
+      final items = byTier[tier];
+      if (items == null || items.isEmpty) {
+        return;
+      }
+      buffer.writeln('\n[$label]');
+      for (final item in items) {
+        buffer.writeln('- $item');
       }
     }
-    if (auto.isNotEmpty) {
-      buffer.writeln('\n[自主沉淀]');
-      for (final record in auto.take(12)) {
-        buffer.writeln('- ${record.content}');
-      }
-    }
+
+    appendTier(MemoryTier.crossSession, '跨会话记忆');
+    appendTier(MemoryTier.autonomous, '自主沉淀');
+    appendTier(MemoryTier.external, '外部知识库');
     return buffer.toString();
   }
 

@@ -12,7 +12,7 @@ import '../memory/memory_tier_screen.dart';
 import '../settings/provider_config_screen.dart';
 import 'widgets/chat_composer.dart';
 import 'widgets/chat_header.dart';
-import 'widgets/memory_panel.dart';
+import 'widgets/avatar_stage.dart';
 import 'widgets/message_bubble.dart';
 import 'widgets/session_sidebar.dart';
 
@@ -22,11 +22,13 @@ class ChatScreen extends StatefulWidget {
     required this.chatRepository,
     required this.memoryRepository,
     required this.settingsRepository,
+    this.embeddingConfigMissing = false,
   });
 
   final ChatRepository chatRepository;
   final MemoryRepository memoryRepository;
   final SettingsRepository settingsRepository;
+  final bool embeddingConfigMissing;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -121,30 +123,6 @@ class _ChatScreenState extends State<ChatScreen> {
     _showSnack('已写入 ${tier.label}');
   }
 
-  Future<void> _openMemorySheet() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: const Color(0xFFFDFCF9),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (context) {
-        return Padding(
-          padding: const EdgeInsets.all(16),
-          child: MemoryPanel(
-            memoryRepository: widget.memoryRepository,
-            dense: true,
-            onAddMemory: _openManualMemoryDialog,
-            onOpenTier: (tier) {
-              Navigator.of(context).pop();
-              _openMemoryTier(tier);
-            },
-          ),
-        );
-      },
-    );
-  }
-
   Future<void> _openManualMemoryDialog() async {
     final controller = TextEditingController();
     MemoryTier selectedTier = MemoryTier.crossSession;
@@ -217,6 +195,22 @@ class _ChatScreenState extends State<ChatScreen> {
     controller.dispose();
   }
 
+  Future<void> _openAvatarSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFFFDFCF9),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        return const Padding(
+          padding: EdgeInsets.all(16),
+          child: AvatarStage(compact: false),
+        );
+      },
+    );
+  }
+
   void _openMemoryTier(MemoryTier tier) {
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -257,6 +251,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   : Drawer(
                       child: SessionSidebar(
                         chatRepository: widget.chatRepository,
+                        memoryRepository: widget.memoryRepository,
+                        onAddMemory: _openManualMemoryDialog,
+                        onOpenTier: _openMemoryTier,
+                        onOpenSettings: _openSettings,
                         dense: true,
                         onSelect: () => Navigator.of(context).pop(),
                       ),
@@ -277,6 +275,10 @@ class _ChatScreenState extends State<ChatScreen> {
                           width: 280,
                           child: SessionSidebar(
                             chatRepository: widget.chatRepository,
+                            memoryRepository: widget.memoryRepository,
+                            onAddMemory: _openManualMemoryDialog,
+                            onOpenTier: _openMemoryTier,
+                            onOpenSettings: _openSettings,
                           ),
                         ),
                       Expanded(
@@ -287,13 +289,21 @@ class _ChatScreenState extends State<ChatScreen> {
                                   session?.title ?? 'New chat',
                               onExportSession: () => _exportActiveSession(),
                               onExportAll: () => _exportAllSessions(),
-                              onOpenMemory:
-                                  isWide ? null : () => _openMemorySheet(),
-                              onOpenSettings: _openSettings,
                               onCreateSession: () =>
                                   widget.chatRepository.createSession(),
                               showMenuButton: !isWide,
+                              onOpenAvatar: isWide ? null : _openAvatarSheet,
                             ),
+                            if (widget.embeddingConfigMissing)
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 24,
+                                  vertical: 8,
+                                ),
+                                child: _EmbeddingWarning(
+                                  onOpenSettings: _openSettings,
+                                ),
+                              ),
                             const SizedBox(height: 8),
                             if (_chatEngine.partialTranscript.isNotEmpty)
                               Padding(
@@ -350,11 +360,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       if (isWide)
                         SizedBox(
                           width: 280,
-                          child: MemoryPanel(
-                            memoryRepository: widget.memoryRepository,
-                            onAddMemory: _openManualMemoryDialog,
-                            onOpenTier: _openMemoryTier,
-                          ),
+                          child: const AvatarStage(),
                         ),
                     ],
                   ),
@@ -364,6 +370,47 @@ class _ChatScreenState extends State<ChatScreen> {
           },
         );
       },
+    );
+  }
+}
+
+class _EmbeddingWarning extends StatelessWidget {
+  const _EmbeddingWarning({required this.onOpenSettings});
+
+  final VoidCallback onOpenSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF4E5),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFF2D1A6)),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.warning_amber_rounded,
+            color: Color(0xFFB96B00),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '未配置 Embedding 模型，向量检索已停用。请前往模型与能力配置补全。',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: const Color(0xFF7A4E00),
+                    fontWeight: FontWeight.w600,
+                  ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          TextButton(
+            onPressed: onOpenSettings,
+            child: const Text('去配置'),
+          ),
+        ],
+      ),
     );
   }
 }

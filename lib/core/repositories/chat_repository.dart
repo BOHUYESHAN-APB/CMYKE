@@ -1,17 +1,26 @@
 import 'package:flutter/foundation.dart';
+import 'package:sqflite/sqflite.dart';
 
 import '../models/chat_message.dart';
 import '../models/chat_session.dart';
+import '../services/local_database.dart';
 import '../services/local_storage.dart';
 
 class ChatRepository extends ChangeNotifier {
-  ChatRepository({required LocalStorage storage}) : _storage = storage;
+  ChatRepository({
+    required LocalDatabase database,
+    LocalStorage? legacyStorage,
+  })  : _database = database,
+        _legacyStorage = legacyStorage ?? LocalStorage();
 
-  final LocalStorage _storage;
+  final LocalDatabase _database;
+  final LocalStorage _legacyStorage;
   final List<ChatSession> _sessions = [];
   String? _activeSessionId;
 
   static const String _storageFile = 'chat_sessions.json';
+  static const String _sessionsTable = 'chat_sessions';
+  static const String _messagesTable = 'chat_messages';
 
   List<ChatSession> get sessions => List.unmodifiable(_sessions);
   String? get activeSessionId => _activeSessionId;
@@ -22,26 +31,69 @@ class ChatRepository extends ChangeNotifier {
       );
 
   Future<void> load() async {
-    final data = await _storage.readJsonList(_storageFile);
-    if (data == null) {
-      _sessions.add(_createDefaultSession());
-      _activeSessionId = _sessions.first.id;
-      await _persist();
+    final db = await _database.database;
+    var sessionRows = await db.query(
+      _sessionsTable,
+      orderBy: 'updated_at DESC',
+    );
+    if (sessionRows.isEmpty) {
+      await _importLegacy(db);
+      sessionRows = await db.query(
+        _sessionsTable,
+        orderBy: 'updated_at DESC',
+      );
+    }
+    if (sessionRows.isEmpty) {
+      final session = _createDefaultSession();
+      _sessions
+        ..clear()
+        ..add(session);
+      _activeSessionId = session.id;
+      await _insertSession(db, session);
+      await _insertMessages(db, session);
+      notifyListeners();
       return;
     }
+
+    final messageRows = await db.query(
+      _messagesTable,
+      orderBy: 'created_at ASC',
+    );
+    final messagesBySession = <String, List<ChatMessage>>{};
+    for (final row in messageRows) {
+      final sessionId = row['session_id'] as String;
+      messagesBySession.putIfAbsent(sessionId, () => []).add(
+            ChatMessage(
+              id: row['id'] as String,
+              role: ChatRole.values.firstWhere(
+                (role) => role.name == row['role'],
+                orElse: () => ChatRole.assistant,
+              ),
+              content: row['content'] as String,
+              createdAt: DateTime.parse(row['created_at'] as String),
+            ),
+          );
+    }
+
     _sessions
       ..clear()
       ..addAll(
-        data.map((entry) => ChatSession.fromJson(entry as Map<String, dynamic>)),
+        sessionRows.map(
+          (row) => ChatSession(
+            id: row['id'] as String,
+            title: row['title'] as String,
+            createdAt: DateTime.parse(row['created_at'] as String),
+            updatedAt: DateTime.parse(row['updated_at'] as String),
+            messages: messagesBySession[row['id'] as String] ?? [],
+          ),
+        ),
       );
-    if (_sessions.isEmpty) {
-      _sessions.add(_createDefaultSession());
-    }
     _activeSessionId = _sessions.first.id;
     notifyListeners();
   }
 
   Future<void> createSession({String? title}) async {
+    final db = await _database.database;
     final session = ChatSession(
       id: _newId(),
       title: title ?? 'New chat',
@@ -51,17 +103,25 @@ class ChatRepository extends ChangeNotifier {
     _sessions.insert(0, session);
     _activeSessionId = session.id;
     notifyListeners();
-    await _persist();
+    await _insertSession(db, session);
   }
 
   Future<void> removeSession(String sessionId) async {
+    final db = await _database.database;
     _sessions.removeWhere((session) => session.id == sessionId);
+    await db.delete(
+      _sessionsTable,
+      where: 'id = ?',
+      whereArgs: [sessionId],
+    );
     if (_sessions.isEmpty) {
-      _sessions.add(_createDefaultSession());
+      final session = _createDefaultSession();
+      _sessions.add(session);
+      await _insertSession(db, session);
+      await _insertMessages(db, session);
     }
     _activeSessionId = _sessions.first.id;
     notifyListeners();
-    await _persist();
   }
 
   Future<void> setActive(String sessionId) async {
@@ -95,6 +155,7 @@ class ChatRepository extends ChangeNotifier {
     if (session == null) {
       return;
     }
+    final db = await _database.database;
     session.messages.add(message);
     session.updatedAt = DateTime.now();
     if (session.title == 'New chat' &&
@@ -104,7 +165,15 @@ class ChatRepository extends ChangeNotifier {
     }
     notifyListeners();
     if (persist) {
-      await _persist();
+      await db.transaction((txn) async {
+        await txn.insert(_messagesTable, _messageToRow(message, session.id));
+        await txn.update(
+          _sessionsTable,
+          _sessionToRow(session),
+          where: 'id = ?',
+          whereArgs: [session.id],
+        );
+      });
     }
   }
 
@@ -131,7 +200,21 @@ class ChatRepository extends ChangeNotifier {
     session.updatedAt = DateTime.now();
     notifyListeners();
     if (persist) {
-      await _persist();
+      final db = await _database.database;
+      await db.transaction((txn) async {
+        await txn.update(
+          _messagesTable,
+          {'content': content},
+          where: 'id = ?',
+          whereArgs: [messageId],
+        );
+        await txn.update(
+          _sessionsTable,
+          _sessionToRow(session),
+          where: 'id = ?',
+          whereArgs: [session.id],
+        );
+      });
     }
   }
 
@@ -160,11 +243,65 @@ class ChatRepository extends ChangeNotifier {
     );
   }
 
-  Future<void> _persist() async {
-    await _storage.writeJson(
-      _storageFile,
-      _sessions.map((session) => session.toJson()).toList(),
+  Future<void> _insertSession(Database db, ChatSession session) async {
+    await db.insert(
+      _sessionsTable,
+      _sessionToRow(session),
+      conflictAlgorithm: ConflictAlgorithm.replace,
     );
+  }
+
+  Future<void> _insertMessages(Database db, ChatSession session) async {
+    final batch = db.batch();
+    for (final message in session.messages) {
+      batch.insert(
+        _messagesTable,
+        _messageToRow(message, session.id),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+    await batch.commit(noResult: true);
+  }
+
+  Map<String, Object?> _sessionToRow(ChatSession session) => {
+        'id': session.id,
+        'title': session.title,
+        'created_at': session.createdAt.toIso8601String(),
+        'updated_at': session.updatedAt.toIso8601String(),
+      };
+
+  Map<String, Object?> _messageToRow(ChatMessage message, String sessionId) => {
+        'id': message.id,
+        'session_id': sessionId,
+        'role': message.role.name,
+        'content': message.content,
+        'created_at': message.createdAt.toIso8601String(),
+      };
+
+  Future<void> _importLegacy(Database db) async {
+    final data = await _legacyStorage.readJsonList(_storageFile);
+    if (data == null || data.isEmpty) {
+      return;
+    }
+    final sessions = data
+        .map((entry) => ChatSession.fromJson(entry as Map<String, dynamic>))
+        .toList();
+    await db.transaction((txn) async {
+      for (final session in sessions) {
+        await txn.insert(
+          _sessionsTable,
+          _sessionToRow(session),
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+        for (final message in session.messages) {
+          await txn.insert(
+            _messagesTable,
+            _messageToRow(message, session.id),
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        }
+      }
+    });
   }
 
   String _newId() => DateTime.now().microsecondsSinceEpoch.toString();

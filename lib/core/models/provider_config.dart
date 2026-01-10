@@ -28,6 +28,7 @@ class ProviderConfig {
     required this.kind,
     required this.baseUrl,
     required this.model,
+    this.embeddingModel,
     this.protocol = ProviderProtocol.openaiCompatible,
     this.apiKey,
     this.capabilities = const [],
@@ -53,6 +54,7 @@ class ProviderConfig {
   final ProviderKind kind;
   String baseUrl;
   String model;
+  String? embeddingModel;
   ProviderProtocol protocol;
   String? apiKey;
   List<ProviderCapability> capabilities;
@@ -78,6 +80,7 @@ class ProviderConfig {
         'kind': kind.name,
         'base_url': baseUrl,
         'model': model,
+        'embedding_model': embeddingModel,
         'protocol': protocol.name,
         'api_key': apiKey,
         'capabilities': capabilities.map((cap) => cap.name).toList(),
@@ -107,6 +110,7 @@ class ProviderConfig {
         ),
         baseUrl: json['base_url'] as String? ?? '',
         model: json['model'] as String? ?? '',
+        embeddingModel: json['embedding_model'] as String?,
         protocol: ProviderProtocol.values.firstWhere(
           (protocol) => protocol.name == json['protocol'],
           orElse: () => ProviderProtocol.openaiCompatible,

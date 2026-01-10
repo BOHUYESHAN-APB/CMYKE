@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../core/models/app_settings.dart';
 import '../../core/models/provider_config.dart';
@@ -23,122 +24,149 @@ class ProviderConfigScreen extends StatelessWidget {
           appBar: AppBar(
             title: const Text('模型与能力配置'),
           ),
-          body: ListView(
-            padding: const EdgeInsets.all(20),
-            children: [
-              _SectionHeader(
-                title: '运行模式',
-                subtitle: '选择普通 LLM、实时语音模型或 Omni 模型',
-              ),
-              const SizedBox(height: 12),
-              _RouteSelector(
-                route: settings.route,
-                onChanged: (route) {
-                  settingsRepository.updateSettings(
-                    settings.copyWith(route: route),
-                  );
-                },
-              ),
-              const SizedBox(height: 24),
-              if (settings.route == ModelRoute.standard) ...[
-                _SectionHeader(
-                  title: '普通 LLM 组合',
-                  subtitle: 'LLM + 视觉 Agent + TTS + STT',
+          body: LayoutBuilder(
+            builder: (context, constraints) {
+              final maxWidth =
+                  constraints.maxWidth >= 1040 ? 980.0 : constraints.maxWidth;
+              return Align(
+                alignment: Alignment.topCenter,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: maxWidth),
+                  child: ListView(
+                    padding: const EdgeInsets.all(20),
+                    children: [
+                      _SectionHeader(
+                        title: '运行模式',
+                        subtitle: '选择普通 LLM、实时语音模型或 Omni 模型',
+                      ),
+                      const SizedBox(height: 12),
+                      _RouteSelector(
+                        route: settings.route,
+                        onChanged: (route) {
+                          settingsRepository.updateSettings(
+                            settings.copyWith(route: route),
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      _HintCard(
+                        title: '快速说明',
+                        items: const [
+                          '普通 LLM 模式：可直接工具调用，适合深度搜索/研究。',
+                          'Realtime 模式：由控制代理调用工具，保证低延迟对话。',
+                          '需要向量检索时请填写 Embedding Model。',
+                        ],
+                      ),
+                      const SizedBox(height: 24),
+                      if (settings.route == ModelRoute.standard) ...[
+                        _SectionHeader(
+                          title: '普通 LLM 组合',
+                          subtitle: 'LLM + 视觉 Agent + TTS + STT',
+                        ),
+                        const SizedBox(height: 12),
+                        _ProviderPicker(
+                          label: 'LLM 模型',
+                          providers:
+                              settingsRepository.providersByKind(ProviderKind.llm),
+                          selectedId: settings.llmProviderId,
+                          onChanged: (id) {
+                            settingsRepository.updateSettings(
+                              settings.copyWith(llmProviderId: id),
+                            );
+                          },
+                        ),
+                        _ProviderPicker(
+                          label: '视觉 Agent',
+                          providers: settingsRepository
+                              .providersByKind(ProviderKind.visionAgent),
+                          selectedId: settings.visionProviderId,
+                          onChanged: (id) {
+                            settingsRepository.updateSettings(
+                              settings.copyWith(visionProviderId: id),
+                            );
+                          },
+                        ),
+                        _ProviderPicker(
+                          label: 'TTS',
+                          providers:
+                              settingsRepository.providersByKind(ProviderKind.tts),
+                          selectedId: settings.ttsProviderId,
+                          onChanged: (id) {
+                            settingsRepository.updateSettings(
+                              settings.copyWith(ttsProviderId: id),
+                            );
+                          },
+                        ),
+                        _ProviderPicker(
+                          label: 'STT',
+                          providers:
+                              settingsRepository.providersByKind(ProviderKind.stt),
+                          selectedId: settings.sttProviderId,
+                          onChanged: (id) {
+                            settingsRepository.updateSettings(
+                              settings.copyWith(sttProviderId: id),
+                            );
+                          },
+                        ),
+                        const SizedBox(height: 24),
+                      ],
+                      if (settings.route == ModelRoute.realtime) ...[
+                        _SectionHeader(
+                          title: '实时语音模型',
+                          subtitle: '带实时语音输出与打断能力',
+                        ),
+                        const SizedBox(height: 12),
+                        _ProviderPicker(
+                          label: 'Realtime 模型',
+                          providers:
+                              settingsRepository.providersByKind(ProviderKind.realtime),
+                          selectedId: settings.realtimeProviderId,
+                          onChanged: (id) {
+                            settingsRepository.updateSettings(
+                              settings.copyWith(realtimeProviderId: id),
+                            );
+                          },
+                        ),
+                        const SizedBox(height: 24),
+                      ],
+                      if (settings.route == ModelRoute.omni) ...[
+                        _SectionHeader(
+                          title: 'Omni 模型',
+                          subtitle: '文本 + 语音 + 视觉一体化',
+                        ),
+                        const SizedBox(height: 12),
+                        _ProviderPicker(
+                          label: 'Omni 模型',
+                          providers:
+                              settingsRepository.providersByKind(ProviderKind.omni),
+                          selectedId: settings.omniProviderId,
+                          onChanged: (id) {
+                            settingsRepository.updateSettings(
+                              settings.copyWith(omniProviderId: id),
+                            );
+                          },
+                        ),
+                        const SizedBox(height: 24),
+                      ],
+                      _CollapsibleSection(
+                        title: '模型与能力清单',
+                        subtitle: '管理所有 Provider 与高级参数',
+                        child: _ProviderCatalog(
+                          settingsRepository: settingsRepository,
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      const _SectionHeader(
+                        title: '软件与反馈',
+                        subtitle: '版本信息、代码仓库与反馈渠道',
+                      ),
+                      const SizedBox(height: 12),
+                      const _AppInfoSection(),
+                    ],
+                  ),
                 ),
-                const SizedBox(height: 12),
-                _ProviderPicker(
-                  label: 'LLM 模型',
-                  providers:
-                      settingsRepository.providersByKind(ProviderKind.llm),
-                  selectedId: settings.llmProviderId,
-                  onChanged: (id) {
-                    settingsRepository.updateSettings(
-                      settings.copyWith(llmProviderId: id),
-                    );
-                  },
-                ),
-                _ProviderPicker(
-                  label: '视觉 Agent',
-                  providers: settingsRepository
-                      .providersByKind(ProviderKind.visionAgent),
-                  selectedId: settings.visionProviderId,
-                  onChanged: (id) {
-                    settingsRepository.updateSettings(
-                      settings.copyWith(visionProviderId: id),
-                    );
-                  },
-                ),
-                _ProviderPicker(
-                  label: 'TTS',
-                  providers:
-                      settingsRepository.providersByKind(ProviderKind.tts),
-                  selectedId: settings.ttsProviderId,
-                  onChanged: (id) {
-                    settingsRepository.updateSettings(
-                      settings.copyWith(ttsProviderId: id),
-                    );
-                  },
-                ),
-                _ProviderPicker(
-                  label: 'STT',
-                  providers:
-                      settingsRepository.providersByKind(ProviderKind.stt),
-                  selectedId: settings.sttProviderId,
-                  onChanged: (id) {
-                    settingsRepository.updateSettings(
-                      settings.copyWith(sttProviderId: id),
-                    );
-                  },
-                ),
-                const SizedBox(height: 24),
-              ],
-              if (settings.route == ModelRoute.realtime) ...[
-                _SectionHeader(
-                  title: '实时语音模型',
-                  subtitle: '带实时语音输出与打断能力',
-                ),
-                const SizedBox(height: 12),
-                _ProviderPicker(
-                  label: 'Realtime 模型',
-                  providers:
-                      settingsRepository.providersByKind(ProviderKind.realtime),
-                  selectedId: settings.realtimeProviderId,
-                  onChanged: (id) {
-                    settingsRepository.updateSettings(
-                      settings.copyWith(realtimeProviderId: id),
-                    );
-                  },
-                ),
-                const SizedBox(height: 24),
-              ],
-              if (settings.route == ModelRoute.omni) ...[
-                _SectionHeader(
-                  title: 'Omni 模型',
-                  subtitle: '文本 + 语音 + 视觉一体化',
-                ),
-                const SizedBox(height: 12),
-                _ProviderPicker(
-                  label: 'Omni 模型',
-                  providers:
-                      settingsRepository.providersByKind(ProviderKind.omni),
-                  selectedId: settings.omniProviderId,
-                  onChanged: (id) {
-                    settingsRepository.updateSettings(
-                      settings.copyWith(omniProviderId: id),
-                    );
-                  },
-                ),
-                const SizedBox(height: 24),
-              ],
-              _SectionHeader(
-                title: '能力分类',
-                subtitle: '管理各类模型与 TTS/STT 服务',
-              ),
-              const SizedBox(height: 12),
-              _ProviderCatalog(
-                settingsRepository: settingsRepository,
-              ),
-            ],
+              );
+            },
           ),
         );
       },
@@ -368,7 +396,7 @@ class _SectionHeader extends StatelessWidget {
       children: [
         Text(
           title,
-          style: GoogleFonts.dmSerifDisplay(
+          style: GoogleFonts.notoSerifSc(
             fontSize: 22,
             fontWeight: FontWeight.w600,
             color: const Color(0xFF1F2228),
@@ -387,6 +415,179 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
+class _HintCard extends StatelessWidget {
+  const _HintCard({
+    required this.title,
+    required this.items,
+  });
+
+  final String title;
+  final List<String> items;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            ...items.map(
+              (item) => Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('- '),
+                    Expanded(
+                      child: Text(
+                        item,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: const Color(0xFF5E636F),
+                              fontWeight: FontWeight.w600,
+                            ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CollapsibleSection extends StatelessWidget {
+  const _CollapsibleSection({
+    required this.title,
+    required this.subtitle,
+    required this.child,
+  });
+
+  final String title;
+  final String subtitle;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: ExpansionTile(
+        title: Text(
+          title,
+          style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+        ),
+        subtitle: Text(
+          subtitle,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: const Color(0xFF6B6F7A),
+              ),
+        ),
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            child: child,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AppInfoSection extends StatelessWidget {
+  const _AppInfoSection();
+
+  static const String _repoUrl = 'https://github.com/BOHUYESHAN-APB/CMYKE';
+  static const String _feedback = 'https://github.com/BOHUYESHAN-APB/CMYKE/issues';
+  static const String _license = 'Apache-2.0 (planned)';
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: FutureBuilder<PackageInfo>(
+          future: PackageInfo.fromPlatform(),
+          builder: (context, snapshot) {
+            final info = snapshot.data;
+            final version = info == null
+                ? '读取中...'
+                : '${info.version}+${info.buildNumber}';
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _InfoRow(
+                  label: '版本号',
+                  value: version,
+                ),
+                const SizedBox(height: 12),
+                _InfoRow(
+                  label: '代码仓库',
+                  value: _repoUrl,
+                ),
+                const SizedBox(height: 12),
+                _InfoRow(
+                  label: '反馈渠道',
+                  value: _feedback,
+                ),
+                const SizedBox(height: 12),
+                const _InfoRow(
+                  label: '许可协议',
+                  value: _license,
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _InfoRow extends StatelessWidget {
+  const _InfoRow({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 88,
+          child: Text(
+            label,
+            style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: const Color(0xFF6B6F7A),
+                  fontWeight: FontWeight.w600,
+                ),
+          ),
+        ),
+        Expanded(
+          child: SelectableText(
+            value,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 Future<void> _openProviderDialog(
   BuildContext context,
   SettingsRepository repository, {
@@ -399,6 +600,8 @@ Future<void> _openProviderDialog(
       TextEditingController(text: provider?.baseUrl ?? '');
   final modelController =
       TextEditingController(text: provider?.model ?? '');
+  final embeddingModelController =
+      TextEditingController(text: provider?.embeddingModel ?? '');
   final notesController =
       TextEditingController(text: provider?.notes ?? '');
   final selectedCapabilities = <ProviderCapability>{
@@ -486,6 +689,16 @@ Future<void> _openProviderDialog(
                     controller: modelController,
                     decoration: const InputDecoration(labelText: '模型/端点'),
                   ),
+                  if (kind == ProviderKind.llm) ...[
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: embeddingModelController,
+                      decoration: const InputDecoration(
+                        labelText: 'Embedding Model (向量检索)',
+                        hintText: '例如 text-embedding-3-small',
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   DropdownButtonFormField<ProviderProtocol>(
                     value: protocol,
@@ -883,6 +1096,10 @@ Future<void> _openProviderDialog(
                     kind: kind,
                     baseUrl: baseUrlController.text.trim(),
                     model: modelController.text.trim(),
+                    embeddingModel:
+                        embeddingModelController.text.trim().isEmpty
+                            ? null
+                            : embeddingModelController.text.trim(),
                     protocol: protocol,
                     apiKey: apiKeyController.text.trim(),
                     capabilities: selectedCapabilities.toList(),
@@ -936,6 +1153,7 @@ Future<void> _openProviderDialog(
   nameController.dispose();
   baseUrlController.dispose();
   modelController.dispose();
+  embeddingModelController.dispose();
   apiKeyController.dispose();
   audioVoiceController.dispose();
   audioFormatController.dispose();

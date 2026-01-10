@@ -54,6 +54,33 @@ class LlmClient {
     }
   }
 
+  Future<List<double>> embedText({
+    required ProviderConfig provider,
+    required String input,
+  }) async {
+    final embeddings = await embedTexts(provider: provider, inputs: [input]);
+    return embeddings.isEmpty ? [] : embeddings.first;
+  }
+
+  Future<List<List<double>>> embedTexts({
+    required ProviderConfig provider,
+    required List<String> inputs,
+  }) async {
+    if (inputs.isEmpty) {
+      return [];
+    }
+    switch (provider.protocol) {
+      case ProviderProtocol.openaiCompatible:
+        return _embedOpenAi(provider: provider, inputs: inputs);
+      case ProviderProtocol.ollamaNative:
+        return _embedOllama(provider: provider, inputs: inputs);
+      case ProviderProtocol.deviceBuiltin:
+        throw UnsupportedError(
+          'Device builtin protocol is not supported for embeddings.',
+        );
+    }
+  }
+
   Stream<LlmStreamEvent> _streamOpenAi({
     required ProviderConfig provider,
     required List<ChatMessage> messages,
@@ -240,6 +267,24 @@ class LlmClient {
     return uri.replace(path: '$path/v1/chat/completions');
   }
 
+  Uri _buildEmbeddingUri(String baseUrl) {
+    final uri = Uri.parse(baseUrl);
+    final path = uri.path;
+    if (path.endsWith('/v1/embeddings')) {
+      return uri;
+    }
+    if (path.endsWith('/v1')) {
+      return uri.replace(path: '$path/embeddings');
+    }
+    if (path.endsWith('/v1/')) {
+      return uri.replace(path: '${path}embeddings');
+    }
+    if (path.isEmpty || path == '/') {
+      return uri.replace(path: '/v1/embeddings');
+    }
+    return uri.replace(path: '$path/v1/embeddings');
+  }
+
   Uri _buildOllamaChatUri(String baseUrl) {
     final uri = Uri.parse(baseUrl);
     final path = uri.path;
@@ -250,6 +295,18 @@ class LlmClient {
       return uri.replace(path: '/api/chat');
     }
     return uri.replace(path: '$path/api/chat');
+  }
+
+  Uri _buildOllamaEmbeddingUri(String baseUrl) {
+    final uri = Uri.parse(baseUrl);
+    final path = uri.path;
+    if (path.endsWith('/api/embeddings')) {
+      return uri;
+    }
+    if (path.isEmpty || path == '/') {
+      return uri.replace(path: '/api/embeddings');
+    }
+    return uri.replace(path: '$path/api/embeddings');
   }
 
   Map<String, String> _headers(ProviderConfig provider) {
@@ -322,6 +379,76 @@ class LlmClient {
       }
     }
     return payload;
+  }
+
+  Future<List<List<double>>> _embedOpenAi({
+    required ProviderConfig provider,
+    required List<String> inputs,
+  }) async {
+    final uri = _buildEmbeddingUri(provider.baseUrl);
+    final headers = _headers(provider);
+    final payload = {
+      'model': _resolveEmbeddingModel(provider),
+      'input': inputs.length == 1 ? inputs.first : inputs,
+    };
+    final response = await http.post(
+      uri,
+      headers: headers,
+      body: jsonEncode(payload),
+    );
+    if (response.statusCode != HttpStatus.ok) {
+      throw HttpException(
+        'Embedding request failed: ${response.statusCode} ${response.body}',
+      );
+    }
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    final data = json['data'] as List<dynamic>? ?? [];
+    return data
+        .map((entry) => _coerceEmbedding((entry as Map)['embedding']))
+        .toList();
+  }
+
+  Future<List<List<double>>> _embedOllama({
+    required ProviderConfig provider,
+    required List<String> inputs,
+  }) async {
+    final uri = _buildOllamaEmbeddingUri(provider.baseUrl);
+    final headers = _headers(provider);
+    final model = _resolveEmbeddingModel(provider);
+    final embeddings = <List<double>>[];
+    for (final input in inputs) {
+      final response = await http.post(
+        uri,
+        headers: headers,
+        body: jsonEncode({
+          'model': model,
+          'prompt': input,
+        }),
+      );
+      if (response.statusCode != HttpStatus.ok) {
+        throw HttpException(
+          'Ollama embedding request failed: ${response.statusCode} ${response.body}',
+        );
+      }
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      embeddings.add(_coerceEmbedding(json['embedding']));
+    }
+    return embeddings;
+  }
+
+  List<double> _coerceEmbedding(Object? raw) {
+    if (raw is! List<dynamic>) {
+      return [];
+    }
+    return raw.map((value) => (value as num).toDouble()).toList();
+  }
+
+  String _resolveEmbeddingModel(ProviderConfig provider) {
+    final embeddingModel = provider.embeddingModel?.trim();
+    if (embeddingModel != null && embeddingModel.isNotEmpty) {
+      return embeddingModel;
+    }
+    return provider.model;
   }
 
   Map<String, dynamic> _ollamaPayload({

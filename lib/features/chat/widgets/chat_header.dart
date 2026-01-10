@@ -9,9 +9,8 @@ class ChatHeader extends StatelessWidget {
     required this.onExportAll,
     required this.onCreateSession,
     required this.showMenuButton,
-    required this.onOpenSettings,
     this.onOpenDrawer,
-    this.onOpenMemory,
+    this.onOpenAvatar,
   });
 
   final String sessionTitle;
@@ -19,9 +18,8 @@ class ChatHeader extends StatelessWidget {
   final VoidCallback onExportAll;
   final VoidCallback onCreateSession;
   final bool showMenuButton;
-  final VoidCallback onOpenSettings;
   final VoidCallback? onOpenDrawer;
-  final VoidCallback? onOpenMemory;
+  final VoidCallback? onOpenAvatar;
 
   @override
   Widget build(BuildContext context) {
@@ -38,7 +36,7 @@ class ChatHeader extends StatelessWidget {
           if (showMenuButton) const SizedBox(width: 4),
           Text(
             'CMYKE',
-            style: GoogleFonts.dmSerifDisplay(
+            style: GoogleFonts.notoSerifSc(
               fontSize: 24,
               fontWeight: FontWeight.w600,
               color: const Color(0xFF1F2228),
@@ -62,16 +60,11 @@ class ChatHeader extends StatelessWidget {
             label: const Text('新对话'),
           ),
           const SizedBox(width: 6),
-          IconButton(
-            tooltip: '模型与能力配置',
-            onPressed: onOpenSettings,
-            icon: const Icon(Icons.tune_rounded),
-          ),
-          if (onOpenMemory != null)
+          if (onOpenAvatar != null)
             IconButton(
-              tooltip: '记忆面板',
-              onPressed: onOpenMemory,
-              icon: const Icon(Icons.layers_outlined),
+              tooltip: 'Avatar 展示区',
+              onPressed: onOpenAvatar,
+              icon: const Icon(Icons.face_retouching_natural_outlined),
             ),
           PopupMenuButton<_ExportAction>(
             tooltip: '导出',

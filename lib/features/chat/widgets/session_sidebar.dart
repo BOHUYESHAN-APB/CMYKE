@@ -1,16 +1,27 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/models/memory_tier.dart';
 import '../../../core/repositories/chat_repository.dart';
+import '../../../core/repositories/memory_repository.dart';
+import 'memory_panel.dart';
 
 class SessionSidebar extends StatelessWidget {
   const SessionSidebar({
     super.key,
     required this.chatRepository,
+    this.memoryRepository,
+    this.onAddMemory,
+    this.onOpenTier,
+    this.onOpenSettings,
     this.dense = false,
     this.onSelect,
   });
 
   final ChatRepository chatRepository;
+  final MemoryRepository? memoryRepository;
+  final VoidCallback? onAddMemory;
+  final void Function(MemoryTier tier)? onOpenTier;
+  final VoidCallback? onOpenSettings;
   final bool dense;
   final VoidCallback? onSelect;
 
@@ -96,6 +107,30 @@ class SessionSidebar extends StatelessWidget {
                 },
               ),
             ),
+            if (memoryRepository != null) const Divider(height: 1),
+            if (memoryRepository != null)
+              SizedBox(
+                height: dense ? 210 : 250,
+                child: MemoryPanel(
+                  memoryRepository: memoryRepository!,
+                  onAddMemory: onAddMemory ?? () {},
+                  onOpenTier: onOpenTier,
+                  dense: true,
+                ),
+              ),
+            if (onOpenSettings != null) const Divider(height: 1),
+            if (onOpenSettings != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: onOpenSettings,
+                    icon: const Icon(Icons.settings_outlined),
+                    label: const Text('设置与信息'),
+                  ),
+                ),
+              ),
           ],
         ),
       ),

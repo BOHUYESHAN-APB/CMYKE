@@ -1,18 +1,29 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
+import 'package:sqflite/sqflite.dart';
 
 import '../models/app_settings.dart';
 import '../models/provider_config.dart';
+import '../services/local_database.dart';
 import '../services/local_storage.dart';
 
 class SettingsRepository extends ChangeNotifier {
-  SettingsRepository({required LocalStorage storage}) : _storage = storage;
+  SettingsRepository({
+    required LocalDatabase database,
+    LocalStorage? legacyStorage,
+  })  : _database = database,
+        _legacyStorage = legacyStorage ?? LocalStorage();
 
-  final LocalStorage _storage;
+  final LocalDatabase _database;
+  final LocalStorage _legacyStorage;
   final List<ProviderConfig> _providers = [];
   late AppSettings _settings;
 
   static const String _providersFile = 'providers.json';
   static const String _settingsFile = 'settings.json';
+  static const String _providersTable = 'providers';
+  static const String _settingsTable = 'app_settings';
 
   List<ProviderConfig> get providers => List.unmodifiable(_providers);
   AppSettings get settings => _settings;
@@ -34,59 +45,85 @@ class SettingsRepository extends ChangeNotifier {
   }
 
   Future<void> load() async {
-    final providerData = await _storage.readJsonList(_providersFile);
-    if (providerData == null || providerData.isEmpty) {
+    final db = await _database.database;
+    var providerRows = await db.query(_providersTable);
+    if (providerRows.isEmpty) {
+      await _importLegacy(db);
+      providerRows = await db.query(_providersTable);
+    }
+    if (providerRows.isEmpty) {
       _providers
         ..clear()
         ..addAll(_defaultProviders());
+      await _persistProviders(db);
     } else {
       _providers
         ..clear()
-        ..addAll(
-          providerData.map(
-            (entry) => ProviderConfig.fromJson(entry as Map<String, dynamic>),
-          ),
-        );
+        ..addAll(providerRows.map(_providerFromRow));
     }
 
-    final settingsData = await _storage.readJsonMap(_settingsFile);
-    _settings = settingsData == null
-        ? AppSettings(route: ModelRoute.standard)
-        : AppSettings.fromJson(settingsData);
+    final settingsRows = await db.query(_settingsTable, limit: 1);
+    if (settingsRows.isEmpty) {
+      final legacySettings = await _legacyStorage.readJsonMap(_settingsFile);
+      _settings = legacySettings == null
+          ? AppSettings(route: ModelRoute.standard)
+          : AppSettings.fromJson(legacySettings);
+      await _persistSettings(db);
+    } else {
+      _settings = _settingsFromRow(settingsRows.first);
+    }
 
     _ensureDefaults();
     notifyListeners();
-    await _persist();
+    await _persistSettings(db);
   }
 
   Future<void> addProvider(ProviderConfig provider) async {
+    final db = await _database.database;
     _providers.add(provider);
+    await db.insert(
+      _providersTable,
+      _providerToRow(provider),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
     notifyListeners();
-    await _persist();
   }
 
   Future<void> updateProvider(ProviderConfig provider) async {
+    final db = await _database.database;
     final index = _providers.indexWhere((item) => item.id == provider.id);
     if (index == -1) {
       return;
     }
     _providers[index] = provider;
+    await db.update(
+      _providersTable,
+      _providerToRow(provider),
+      where: 'id = ?',
+      whereArgs: [provider.id],
+    );
     notifyListeners();
-    await _persist();
   }
 
   Future<void> removeProvider(String providerId) async {
+    final db = await _database.database;
     _providers.removeWhere((provider) => provider.id == providerId);
+    await db.delete(
+      _providersTable,
+      where: 'id = ?',
+      whereArgs: [providerId],
+    );
     _sanitizeSelections();
+    await _persistSettings(db);
     notifyListeners();
-    await _persist();
   }
 
   Future<void> updateSettings(AppSettings settings) async {
+    final db = await _database.database;
     _settings = settings;
     _sanitizeSelections();
+    await _persistSettings(db);
     notifyListeners();
-    await _persist();
   }
 
   void _ensureDefaults() {
@@ -147,12 +184,159 @@ class SettingsRepository extends ChangeNotifier {
     }
   }
 
-  Future<void> _persist() async {
-    await _storage.writeJson(
-      _providersFile,
-      _providers.map((provider) => provider.toJson()).toList(),
+  Future<void> _persistProviders(Database db) async {
+    final batch = db.batch();
+    for (final provider in _providers) {
+      batch.insert(
+        _providersTable,
+        _providerToRow(provider),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+    await batch.commit(noResult: true);
+  }
+
+  Future<void> _persistSettings(Database db) async {
+    await db.insert(
+      _settingsTable,
+      _settingsToRow(_settings),
+      conflictAlgorithm: ConflictAlgorithm.replace,
     );
-    await _storage.writeJson(_settingsFile, _settings.toJson());
+  }
+
+  Future<void> _importLegacy(Database db) async {
+    final providerData = await _legacyStorage.readJsonList(_providersFile);
+    if (providerData != null && providerData.isNotEmpty) {
+      final batch = db.batch();
+      for (final entry in providerData) {
+        final provider =
+            ProviderConfig.fromJson(entry as Map<String, dynamic>);
+        batch.insert(
+          _providersTable,
+          _providerToRow(provider),
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+      await batch.commit(noResult: true);
+    }
+  }
+
+  ProviderConfig _providerFromRow(Map<String, Object?> row) {
+    final capabilitiesRaw = row['capabilities'] as String?;
+    final capabilities = (capabilitiesRaw == null || capabilitiesRaw.isEmpty)
+        ? <ProviderCapability>[]
+        : (jsonDecode(capabilitiesRaw) as List<dynamic>)
+            .map((entry) => ProviderCapability.values.firstWhere(
+                  (cap) => cap.name == entry,
+                  orElse: () => ProviderCapability.tools,
+                ))
+            .toList();
+    return ProviderConfig(
+      id: row['id'] as String,
+      name: row['name'] as String,
+      kind: ProviderKind.values.firstWhere(
+        (kind) => kind.name == row['kind'],
+        orElse: () => ProviderKind.llm,
+      ),
+      baseUrl: row['base_url'] as String? ?? '',
+      model: row['model'] as String? ?? '',
+      embeddingModel: row['embedding_model'] as String?,
+      protocol: ProviderProtocol.values.firstWhere(
+        (protocol) => protocol.name == row['protocol'],
+        orElse: () => ProviderProtocol.openaiCompatible,
+      ),
+      apiKey: row['api_key'] as String?,
+      capabilities: capabilities,
+      wsUrl: row['ws_url'] as String?,
+      audioVoice: row['audio_voice'] as String?,
+      audioFormat: row['audio_format'] as String?,
+      inputAudioFormat: row['input_audio_format'] as String?,
+      inputSampleRate: (row['input_sample_rate'] as num?)?.toInt(),
+      outputSampleRate: (row['output_sample_rate'] as num?)?.toInt(),
+      audioChannels: (row['audio_channels'] as num?)?.toInt(),
+      temperature: (row['temperature'] as num?)?.toDouble(),
+      topP: (row['top_p'] as num?)?.toDouble(),
+      maxTokens: (row['max_tokens'] as num?)?.toInt(),
+      frequencyPenalty: (row['frequency_penalty'] as num?)?.toDouble(),
+      presencePenalty: (row['presence_penalty'] as num?)?.toDouble(),
+      seed: (row['seed'] as num?)?.toInt(),
+      enableThinking: _toBool(row['enable_thinking']),
+      notes: row['notes'] as String?,
+    );
+  }
+
+  Map<String, Object?> _providerToRow(ProviderConfig provider) {
+    return {
+      'id': provider.id,
+      'name': provider.name,
+      'kind': provider.kind.name,
+      'base_url': provider.baseUrl,
+      'model': provider.model,
+      'embedding_model': provider.embeddingModel,
+      'protocol': provider.protocol.name,
+      'api_key': provider.apiKey,
+      'capabilities': jsonEncode(
+        provider.capabilities.map((cap) => cap.name).toList(),
+      ),
+      'ws_url': provider.wsUrl,
+      'audio_voice': provider.audioVoice,
+      'audio_format': provider.audioFormat,
+      'input_audio_format': provider.inputAudioFormat,
+      'input_sample_rate': provider.inputSampleRate,
+      'output_sample_rate': provider.outputSampleRate,
+      'audio_channels': provider.audioChannels,
+      'temperature': provider.temperature,
+      'top_p': provider.topP,
+      'max_tokens': provider.maxTokens,
+      'frequency_penalty': provider.frequencyPenalty,
+      'presence_penalty': provider.presencePenalty,
+      'seed': provider.seed,
+      'enable_thinking': provider.enableThinking == null
+          ? null
+          : (provider.enableThinking! ? 1 : 0),
+      'notes': provider.notes,
+    };
+  }
+
+  AppSettings _settingsFromRow(Map<String, Object?> row) {
+    return AppSettings(
+      route: ModelRoute.values.firstWhere(
+        (route) => route.name == row['route'],
+        orElse: () => ModelRoute.standard,
+      ),
+      llmProviderId: row['llm_provider_id'] as String?,
+      visionProviderId: row['vision_provider_id'] as String?,
+      ttsProviderId: row['tts_provider_id'] as String?,
+      sttProviderId: row['stt_provider_id'] as String?,
+      realtimeProviderId: row['realtime_provider_id'] as String?,
+      omniProviderId: row['omni_provider_id'] as String?,
+    );
+  }
+
+  Map<String, Object?> _settingsToRow(AppSettings settings) {
+    return {
+      'id': 1,
+      'route': settings.route.name,
+      'llm_provider_id': settings.llmProviderId,
+      'vision_provider_id': settings.visionProviderId,
+      'tts_provider_id': settings.ttsProviderId,
+      'stt_provider_id': settings.sttProviderId,
+      'realtime_provider_id': settings.realtimeProviderId,
+      'omni_provider_id': settings.omniProviderId,
+    };
+  }
+
+  bool? _toBool(Object? value) {
+    if (value == null) {
+      return null;
+    }
+    if (value is int) {
+      return value != 0;
+    }
+    if (value is bool) {
+      return value;
+    }
+    return null;
   }
 
   List<ProviderConfig> _defaultProviders() {
@@ -163,6 +347,7 @@ class SettingsRepository extends ChangeNotifier {
         kind: ProviderKind.llm,
         baseUrl: 'https://api.openai.com/v1',
         model: 'gpt-4o-mini',
+        embeddingModel: 'text-embedding-3-small',
         apiKey: '',
         capabilities: const [ProviderCapability.tools],
         notes: '标准文本模型 + 工具调用',

@@ -94,6 +94,13 @@ agent to handle tool calls and advanced workflows.
 - Provider protocols supported: OpenAI-compatible (OpenAI/SiliconFlow/DashScope/
   LM Studio) and Ollama native (`/api/chat`).
 
+## Live3D / VRM (VRoid) Notes
+
+- Target format: VRM 1.0 (VRoid Studio 导出). Rendering SDK plan: three-vrm (Web) / UniVRM (Unity).
+- Mapping: `<|EMOTE_*|>` → Emotion/Action Agent → ExpressionEvent → VRM BlendShapeClip (configurable表情映射); LipSyncFrame (AA/EE/IH/OH/OU) → Mouth blendshapes; StageAction → Humanoid 动作/Animator trigger。
+- Separation of concerns: Realtime/Omni 模型仅输出对话 + 轻量表情提示；Control/Planner 触发工具调用；Emotion/Action Agent 负责表情/动作；嘴型由音频驱动。
+- Licensing: 不内置第三方模型；用户加载自有/授权 VRM，保留原许可；SDK 依赖（three-vrm/UniVRM）遵循 MIT。
+
 ## MCP and Skills (Draft)
 
 - MCP Client
@@ -202,6 +209,76 @@ flowchart LR
   DeepResearch --> ContextBuilder
 ```
 
+## Layered Hierarchy (Standard vs Realtime)
+
+- UI Layer: Chat/Voice/Avatar entrypoints; emits prompt/audio and receives text/audio/expression events.
+- Mode Router: Splits Standard vs Realtime paths.
+- Standard Path (工具友好): Base LLM 可直接 Tool Router -> MCP/Skills -> 工具；结果写入 Memory/Vector。
+- Realtime Path (低延迟): Realtime Voice/Omni 模型专注对话+语音；不直接工具调用。Control/Planner Agent 读取上下文与主模型状态，触发工具/搜索；Emotion/Action Agent 生成表情/动作事件驱动 Live3D。
+- Deep Search/Research Agents: 重任务管线，可被 Standard 调用，也可被 Realtime 控制代理异步唤起，再把摘要回流。
+- Memory/Store: SQLite + Vector；统一为两条路径提供上下文。
+
+```mermaid
+flowchart TD
+  UI[Chat/Voice/Avatar UI] --> Router
+  Router -- Standard --> StdLLM[Base LLM]
+  StdLLM --> ToolRouter[Tool Router/MCP/Skills]
+  ToolRouter --> Tools[Web/Search/Code/Doc/etc.]
+  Tools --> Memory[(SQLite + Vector)]
+  StdLLM --> Memory
+
+  Router -- Realtime --> RT[Realtime Voice/Omni]
+  RT --> ExprAgent[Emotion/Action Agent]
+  ExprAgent --> Avatar[Live3D Stage]
+  RT --> CtrlAgent[Control/Planner Agent]
+  CtrlAgent --> ToolRouter
+  CtrlAgent --> ExprAgent
+
+  DeepSearch[Deep Search Agent] --> ToolRouter
+  DeepResearch[Deep Research Agent] --> ToolRouter
+  ToolRouter --> Memory
+  Memory --> CtrlAgent
+```
+
+Notes:
+- Realtime/FunAudioLLM 不做工具调用，所有工具/搜索由 Control/Planner Agent 代理。
+- Omni 模型可选直连工具，但仍建议经 ToolRouter 统一鉴权/路由。
+- 表情/动作事件与嘴型驱动解耦：Emotion/Action Agent 输出表情，音频流驱动嘴型。
+
+## Control/Tool/Expression Flows (Detailed)
+
+```mermaid
+flowchart LR
+  subgraph Realtime
+    RT[Realtime/Omni Model]
+    Ctrl[Control/Planner Agent]
+    Expr[Emotion/Action Agent]
+  end
+  subgraph Standard
+    LLM[Base LLM]
+  end
+  subgraph Tools
+    Router[ToolRouter/MCP/Skills]
+    T[Tools/Search/Code/Doc]
+  end
+  Memory[(SQLite + Vector)]
+  Avatar[Live3D Stage]
+
+  RT --> Ctrl
+  RT --> Expr
+  Expr --> Avatar
+  Ctrl --> Router
+  LLM --> Router
+  Router --> T --> Router
+  Router --> Memory
+  Memory --> Ctrl
+  Memory --> LLM
+```
+
+- Realtime 模型专注对话/语音；不直接调用工具。
+- Control/Planner 解析意图与指令，发起 ToolRouter 调用，生成表情/动作事件。
+- Emotion/Action Agent 驱动 Live3D；嘴型由音频流独立驱动。
+- Standard LLM 直接通过 ToolRouter 使用 MCP/Skills/工具；结果写入 Memory/Vector。
 ## Runtime Evolution (Planned)
 
 - Rust Core

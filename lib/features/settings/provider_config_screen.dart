@@ -3,8 +3,12 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../core/models/app_settings.dart';
+import '../../core/models/expression_event.dart';
 import '../../core/models/provider_config.dart';
+import '../../core/models/stage_action.dart';
 import '../../core/repositories/settings_repository.dart';
+import '../../core/services/runtime_hub.dart';
+import '../common/live3d_preview.dart';
 
 class ProviderConfigScreen extends StatelessWidget {
   const ProviderConfigScreen({
@@ -20,156 +24,216 @@ class ProviderConfigScreen extends StatelessWidget {
       animation: settingsRepository,
       builder: (context, _) {
         final settings = settingsRepository.settings;
-        return Scaffold(
-          appBar: AppBar(
-            title: const Text('模型与能力配置'),
-          ),
-          body: LayoutBuilder(
-            builder: (context, constraints) {
-              final maxWidth =
-                  constraints.maxWidth >= 1040 ? 980.0 : constraints.maxWidth;
-              return Align(
-                alignment: Alignment.topCenter,
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: maxWidth),
-                  child: ListView(
-                    padding: const EdgeInsets.all(20),
-                    children: [
-                      _SectionHeader(
-                        title: '运行模式',
-                        subtitle: '选择普通 LLM、实时语音模型或 Omni 模型',
-                      ),
-                      const SizedBox(height: 12),
-                      _RouteSelector(
-                        route: settings.route,
-                        onChanged: (route) {
-                          settingsRepository.updateSettings(
-                            settings.copyWith(route: route),
-                          );
-                        },
-                      ),
-                      const SizedBox(height: 12),
-                      _HintCard(
-                        title: '快速说明',
-                        items: const [
-                          '普通 LLM 模式：可直接工具调用，适合深度搜索/研究。',
-                          'Realtime 模式：由控制代理调用工具，保证低延迟对话。',
-                          '需要向量检索时请填写 Embedding Model。',
-                        ],
-                      ),
-                      const SizedBox(height: 24),
-                      if (settings.route == ModelRoute.standard) ...[
-                        _SectionHeader(
-                          title: '普通 LLM 组合',
-                          subtitle: 'LLM + 视觉 Agent + TTS + STT',
-                        ),
-                        const SizedBox(height: 12),
-                        _ProviderPicker(
-                          label: 'LLM 模型',
-                          providers:
-                              settingsRepository.providersByKind(ProviderKind.llm),
-                          selectedId: settings.llmProviderId,
-                          onChanged: (id) {
-                            settingsRepository.updateSettings(
-                              settings.copyWith(llmProviderId: id),
-                            );
-                          },
-                        ),
-                        _ProviderPicker(
-                          label: '视觉 Agent',
-                          providers: settingsRepository
-                              .providersByKind(ProviderKind.visionAgent),
-                          selectedId: settings.visionProviderId,
-                          onChanged: (id) {
-                            settingsRepository.updateSettings(
-                              settings.copyWith(visionProviderId: id),
-                            );
-                          },
-                        ),
-                        _ProviderPicker(
-                          label: 'TTS',
-                          providers:
-                              settingsRepository.providersByKind(ProviderKind.tts),
-                          selectedId: settings.ttsProviderId,
-                          onChanged: (id) {
-                            settingsRepository.updateSettings(
-                              settings.copyWith(ttsProviderId: id),
-                            );
-                          },
-                        ),
-                        _ProviderPicker(
-                          label: 'STT',
-                          providers:
-                              settingsRepository.providersByKind(ProviderKind.stt),
-                          selectedId: settings.sttProviderId,
-                          onChanged: (id) {
-                            settingsRepository.updateSettings(
-                              settings.copyWith(sttProviderId: id),
-                            );
-                          },
-                        ),
-                        const SizedBox(height: 24),
-                      ],
-                      if (settings.route == ModelRoute.realtime) ...[
-                        _SectionHeader(
-                          title: '实时语音模型',
-                          subtitle: '带实时语音输出与打断能力',
-                        ),
-                        const SizedBox(height: 12),
-                        _ProviderPicker(
-                          label: 'Realtime 模型',
-                          providers:
-                              settingsRepository.providersByKind(ProviderKind.realtime),
-                          selectedId: settings.realtimeProviderId,
-                          onChanged: (id) {
-                            settingsRepository.updateSettings(
-                              settings.copyWith(realtimeProviderId: id),
-                            );
-                          },
-                        ),
-                        const SizedBox(height: 24),
-                      ],
-                      if (settings.route == ModelRoute.omni) ...[
-                        _SectionHeader(
-                          title: 'Omni 模型',
-                          subtitle: '文本 + 语音 + 视觉一体化',
-                        ),
-                        const SizedBox(height: 12),
-                        _ProviderPicker(
-                          label: 'Omni 模型',
-                          providers:
-                              settingsRepository.providersByKind(ProviderKind.omni),
-                          selectedId: settings.omniProviderId,
-                          onChanged: (id) {
-                            settingsRepository.updateSettings(
-                              settings.copyWith(omniProviderId: id),
-                            );
-                          },
-                        ),
-                        const SizedBox(height: 24),
-                      ],
-                      _CollapsibleSection(
-                        title: '模型与能力清单',
-                        subtitle: '管理所有 Provider 与高级参数',
-                        child: _ProviderCatalog(
+        return DefaultTabController(
+          length: 3,
+          child: Scaffold(
+            appBar: AppBar(
+              title: const Text('模型与能力配置'),
+              bottom: const TabBar(
+                tabs: [
+                  Tab(text: '模式与组合'),
+                  Tab(text: '能力清单'),
+                  Tab(text: '软件信息'),
+                ],
+              ),
+            ),
+            body: LayoutBuilder(
+              builder: (context, constraints) {
+                final maxWidth =
+                    constraints.maxWidth >= 1040 ? 980.0 : constraints.maxWidth;
+                return Align(
+                  alignment: Alignment.topCenter,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: maxWidth),
+                    child: TabBarView(
+                      children: [
+                        _ModeTab(
                           settingsRepository: settingsRepository,
+                          settings: settings,
                         ),
-                      ),
-                      const SizedBox(height: 24),
-                      const _SectionHeader(
-                        title: '软件与反馈',
-                        subtitle: '版本信息、代码仓库与反馈渠道',
-                      ),
-                      const SizedBox(height: 12),
-                      const _AppInfoSection(),
-                    ],
+                        _CatalogTab(settingsRepository: settingsRepository),
+                        const _AppInfoTab(),
+                      ],
+                    ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           ),
         );
       },
+    );
+  }
+}
+
+class _ModeTab extends StatelessWidget {
+  const _ModeTab({
+    required this.settingsRepository,
+    required this.settings,
+  });
+
+  final SettingsRepository settingsRepository;
+  final AppSettings settings;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        _SectionHeader(
+          title: '运行模式',
+          subtitle: '选择普通 LLM、实时语音模型或 Omni 模型',
+        ),
+        const SizedBox(height: 12),
+        _RouteSelector(
+          route: settings.route,
+          onChanged: (route) {
+            settingsRepository.updateSettings(
+              settings.copyWith(route: route),
+            );
+          },
+        ),
+        const SizedBox(height: 12),
+        _HintCard(
+          title: '快速说明',
+          items: const [
+            '普通 LLM 模式：可直接工具调用，适合深度搜索/研究。',
+            'Realtime 模式：由控制代理调用工具，保证低延迟对话。',
+            '需要向量检索时请填写 Embedding Model。',
+          ],
+        ),
+        const SizedBox(height: 12),
+        const _VrmCard(),
+        const SizedBox(height: 12),
+        const _Live3DTestCard(),
+        const SizedBox(height: 24),
+        if (settings.route == ModelRoute.standard) ...[
+          _SectionHeader(
+            title: '普通 LLM 组合',
+            subtitle: 'LLM + 视觉 Agent + TTS + STT',
+          ),
+          const SizedBox(height: 12),
+          _ProviderPicker(
+            label: 'LLM 模型',
+            providers: settingsRepository.providersByKind(ProviderKind.llm),
+            selectedId: settings.llmProviderId,
+            onChanged: (id) {
+              settingsRepository.updateSettings(
+                settings.copyWith(llmProviderId: id),
+              );
+            },
+          ),
+          _ProviderPicker(
+            label: '视觉 Agent',
+            providers:
+                settingsRepository.providersByKind(ProviderKind.visionAgent),
+            selectedId: settings.visionProviderId,
+            onChanged: (id) {
+              settingsRepository.updateSettings(
+                settings.copyWith(visionProviderId: id),
+              );
+            },
+          ),
+          _ProviderPicker(
+            label: 'TTS',
+            providers: settingsRepository.providersByKind(ProviderKind.tts),
+            selectedId: settings.ttsProviderId,
+            onChanged: (id) {
+              settingsRepository.updateSettings(
+                settings.copyWith(ttsProviderId: id),
+              );
+            },
+          ),
+          _ProviderPicker(
+            label: 'STT',
+            providers: settingsRepository.providersByKind(ProviderKind.stt),
+            selectedId: settings.sttProviderId,
+            onChanged: (id) {
+              settingsRepository.updateSettings(
+                settings.copyWith(sttProviderId: id),
+              );
+            },
+          ),
+          const SizedBox(height: 24),
+        ],
+        if (settings.route == ModelRoute.realtime) ...[
+          _SectionHeader(
+            title: '实时语音模型',
+            subtitle: '带实时语音输出与打断能力',
+          ),
+          const SizedBox(height: 12),
+          _ProviderPicker(
+            label: 'Realtime 模型',
+            providers:
+                settingsRepository.providersByKind(ProviderKind.realtime),
+            selectedId: settings.realtimeProviderId,
+            onChanged: (id) {
+              settingsRepository.updateSettings(
+                settings.copyWith(realtimeProviderId: id),
+              );
+            },
+          ),
+          const SizedBox(height: 24),
+        ],
+        if (settings.route == ModelRoute.omni) ...[
+          _SectionHeader(
+            title: 'Omni 模型',
+            subtitle: '文本 + 语音 + 视觉一体化',
+          ),
+          const SizedBox(height: 12),
+          _ProviderPicker(
+            label: 'Omni 模型',
+            providers: settingsRepository.providersByKind(ProviderKind.omni),
+            selectedId: settings.omniProviderId,
+            onChanged: (id) {
+              settingsRepository.updateSettings(
+                settings.copyWith(omniProviderId: id),
+              );
+            },
+          ),
+          const SizedBox(height: 24),
+        ],
+      ],
+    );
+  }
+}
+
+class _CatalogTab extends StatelessWidget {
+  const _CatalogTab({required this.settingsRepository});
+
+  final SettingsRepository settingsRepository;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        _SectionHeader(
+          title: '模型与能力清单',
+          subtitle: '管理所有 Provider 与高级参数',
+        ),
+        const SizedBox(height: 12),
+        _ProviderCatalog(settingsRepository: settingsRepository),
+      ],
+    );
+  }
+}
+
+class _AppInfoTab extends StatelessWidget {
+  const _AppInfoTab();
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: const [
+        _SectionHeader(
+          title: '软件与反馈',
+          subtitle: '版本信息、代码仓库与反馈渠道',
+        ),
+        SizedBox(height: 12),
+        _AppInfoSection(),
+      ],
     );
   }
 }
@@ -466,39 +530,177 @@ class _HintCard extends StatelessWidget {
   }
 }
 
-class _CollapsibleSection extends StatelessWidget {
-  const _CollapsibleSection({
-    required this.title,
-    required this.subtitle,
-    required this.child,
-  });
+class _VrmCard extends StatelessWidget {
+  const _VrmCard();
 
-  final String title;
-  final String subtitle;
-  final Widget child;
+  static const String _vrmDoc =
+      'https://vroid.pixiv.help/hc/en-us/articles/38726063278233-How-do-I-export-a-model-as-VRM';
 
   @override
   Widget build(BuildContext context) {
     return Card(
-      child: ExpansionTile(
-        title: Text(
-          title,
-          style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Live3D / VRM 模型',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '推荐使用 VRoid Studio 导出的 VRM 1.0 模型（含标准表情/嘴型/动作）。'
+              '渲染 SDK 计划对接 three-vrm (Web) / UniVRM (Unity)。',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: const Color(0xFF5E636F),
+                    fontWeight: FontWeight.w600,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '授权与来源：请仅加载自己制作或已获授权的 VRM 文件，保留原有许可提示。'
+              '当前版本暂未内置模型，后续将支持文件选择与映射配置。',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: const Color(0xFF5E636F),
+                    fontWeight: FontWeight.w600,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            SelectableText(
+              'VRM 导出指引: $_vrmDoc',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: const Color(0xFF2E5AAC),
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+          ],
         ),
-        subtitle: Text(
-          subtitle,
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: const Color(0xFF6B6F7A),
-              ),
+      ),
+    );
+  }
+}
+
+class _Live3DTestCard extends StatefulWidget {
+  const _Live3DTestCard();
+
+  @override
+  State<_Live3DTestCard> createState() => _Live3DTestCardState();
+}
+
+class _Live3DTestCardState extends State<_Live3DTestCard> {
+  final _pathController = TextEditingController();
+  String? _status;
+
+  @override
+  void dispose() {
+    _pathController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadModel() async {
+    final path = _pathController.text.trim();
+    if (path.isEmpty) {
+      setState(() => _status = '请先填写 VRM 文件路径');
+      return;
+    }
+    await RuntimeHub.instance.live3dBridge.loadModel(path);
+    setState(() => _status = '已请求加载：$path');
+  }
+
+  Future<void> _emitExpression(ExpressionEmotion emotion) async {
+    await RuntimeHub.instance.controlAgent
+        .emitExpression(ExpressionEvent(emotion: emotion, intensity: 0.8));
+    setState(() => _status = '已发送表情：${emotion.name}');
+  }
+
+  Future<void> _emitMotion(StageMotion motion) async {
+    await RuntimeHub.instance.controlAgent
+        .emitStageAction(StageAction(motion: motion, intensity: 0.8));
+    setState(() => _status = '已发送动作：${motion.name}');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(
+                  'Live3D 快速测试',
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '（占位，需绑定 three-vrm/UniVRM 渲染端）',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: const Color(0xFF6B6F7A),
+                        fontWeight: FontWeight.w600,
+                      ),
+                ),
+          ],
         ),
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-            child: child,
-          ),
-        ],
+        const SizedBox(height: 12),
+        const SizedBox(
+          height: 200,
+          child: Live3DPreview(),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _pathController,
+          decoration: const InputDecoration(
+            labelText: 'VRM 文件路径',
+                hintText: '例如 C:\\\\models\\\\avatar.vrm',
+              ),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.icon(
+                  onPressed: _loadModel,
+                  icon: const Icon(Icons.file_download_done),
+                  label: const Text('加载模型'),
+                ),
+                OutlinedButton(
+                  onPressed: () => _emitExpression(ExpressionEmotion.happy),
+                  child: const Text('表情：开心'),
+                ),
+                OutlinedButton(
+                  onPressed: () => _emitExpression(ExpressionEmotion.surprise),
+                  child: const Text('表情：惊讶'),
+                ),
+                OutlinedButton(
+                  onPressed: () => _emitMotion(StageMotion.wave),
+                  child: const Text('动作：挥手'),
+                ),
+                OutlinedButton(
+                  onPressed: () => _emitMotion(StageMotion.nod),
+                  child: const Text('动作：点头'),
+                ),
+              ],
+            ),
+            if (_status != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                _status!,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: const Color(0xFF2E5AAC),
+                      fontWeight: FontWeight.w700,
+                    ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }

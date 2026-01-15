@@ -10,10 +10,12 @@ class MemoryTierScreen extends StatelessWidget {
     super.key,
     required this.tier,
     required this.memoryRepository,
+    this.sessionId,
   });
 
   final MemoryTier tier;
   final MemoryRepository memoryRepository;
+  final String? sessionId;
 
   @override
   Widget build(BuildContext context) {
@@ -44,6 +46,7 @@ class MemoryTierScreen extends StatelessWidget {
                       : _SingleTierEditor(
                           tier: tier,
                           memoryRepository: memoryRepository,
+                          sessionId: sessionId,
                         ),
                 ),
               ],
@@ -59,15 +62,20 @@ class _SingleTierEditor extends StatelessWidget {
   const _SingleTierEditor({
     required this.tier,
     required this.memoryRepository,
+    this.sessionId,
   });
 
   final MemoryTier tier;
   final MemoryRepository memoryRepository;
+  final String? sessionId;
 
   @override
   Widget build(BuildContext context) {
     final collection = memoryRepository.defaultCollection(tier);
-    final records = collection.records;
+    final records = memoryRepository.recordsForTier(
+      tier,
+      sessionId: sessionId,
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -87,6 +95,7 @@ class _SingleTierEditor extends StatelessWidget {
                   memoryRepository,
                   tier: tier,
                   collectionId: collection.id,
+                  sessionId: sessionId,
                 );
               },
               icon: const Icon(Icons.add),
@@ -114,6 +123,7 @@ class _SingleTierEditor extends StatelessWidget {
                       tier: tier,
                       collectionId: collection.id,
                       record: record,
+                      sessionId: sessionId,
                     );
                   },
                   onDelete: () {
@@ -332,12 +342,16 @@ class _RecordTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final title = record.title ?? _snippet(record.content);
+    final scopeLabel = _scopeLabel(record.scope);
+    final subtitle = scopeLabel == null
+        ? record.content
+        : '$scopeLabel · ${record.content}';
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 6),
       child: ListTile(
         title: Text(title),
         subtitle: Text(
-          record.content,
+          subtitle,
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
@@ -367,6 +381,21 @@ class _RecordTile extends StatelessWidget {
     }
     return trimmed.length > 18 ? '${trimmed.substring(0, 18)}...' : trimmed;
   }
+
+  String? _scopeLabel(String? scope) {
+    final trimmed = scope?.trim();
+    if (trimmed == null || trimmed.isEmpty) {
+      return null;
+    }
+    switch (trimmed) {
+      case 'brain.user':
+        return '个人';
+      case 'knowledge.docs':
+        return '知识库';
+      default:
+        return trimmed;
+    }
+  }
 }
 
 class _EmptyState extends StatelessWidget {
@@ -390,7 +419,7 @@ class _EmptyState extends StatelessWidget {
 String _tierDescription(MemoryTier tier) {
   switch (tier) {
     case MemoryTier.context:
-      return '会话内上下文记忆，随对话窗口滚动，适合短期信息。';
+      return '会话内上下文记忆，仅绑定当前会话，适合短期信息。';
     case MemoryTier.crossSession:
       return '跨会话记忆会被持续注入系统提示词，用于稳定的人设与偏好。';
     case MemoryTier.autonomous:
@@ -449,6 +478,7 @@ Future<void> _openRecordDialog(
   required MemoryTier tier,
   required String collectionId,
   MemoryRecord? record,
+  String? sessionId,
 }) async {
   final titleController =
       TextEditingController(text: record?.title ?? '');
@@ -495,17 +525,23 @@ Future<void> _openRecordDialog(
                 title: titleController.text.trim().isEmpty
                     ? null
                     : titleController.text.trim(),
+                sourceMessageId: record?.sourceMessageId,
+                tags: record?.tags ?? const [],
+                sessionId: record?.sessionId ?? sessionId,
+                scope: record?.scope,
               );
               if (record == null) {
                 repository.addRecord(
                   tier: tier,
                   record: nextRecord,
                   collectionId: collectionId,
+                  sessionId: sessionId,
                 );
               } else {
                 repository.updateRecord(
                   collectionId: collectionId,
                   record: nextRecord,
+                  sessionId: sessionId,
                 );
               }
               Navigator.of(context).pop();

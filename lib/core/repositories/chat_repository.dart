@@ -1,4 +1,9 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../models/chat_message.dart';
@@ -84,6 +89,7 @@ class ChatRepository extends ChangeNotifier {
             title: row['title'] as String,
             createdAt: DateTime.parse(row['created_at'] as String),
             updatedAt: DateTime.parse(row['updated_at'] as String),
+            mode: _parseMode(row['mode']),
             messages: messagesBySession[row['id'] as String] ?? [],
           ),
         ),
@@ -92,18 +98,26 @@ class ChatRepository extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> createSession({String? title}) async {
+  Future<ChatSession> createSession({
+    String? title,
+    ChatSessionMode mode = ChatSessionMode.standard,
+    bool setActive = true,
+  }) async {
     final db = await _database.database;
     final session = ChatSession(
       id: _newId(),
       title: title ?? 'New chat',
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
+      mode: mode,
     );
     _sessions.insert(0, session);
-    _activeSessionId = session.id;
+    if (setActive) {
+      _activeSessionId = session.id;
+    }
     notifyListeners();
     await _insertSession(db, session);
+    return session;
   }
 
   Future<void> removeSession(String sessionId) async {
@@ -174,6 +188,7 @@ class ChatRepository extends ChangeNotifier {
           whereArgs: [session.id],
         );
       });
+      await _archiveSession(session);
     }
   }
 
@@ -202,12 +217,20 @@ class ChatRepository extends ChangeNotifier {
     if (persist) {
       final db = await _database.database;
       await db.transaction((txn) async {
-        await txn.update(
+        final updated = await txn.update(
           _messagesTable,
           {'content': content},
           where: 'id = ?',
           whereArgs: [messageId],
         );
+        if (updated == 0) {
+          final message = session.messages[index];
+          await txn.insert(
+            _messagesTable,
+            _messageToRow(message, session.id),
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        }
         await txn.update(
           _sessionsTable,
           _sessionToRow(session),
@@ -215,6 +238,7 @@ class ChatRepository extends ChangeNotifier {
           whereArgs: [session.id],
         );
       });
+      await _archiveSession(session);
     }
   }
 
@@ -232,11 +256,12 @@ class ChatRepository extends ChangeNotifier {
       title: 'New chat',
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
+      mode: ChatSessionMode.standard,
       messages: [
         ChatMessage(
           id: _newId(),
           role: ChatRole.assistant,
-          content: '你好，我是 CMYKE。现在是 UI 原型阶段，模型接入后会在这里回复。',
+          content: '你好，我是 Lumi（露米）。现在是 UI 原型阶段，模型接入后会在这里回复。',
           createdAt: DateTime.now(),
         ),
       ],
@@ -263,11 +288,58 @@ class ChatRepository extends ChangeNotifier {
     await batch.commit(noResult: true);
   }
 
+  Future<void> _archiveSession(ChatSession session) async {
+    try {
+      final dir = await _archiveDirectory();
+      final baseName = 'session_${session.id}';
+      final jsonFile = File(p.join(dir.path, '$baseName.json'));
+      final mdFile = File(p.join(dir.path, '$baseName.md'));
+      final payload = {
+        'saved_at': DateTime.now().toIso8601String(),
+        'session': session.toJson(),
+      };
+      final encoder = const JsonEncoder.withIndent('  ');
+      await jsonFile.writeAsString(encoder.convert(payload));
+      await mdFile.writeAsString(_sessionToMarkdown(session));
+    } catch (_) {
+      // Ignore archive failures to avoid blocking chat flow.
+    }
+  }
+
+  Future<Directory> _archiveDirectory() async {
+    final base = await getApplicationDocumentsDirectory();
+    final dir = Directory(p.join(base.path, 'cmyke', 'conversations'));
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+    return dir;
+  }
+
+  String _sessionToMarkdown(ChatSession session) {
+    final buffer = StringBuffer();
+    buffer.writeln('# CMYKE Session');
+    buffer.writeln('- Session: ${session.title}');
+    buffer.writeln('- Session ID: ${session.id}');
+    buffer.writeln('- Created: ${session.createdAt.toIso8601String()}');
+    buffer.writeln('- Updated: ${session.updatedAt.toIso8601String()}');
+    buffer.writeln('');
+    buffer.writeln('## Messages');
+    for (final message in session.messages) {
+      buffer.writeln(
+        '### ${message.role.name} · ${message.createdAt.toIso8601String()}',
+      );
+      buffer.writeln(message.content);
+      buffer.writeln('');
+    }
+    return buffer.toString().trimRight();
+  }
+
   Map<String, Object?> _sessionToRow(ChatSession session) => {
         'id': session.id,
         'title': session.title,
         'created_at': session.createdAt.toIso8601String(),
         'updated_at': session.updatedAt.toIso8601String(),
+        'mode': session.mode.name,
       };
 
   Map<String, Object?> _messageToRow(ChatMessage message, String sessionId) => {
@@ -305,4 +377,14 @@ class ChatRepository extends ChangeNotifier {
   }
 
   String _newId() => DateTime.now().microsecondsSinceEpoch.toString();
+
+  ChatSessionMode _parseMode(Object? value) {
+    if (value is String) {
+      return ChatSessionMode.values.firstWhere(
+        (mode) => mode.name == value,
+        orElse: () => ChatSessionMode.standard,
+      );
+    }
+    return ChatSessionMode.standard;
+  }
 }

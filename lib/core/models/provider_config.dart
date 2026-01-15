@@ -29,6 +29,8 @@ class ProviderConfig {
     required this.baseUrl,
     required this.model,
     this.embeddingModel,
+    this.embeddingBaseUrl,
+    this.embeddingApiKey,
     this.protocol = ProviderProtocol.openaiCompatible,
     this.apiKey,
     this.capabilities = const [],
@@ -42,6 +44,7 @@ class ProviderConfig {
     this.temperature,
     this.topP,
     this.maxTokens,
+    this.contextWindowTokens,
     this.frequencyPenalty,
     this.presencePenalty,
     this.seed,
@@ -55,6 +58,8 @@ class ProviderConfig {
   String baseUrl;
   String model;
   String? embeddingModel;
+  String? embeddingBaseUrl;
+  String? embeddingApiKey;
   ProviderProtocol protocol;
   String? apiKey;
   List<ProviderCapability> capabilities;
@@ -68,6 +73,7 @@ class ProviderConfig {
   double? temperature;
   double? topP;
   int? maxTokens;
+  int? contextWindowTokens;
   double? frequencyPenalty;
   double? presencePenalty;
   int? seed;
@@ -81,6 +87,8 @@ class ProviderConfig {
         'base_url': baseUrl,
         'model': model,
         'embedding_model': embeddingModel,
+        'embedding_base_url': embeddingBaseUrl,
+        'embedding_api_key': embeddingApiKey,
         'protocol': protocol.name,
         'api_key': apiKey,
         'capabilities': capabilities.map((cap) => cap.name).toList(),
@@ -94,6 +102,7 @@ class ProviderConfig {
         'temperature': temperature,
         'top_p': topP,
         'max_tokens': maxTokens,
+        'context_window_tokens': contextWindowTokens,
         'frequency_penalty': frequencyPenalty,
         'presence_penalty': presencePenalty,
         'seed': seed,
@@ -111,6 +120,8 @@ class ProviderConfig {
         baseUrl: json['base_url'] as String? ?? '',
         model: json['model'] as String? ?? '',
         embeddingModel: json['embedding_model'] as String?,
+        embeddingBaseUrl: json['embedding_base_url'] as String?,
+        embeddingApiKey: json['embedding_api_key'] as String?,
         protocol: ProviderProtocol.values.firstWhere(
           (protocol) => protocol.name == json['protocol'],
           orElse: () => ProviderProtocol.openaiCompatible,
@@ -132,6 +143,8 @@ class ProviderConfig {
         temperature: (json['temperature'] as num?)?.toDouble(),
         topP: (json['top_p'] as num?)?.toDouble(),
         maxTokens: (json['max_tokens'] as num?)?.toInt(),
+        contextWindowTokens:
+            (json['context_window_tokens'] as num?)?.toInt(),
         frequencyPenalty: (json['frequency_penalty'] as num?)?.toDouble(),
         presencePenalty: (json['presence_penalty'] as num?)?.toDouble(),
         seed: (json['seed'] as num?)?.toInt(),

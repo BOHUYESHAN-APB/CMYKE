@@ -8,6 +8,7 @@ class ChatComposer extends StatelessWidget {
     required this.onToggleListening,
     required this.isListening,
     required this.isStreaming,
+    this.onOpenAgent,
     this.partialTranscript = '',
   });
 
@@ -16,6 +17,7 @@ class ChatComposer extends StatelessWidget {
   final VoidCallback onToggleListening;
   final bool isListening;
   final bool isStreaming;
+  final VoidCallback? onOpenAgent;
   final String partialTranscript;
 
   @override
@@ -25,9 +27,9 @@ class ChatComposer extends StatelessWidget {
       child: Row(
         children: [
           IconButton(
-            tooltip: '上传文件 (占位)',
-            onPressed: () {},
-            icon: const Icon(Icons.attach_file_outlined),
+            tooltip: '通用 Agent',
+            onPressed: onOpenAgent,
+            icon: const Icon(Icons.auto_awesome_outlined),
           ),
           IconButton(
             tooltip: isListening ? '停止语音输入' : '语音输入',

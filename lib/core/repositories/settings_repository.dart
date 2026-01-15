@@ -241,6 +241,8 @@ class SettingsRepository extends ChangeNotifier {
       baseUrl: row['base_url'] as String? ?? '',
       model: row['model'] as String? ?? '',
       embeddingModel: row['embedding_model'] as String?,
+      embeddingBaseUrl: row['embedding_base_url'] as String?,
+      embeddingApiKey: row['embedding_api_key'] as String?,
       protocol: ProviderProtocol.values.firstWhere(
         (protocol) => protocol.name == row['protocol'],
         orElse: () => ProviderProtocol.openaiCompatible,
@@ -257,6 +259,8 @@ class SettingsRepository extends ChangeNotifier {
       temperature: (row['temperature'] as num?)?.toDouble(),
       topP: (row['top_p'] as num?)?.toDouble(),
       maxTokens: (row['max_tokens'] as num?)?.toInt(),
+      contextWindowTokens:
+          (row['context_window_tokens'] as num?)?.toInt(),
       frequencyPenalty: (row['frequency_penalty'] as num?)?.toDouble(),
       presencePenalty: (row['presence_penalty'] as num?)?.toDouble(),
       seed: (row['seed'] as num?)?.toInt(),
@@ -273,6 +277,8 @@ class SettingsRepository extends ChangeNotifier {
       'base_url': provider.baseUrl,
       'model': provider.model,
       'embedding_model': provider.embeddingModel,
+      'embedding_base_url': provider.embeddingBaseUrl,
+      'embedding_api_key': provider.embeddingApiKey,
       'protocol': provider.protocol.name,
       'api_key': provider.apiKey,
       'capabilities': jsonEncode(
@@ -288,6 +294,7 @@ class SettingsRepository extends ChangeNotifier {
       'temperature': provider.temperature,
       'top_p': provider.topP,
       'max_tokens': provider.maxTokens,
+      'context_window_tokens': provider.contextWindowTokens,
       'frequency_penalty': provider.frequencyPenalty,
       'presence_penalty': provider.presencePenalty,
       'seed': provider.seed,
@@ -310,6 +317,22 @@ class SettingsRepository extends ChangeNotifier {
       sttProviderId: row['stt_provider_id'] as String?,
       realtimeProviderId: row['realtime_provider_id'] as String?,
       omniProviderId: row['omni_provider_id'] as String?,
+      live3dModelPath: row['live3d_model_path'] as String?,
+      personaMode: PersonaMode.values.firstWhere(
+        (mode) => mode.name == row['persona_mode'],
+        orElse: () => PersonaMode.persona,
+      ),
+      personaLevel: PersonaLevel.values.firstWhere(
+        (level) => level.name == row['persona_level'],
+        orElse: () => PersonaLevel.full,
+      ),
+      personaStyle: PersonaStyle.values.firstWhere(
+        (style) => style.name == row['persona_style'],
+        orElse: () => PersonaStyle.none,
+      ),
+      personaPrompt: row['persona_prompt'] as String?,
+      enableSystemTts: _toBool(row['enable_system_tts']) ?? true,
+      enableSystemStt: _toBool(row['enable_system_stt']) ?? true,
     );
   }
 
@@ -323,6 +346,13 @@ class SettingsRepository extends ChangeNotifier {
       'stt_provider_id': settings.sttProviderId,
       'realtime_provider_id': settings.realtimeProviderId,
       'omni_provider_id': settings.omniProviderId,
+      'live3d_model_path': settings.live3dModelPath,
+      'persona_mode': settings.personaMode.name,
+      'persona_level': settings.personaLevel.name,
+      'persona_style': settings.personaStyle.name,
+      'persona_prompt': settings.personaPrompt,
+      'enable_system_tts': settings.enableSystemTts ? 1 : 0,
+      'enable_system_stt': settings.enableSystemStt ? 1 : 0,
     };
   }
 

@@ -9,6 +9,9 @@ class ChatHeader extends StatelessWidget {
     required this.onExportAll,
     required this.onCreateSession,
     required this.showMenuButton,
+    required this.estimatedTokens,
+    this.tokenLimit,
+    this.isCompressing = false,
     this.onOpenDrawer,
     this.onOpenAvatar,
   });
@@ -18,6 +21,9 @@ class ChatHeader extends StatelessWidget {
   final VoidCallback onExportAll;
   final VoidCallback onCreateSession;
   final bool showMenuButton;
+  final int estimatedTokens;
+  final int? tokenLimit;
+  final bool isCompressing;
   final VoidCallback? onOpenDrawer;
   final VoidCallback? onOpenAvatar;
 
@@ -52,6 +58,12 @@ class ChatHeader extends StatelessWidget {
                   ),
               overflow: TextOverflow.ellipsis,
             ),
+          ),
+          const SizedBox(width: 12),
+          _TokenStatus(
+            estimatedTokens: estimatedTokens,
+            tokenLimit: tokenLimit,
+            isCompressing: isCompressing,
           ),
           const SizedBox(width: 12),
           TextButton.icon(
@@ -93,6 +105,76 @@ class ChatHeader extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class _TokenStatus extends StatelessWidget {
+  const _TokenStatus({
+    required this.estimatedTokens,
+    required this.tokenLimit,
+    required this.isCompressing,
+  });
+
+  final int estimatedTokens;
+  final int? tokenLimit;
+  final bool isCompressing;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = tokenLimit == null
+        ? 'Tokens $estimatedTokens'
+        : 'Tokens $estimatedTokens / $tokenLimit';
+    final ratio = (tokenLimit == null || tokenLimit == 0)
+        ? null
+        : estimatedTokens / tokenLimit!;
+    final accent = _accentColor(ratio);
+    final textStyle = Theme.of(context).textTheme.labelMedium?.copyWith(
+          color: accent,
+          fontWeight: FontWeight.w600,
+        );
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF1F3F6),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: const Color(0xFFE0E3EA)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(label, style: textStyle),
+          if (isCompressing) ...[
+            const SizedBox(width: 8),
+            const Icon(
+              Icons.autorenew,
+              size: 14,
+              color: Color(0xFF2C7A63),
+            ),
+            const SizedBox(width: 4),
+            Text(
+              '压缩中',
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: const Color(0xFF2C7A63),
+                    fontWeight: FontWeight.w600,
+                  ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Color _accentColor(double? ratio) {
+    if (ratio == null) {
+      return const Color(0xFF2C7A63);
+    }
+    if (ratio >= 0.92) {
+      return const Color(0xFFC24A3A);
+    }
+    if (ratio >= 0.7) {
+      return const Color(0xFFB67A00);
+    }
+    return const Color(0xFF2C7A63);
   }
 }
 

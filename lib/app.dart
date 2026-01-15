@@ -8,6 +8,7 @@ import 'core/repositories/memory_repository.dart';
 import 'core/repositories/settings_repository.dart';
 import 'core/services/local_database.dart';
 import 'core/services/local_storage.dart';
+import 'core/services/runtime_hub.dart';
 import 'features/chat/chat_screen.dart';
 
 class CMYKEApp extends StatefulWidget {
@@ -56,6 +57,11 @@ class _CMYKEAppState extends State<CMYKEApp> {
         _memoryRepository.load(),
         _settingsRepository.load(),
       ]);
+      final savedModelPath =
+          _settingsRepository.settings.live3dModelPath?.trim();
+      if (savedModelPath != null && savedModelPath.isNotEmpty) {
+        await RuntimeHub.instance.live3dBridge.loadModel(savedModelPath);
+      }
       if (mounted) {
         setState(() {
           _embeddingConfigMissing = _isEmbeddingMissing();

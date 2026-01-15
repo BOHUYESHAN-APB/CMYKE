@@ -10,12 +10,14 @@ class MemoryPanel extends StatelessWidget {
     required this.onAddMemory,
     this.dense = false,
     this.onOpenTier,
+    this.sessionId,
   });
 
   final MemoryRepository memoryRepository;
   final VoidCallback onAddMemory;
   final bool dense;
   final void Function(MemoryTier tier)? onOpenTier;
+  final String? sessionId;
 
   @override
   Widget build(BuildContext context) {
@@ -47,7 +49,10 @@ class MemoryPanel extends StatelessWidget {
                   .map(
                     (tier) => _MemoryTierTile(
                       tier: tier,
-                      count: memoryRepository.countByTier(tier),
+                      count: memoryRepository.countByTier(
+                        tier,
+                        sessionId: sessionId,
+                      ),
                       onTap: onOpenTier == null
                           ? null
                           : () => onOpenTier!(tier),

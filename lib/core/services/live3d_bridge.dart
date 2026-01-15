@@ -22,6 +22,7 @@ class Live3DBridge {
   String? currentModelPath;
   final _modelPathController = StreamController<String?>.broadcast();
   Future<void> Function(String script)? _jsInvoker;
+  String _controlMode = 'basic';
   late final StreamSubscription<ExpressionEvent> _expressionSub;
   late final StreamSubscription<StageAction> _stageSub;
   late final StreamSubscription<LipSyncFrame> _lipSub;
@@ -35,6 +36,8 @@ class Live3DBridge {
 
   void attachJsInvoker(Future<void> Function(String script) invoker) {
     _jsInvoker = invoker;
+    // Force basic mode; external pose driving is disabled.
+    setControlMode('basic');
   }
 
   void detachJsInvoker() {
@@ -72,6 +75,22 @@ class Live3DBridge {
     }
     if (payload.isEmpty) return;
     _runJs('window.setVisemeWeights(${jsonEncode(payload)});');
+  }
+
+  /// Switch control mode: 'basic' | 'advanced'. Advanced is driven via applyPose.
+  void setControlMode(String mode) {
+    _controlMode = 'basic';
+    _runJs('window.setControlMode(${jsonEncode(_controlMode)});');
+  }
+
+  void setTalking(bool isTalking) {
+    _runJs('window.setTalking(${isTalking ? 'true' : 'false'});');
+  }
+
+  /// Send a pose payload (bones/expression/viseme) to viewer in advanced mode.
+  Future<void> sendPose(Map<String, dynamic> pose) async {
+    // External pose driving is disabled in basic-only mode.
+    return;
   }
 
   Future<void> dispose() async {

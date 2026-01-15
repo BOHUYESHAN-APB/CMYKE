@@ -7,6 +7,7 @@
 #include "generated_plugin_registrant.h"
 
 #include <flutter_tts/flutter_tts_plugin.h>
+#include <just_audio_windows/just_audio_windows_plugin.h>
 #include <speech_to_text_windows/speech_to_text_windows.h>
 #include <sqlite3_flutter_libs/sqlite3_flutter_libs_plugin.h>
 #include <webview_windows/webview_windows_plugin.h>
@@ -14,6 +15,8 @@
 void RegisterPlugins(flutter::PluginRegistry* registry) {
   FlutterTtsPluginRegisterWithRegistrar(
       registry->GetRegistrarForPlugin("FlutterTtsPlugin"));
+  JustAudioWindowsPluginRegisterWithRegistrar(
+      registry->GetRegistrarForPlugin("JustAudioWindowsPlugin"));
   SpeechToTextWindowsRegisterWithRegistrar(
       registry->GetRegistrarForPlugin("SpeechToTextWindows"));
   Sqlite3FlutterLibsPluginRegisterWithRegistrar(

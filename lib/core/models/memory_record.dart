@@ -9,6 +9,8 @@ class MemoryRecord {
     this.sourceMessageId,
     this.title,
     this.tags = const [],
+    this.sessionId,
+    this.scope,
   });
 
   final String id;
@@ -18,6 +20,8 @@ class MemoryRecord {
   final String? sourceMessageId;
   final String? title;
   final List<String> tags;
+  final String? sessionId;
+  final String? scope;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -27,6 +31,8 @@ class MemoryRecord {
         'source_message_id': sourceMessageId,
         'title': title,
         'tags': tags,
+        'session_id': sessionId,
+        'scope': scope,
       };
 
   factory MemoryRecord.fromJson(Map<String, dynamic> json) => MemoryRecord(
@@ -40,5 +46,31 @@ class MemoryRecord {
         sourceMessageId: json['source_message_id'] as String?,
         title: json['title'] as String?,
         tags: (json['tags'] as List<dynamic>? ?? []).cast<String>(),
+        sessionId: json['session_id'] as String?,
+        scope: json['scope'] as String?,
       );
+
+  MemoryRecord copyWith({
+    String? id,
+    MemoryTier? tier,
+    String? content,
+    DateTime? createdAt,
+    String? sourceMessageId,
+    String? title,
+    List<String>? tags,
+    String? sessionId,
+    String? scope,
+  }) {
+    return MemoryRecord(
+      id: id ?? this.id,
+      tier: tier ?? this.tier,
+      content: content ?? this.content,
+      createdAt: createdAt ?? this.createdAt,
+      sourceMessageId: sourceMessageId ?? this.sourceMessageId,
+      title: title ?? this.title,
+      tags: tags ?? this.tags,
+      sessionId: sessionId ?? this.sessionId,
+      scope: scope ?? this.scope,
+    );
+  }
 }

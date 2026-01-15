@@ -35,23 +35,26 @@ class VrmConfig {
 
 /// Default mappings aligned with common VRoid Studio exports (VRM 1.0).
 const Map<ExpressionEmotion, String> defaultExpressionClips = {
-  ExpressionEmotion.idle: 'Neutral',
-  ExpressionEmotion.happy: 'Joy',
-  ExpressionEmotion.sad: 'Sorrow',
-  ExpressionEmotion.angry: 'Angry',
-  ExpressionEmotion.surprise: 'Surprised',
-  ExpressionEmotion.think: 'Thinking',
-  ExpressionEmotion.awkward: 'Relieved',
-  ExpressionEmotion.question: 'Question',
-  ExpressionEmotion.curious: 'LookUp',
+  // VRM 1.0 preset names are lower-case.
+  ExpressionEmotion.idle: 'neutral',
+  ExpressionEmotion.happy: 'happy',
+  ExpressionEmotion.sad: 'sad',
+  ExpressionEmotion.angry: 'angry',
+  ExpressionEmotion.surprise: 'surprised',
+  // Map think/awkward/question/curious to relaxed/lookUp as a best-effort.
+  ExpressionEmotion.think: 'relaxed',
+  ExpressionEmotion.awkward: 'relaxed',
+  ExpressionEmotion.question: 'lookUp',
+  ExpressionEmotion.curious: 'lookUp',
 };
 
+// VRM 1.0 viseme preset names (aa/ih/uu/ee/oh).
 const Map<String, String> defaultVisemeClips = {
-  'aa': 'A',
-  'ee': 'E',
-  'ih': 'I',
-  'oh': 'O',
-  'ou': 'U',
+  'aa': 'aa',
+  'ee': 'ee',
+  'ih': 'ih',
+  'oh': 'oh',
+  'ou': 'uu', // approximate mapping
 };
 
 const Map<StageMotion, String> defaultMotionClips = {

@@ -48,6 +48,31 @@
       window.__pendingVrmUrl = url;
       window.__setStatus('Viewer not ready yet, queued VRM url.');
     };
+    window.__controlMode = 'basic';
+    window.setControlMode = (mode) => {
+      const m = 'basic';
+      window.__controlMode = m;
+      window.__setStatus(`Mode: ${m}`);
+    };
+    window.applyPose = (_pose) => {
+      window.__setStatus('applyPose called before viewer ready');
+    };
+    window.__autoDrive = true;
+    window.setAutoDrive = (flag) => {
+      window.__autoDrive = !!flag;
+    };
+    window.__stabilityMode = true;
+    window.setStabilityMode = (flag) => {
+      window.__stabilityMode = !!flag;
+    };
+    window.__idleAnimationEnabled = false;
+    window.setIdleAnimationEnabled = (flag) => {
+      window.__idleAnimationEnabled = !!flag;
+    };
+    window.__talking = false;
+    window.setTalking = (flag) => {
+      window.__talking = !!flag;
+    };
     window.addEventListener('error', (e) => {
       const detail = e?.message || 'Unknown error';
       window.__setStatus(`JS error: ${detail}`);
@@ -57,31 +82,88 @@
       window.__setStatus(`Promise error: ${detail}`);
     });
   </script>
-  <script src="/assets/vrm_core/es-module-shims.js"></script>
-  <script type="importmap-shim">
+  <script type="importmap">
     {
       "imports": {
         "three": "/assets/vrm_core/three.module.js",
         "three/addons/": "/assets/vrm_core/jsm/",
-        "@pixiv/three-vrm": "/assets/vrm_core/three-vrm.module.js"
+        "@pixiv/three-vrm": "/assets/vrm_core/three-vrm.module.js",
+        "@pixiv/three-vrm-animation": "/assets/vrm_core/three-vrm-animation.module.js"
       }
     }
   </script>
-  <script type="module-shim">
+  <script type="module">
     import * as THREE from 'three';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+    import {
+      VRMAnimationLoaderPlugin,
+      VRMLookAtQuaternionProxy,
+      createVRMAnimationClip,
+    } from '@pixiv/three-vrm-animation';
+    // Helper math utils adapted from Studying/airi-main pose-to-vrm
+    const vec = (x = 0, y = 0, z = 0) => ({ x, y, z });
+    const vAdd = (a, b) => vec(a.x + b.x, a.y + b.y, (a.z ?? 0) + (b.z ?? 0));
+    const vSub = (a, b) => vec(a.x - b.x, a.y - b.y, (a.z ?? 0) - (b.z ?? 0));
+    const vScale = (v, s) => vec(v.x * s, v.y * s, (v.z ?? 0) * s);
+    const vLen = (v) => Math.hypot(v.x, v.y, v.z ?? 0);
+    const vNorm = (v) => {
+      const l = vLen(v);
+      if (!Number.isFinite(l) || l <= 1e-6) return null;
+      return vScale(v, 1 / l);
+    };
+    const vDot = (a, b) => a.x * b.x + a.y * b.y + (a.z ?? 0) * (b.z ?? 0);
+    const vRemapAxis = (v, axis) => vec(v.x * axis.x, v.y * axis.y, (v.z ?? 0) * axis.z);
+    const vNeg = (v) => vec(-v.x, -v.y, -(v.z ?? 0));
+    const vCross = (a, b) => {
+      const az = a.z ?? 0;
+      const bz = b.z ?? 0;
+      return vec(a.y * bz - az * b.y, az * b.x - a.x * bz, a.x * b.y - a.y * b.x);
+    };
+    const mid = (a, b) => vScale(vAdd(a, b), 0.5);
+    const safePole = (dir, pole, threshold = 0.85) => {
+      const d = Math.abs(vDot(dir, pole));
+      if (!Number.isFinite(d)) return null;
+      return d > threshold ? null : pole;
+    };
+    const makeBasis = (xVec, yVec, zVec) => {
+      const m = new THREE.Matrix4();
+      m.makeBasis(xVec, yVec, zVec);
+      return m;
+    };
+    const DEFAULT_AXIS = { x: 1, y: 1, z: 1 };
+    const DEFAULT_MIN_VISIBILITY = 0.5;
+    const DEFAULT_MIN_PRESENCE = 0;
 
-    const setStatus = window.__setStatus || ((msg) => {
-      const el = document.getElementById('status');
-      if (el) el.textContent = msg;
-    });
+    // Bone chain definitions (simplified from Studying/airi apply-pose-to-vrm)
+    const CHAINS = {
+      hips: { bone: 'hips', childCandidates: ['spine'] },
+      spine: { bone: 'spine', childCandidates: ['chest', 'upperChest', 'neck'] },
+      chest: { bone: 'chest', childCandidates: ['upperChest', 'neck'] },
+      leftShoulder: { bone: 'leftShoulder', childCandidates: ['leftUpperArm'] },
+      rightShoulder: { bone: 'rightShoulder', childCandidates: ['rightUpperArm'] },
+      leftUpperArm: { bone: 'leftUpperArm', childCandidates: ['leftLowerArm'] },
+      leftLowerArm: { bone: 'leftLowerArm', childCandidates: ['leftHand'] },
+      rightUpperArm: { bone: 'rightUpperArm', childCandidates: ['rightLowerArm'] },
+      rightLowerArm: { bone: 'rightLowerArm', childCandidates: ['rightHand'] },
+      leftUpperLeg: { bone: 'leftUpperLeg', childCandidates: ['leftLowerLeg'] },
+      leftLowerLeg: { bone: 'leftLowerLeg', childCandidates: ['leftFoot'] },
+      rightUpperLeg: { bone: 'rightUpperLeg', childCandidates: ['rightLowerLeg'] },
+      rightLowerLeg: { bone: 'rightLowerLeg', childCandidates: ['rightFoot'] },
+    };
+    const LIMB_POLE_KEYS = new Set(['leftUpperArm', 'rightUpperArm', 'leftUpperLeg', 'rightUpperLeg']);
+
     const post = (type, msg) => {
       try {
         window.chrome?.webview?.postMessage(JSON.stringify({ type, msg }));
       } catch (_) {}
     };
+    const setStatus = window.__setStatus || ((msg) => {
+      const el = document.getElementById('status');
+      if (el) el.textContent = msg;
+      post('status', msg);
+    });
     window.onerror = (msg, src, line, col, err) => {
       const detail = `${msg} @ ${src ?? 'unknown'}:${line ?? '?'}:${col ?? '?'}`;
       setStatus(`JS error: ${detail}`);
@@ -89,6 +171,7 @@
     };
 
     function bootstrap() {
+      post('info', 'bootstrap:start');
       setStatus('Modules ready. Initializing scene...');
 
       const canvas = document.getElementById('c');
@@ -105,48 +188,336 @@
       controls.target.set(0, 1.3, 0);
       controls.update();
 
-      const light = new THREE.DirectionalLight(0xffffff, 1);
-      light.position.set(1, 1, 1);
-      scene.add(light);
-      const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6);
-      scene.add(hemi);
-      const grid = new THREE.GridHelper(4, 8, 0x888888, 0xcccccc);
+      // Lighting: key + fill + rim + ambient for softer look.
+      const keyLight = new THREE.DirectionalLight(0xffffff, 1.0);
+      keyLight.position.set(1.5, 1.8, 1.2);
+      keyLight.castShadow = false;
+      scene.add(keyLight);
+
+      const fillLight = new THREE.DirectionalLight(0xffffff, 0.5);
+      fillLight.position.set(-1.2, 1.0, 0.8);
+      scene.add(fillLight);
+
+      const rimLight = new THREE.DirectionalLight(0xffffff, 0.6);
+      rimLight.position.set(0.0, 1.0, -1.2);
+      scene.add(rimLight);
+
+      const ambient = new THREE.AmbientLight(0xffffff, 0.35);
+      scene.add(ambient);
+
+      // Ground helper (subtle grid).
+      const grid = new THREE.GridHelper(4, 8, 0x999999, 0xdddddd);
       grid.position.y = -0.05;
+      grid.material.opacity = 0.25;
+      grid.material.transparent = true;
       scene.add(grid);
-      const axes = new THREE.AxesHelper(0.5);
+
+      const axes = new THREE.AxesHelper(0.4);
+      axes.visible = false; // hide by default
       scene.add(axes);
 
       const loader = new GLTFLoader();
       loader.crossOrigin = 'anonymous';
       loader.register((parser) => new VRMLoaderPlugin(parser));
+      loader.register((parser) => new VRMAnimationLoaderPlugin(parser));
 
       let currentVrm = null;
+      let motionMode = null;
+      let motionStart = 0;
+      const motionDuration = 3.0; // seconds before auto reset
       const clock = new THREE.Clock();
+      const idleAnimationUrl = '/assets/vrm_core/animations/idle_loop.vrma';
+      let vrmMixer = null;
+      const lookAtTarget = new THREE.Object3D();
+      const lookAtBase = new THREE.Vector3(0, 1.3, 1.5);
+      const tmpEyePos = new THREE.Vector3();
+      const modelCenter = new THREE.Vector3(0, 1, 0);
+      const tmpVec = new THREE.Vector3();
+      const tmpVec2 = new THREE.Vector3();
+      const tmpQuat = new THREE.Quaternion();
+      const worldUp = new THREE.Vector3(0, 1, 0);
+      let blinkController = null;
+      let eyeSaccadeController = null;
+      let emoteController = null;
+      const autoDrive = {
+        nextBlink: 0,
+        blinkDur: 0.12,
+        nextGazeShift: 0,
+        gazeTarget: new THREE.Vector2(0, 0),
+        breathPhase: 0,
+        idlePhase: 0,
+        swayPhase: 0,
+        nextMicroGesture: 0,
+        micro: null,
+        nextIdleExpression: 0,
+        nextGesture: 0,
+        gesture: null,
+      };
+      const idlePose = {
+        head: { x: 0, y: 0, z: 0 },
+        headTarget: { x: 0, y: 0, z: 0 },
+        headTimer: 0,
+        headInterval: 1.4,
+        leftArm: { x: 0, z: 0 },
+        rightArm: { x: 0, z: 0 },
+        armTarget: { leftX: 0, leftZ: 0, rightX: 0, rightZ: 0 },
+        armTimer: 0,
+        armInterval: 1.8,
+      };
+      const POSE_BASE = {
+        headX: 0.1,
+        armZ: Math.PI / 2.3,
+      };
+      let stableIdleLogged = false;
+      const poseRestDir = {};
+      const poseRestPole = {};
+      const restRotations = {};
+      const lastTargetDir = {};
+      const lastTargetPole = {};
       setStatus('Scene ready. Waiting for VRM...');
+
+      const bones = {};
+      function cacheBones() {
+        if (!currentVrm?.humanoid) return;
+        const names = [
+          'head',
+          'neck',
+          'upperChest',
+          'chest',
+          'spine',
+          'hips',
+          'leftUpperArm',
+          'leftLowerArm',
+          'rightUpperArm',
+          'rightLowerArm',
+          'leftHand',
+          'rightHand',
+          'leftUpperLeg',
+          'leftLowerLeg',
+          'leftFoot',
+          'rightUpperLeg',
+          'rightLowerLeg',
+          'rightFoot',
+        ];
+        names.forEach((n) => {
+          bones[n] = currentVrm.humanoid.getNormalizedBoneNode(n);
+        });
+      }
+
+      function captureRestRotations() {
+        const names = [
+          'head',
+          'neck',
+          'upperChest',
+          'chest',
+          'spine',
+          'hips',
+          'leftUpperArm',
+          'leftLowerArm',
+          'leftHand',
+          'rightUpperArm',
+          'rightLowerArm',
+          'rightHand',
+          'leftUpperLeg',
+          'leftLowerLeg',
+          'leftFoot',
+          'rightUpperLeg',
+          'rightLowerLeg',
+          'rightFoot',
+        ];
+        names.forEach((n) => {
+          const bone = bones[n];
+          if (bone) {
+            restRotations[n] = bone.rotation.clone();
+          }
+        });
+      }
+
+      function applyRestRotation(name, offset) {
+        const bone = bones[name];
+        if (!bone) return;
+        let rest = restRotations[name];
+        if (!rest) {
+          rest = bone.rotation.clone();
+          restRotations[name] = rest;
+        }
+        bone.rotation.set(
+          rest.x + (offset?.x ?? 0),
+          rest.y + (offset?.y ?? 0),
+          rest.z + (offset?.z ?? 0),
+        );
+      }
+
+      function clampRotation(name, limits) {
+        const bone = bones[name];
+        const rest = restRotations[name];
+        if (!bone || !rest || !limits) return;
+        const offX = bone.rotation.x - rest.x;
+        const offY = bone.rotation.y - rest.y;
+        const offZ = bone.rotation.z - rest.z;
+        const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
+        const nx = limits.x ? clamp(offX, limits.x[0], limits.x[1]) : offX;
+        const ny = limits.y ? clamp(offY, limits.y[0], limits.y[1]) : offY;
+        const nz = limits.z ? clamp(offZ, limits.z[0], limits.z[1]) : offZ;
+        bone.rotation.set(rest.x + nx, rest.y + ny, rest.z + nz);
+      }
+
+      function stabilizePose() {
+        // Keep lower body upright and prevent extreme twists.
+        clampRotation('head', { x: [-0.35, 0.35], y: [-0.45, 0.45], z: [-0.3, 0.3] });
+        clampRotation('neck', { x: [-0.25, 0.25], y: [-0.35, 0.35], z: [-0.25, 0.25] });
+        clampRotation('hips', { x: [-0.35, 0.35], y: [-0.35, 0.35], z: [-0.25, 0.25] });
+        clampRotation('spine', { x: [-0.4, 0.4], y: [-0.35, 0.35], z: [-0.3, 0.3] });
+        clampRotation('chest', { x: [-0.45, 0.45], y: [-0.35, 0.35], z: [-0.3, 0.3] });
+        clampRotation('upperChest', { x: [-0.4, 0.4], y: [-0.3, 0.3], z: [-0.25, 0.25] });
+        clampRotation('leftUpperArm', { x: [-1.2, 0.6], y: [-0.8, 0.8], z: [-1.4, 1.4] });
+        clampRotation('rightUpperArm', { x: [-1.2, 0.6], y: [-0.8, 0.8], z: [-1.4, 1.4] });
+        clampRotation('leftLowerArm', { x: [-0.3, 1.6], y: [-0.6, 0.6], z: [-1.2, 1.2] });
+        clampRotation('rightLowerArm', { x: [-0.3, 1.6], y: [-0.6, 0.6], z: [-1.2, 1.2] });
+        clampRotation('leftHand', { x: [-0.8, 0.8], y: [-0.8, 0.8], z: [-1.0, 1.0] });
+        clampRotation('rightHand', { x: [-0.8, 0.8], y: [-0.8, 0.8], z: [-1.0, 1.0] });
+        clampRotation('leftUpperLeg', { x: [-0.2, 0.6], y: [-0.3, 0.3], z: [-0.25, 0.25] });
+        clampRotation('rightUpperLeg', { x: [-0.2, 0.6], y: [-0.3, 0.3], z: [-0.25, 0.25] });
+        clampRotation('leftLowerLeg', { x: [-0.1, 0.7], y: [-0.25, 0.25], z: [-0.2, 0.2] });
+        clampRotation('rightLowerLeg', { x: [-0.1, 0.7], y: [-0.25, 0.25], z: [-0.2, 0.2] });
+        clampRotation('leftFoot', { x: [-0.4, 0.4], y: [-0.3, 0.3], z: [-0.3, 0.3] });
+        clampRotation('rightFoot', { x: [-0.4, 0.4], y: [-0.3, 0.3], z: [-0.3, 0.3] });
+      }
+
+      function applyRestPose() {
+        // Keep model's native rest pose, only cache rotations.
+        captureRestRotations();
+      }
+
+      function alignVrmUpright(vrm) {
+        if (!vrm?.scene || !bones.hips) return;
+        const head = bones.head || bones.neck || bones.spine;
+        if (!head) return;
+        vrm.scene.updateMatrixWorld(true);
+        bones.hips.getWorldPosition(tmpVec);
+        head.getWorldPosition(tmpVec2);
+        tmpVec2.sub(tmpVec);
+        if (tmpVec2.lengthSq() < 1e-6) return;
+        tmpVec2.normalize();
+        const dot = Math.min(1, Math.max(-1, tmpVec2.dot(worldUp)));
+        const angle = Math.acos(dot);
+        if (!Number.isFinite(angle) || angle < 0.35) {
+          return;
+        }
+        tmpQuat.setFromUnitVectors(tmpVec2, worldUp);
+        vrm.scene.quaternion.premultiply(tmpQuat);
+        vrm.scene.updateMatrixWorld(true);
+      }
+
+      function ensureFacingCamera(vrm) {
+        if (!vrm?.scene || !bones.head) return;
+        vrm.scene.updateMatrixWorld(true);
+        bones.head.getWorldPosition(tmpEyePos);
+        bones.head.getWorldQuaternion(tmpQuat);
+        const forward = tmpVec.set(0, 0, -1).applyQuaternion(tmpQuat).normalize();
+        const toCam = tmpVec2.copy(camera.position).sub(tmpEyePos).normalize();
+        if (forward.dot(toCam) < 0) {
+          vrm.scene.rotation.y += Math.PI;
+          vrm.scene.updateMatrixWorld(true);
+        }
+      }
+
+      function frameVrm(vrm) {
+        if (!vrm?.scene) return;
+        vrm.scene.updateMatrixWorld(true);
+        const box = new THREE.Box3().setFromObject(vrm.scene);
+        const size = new THREE.Vector3();
+        const center = new THREE.Vector3();
+        box.getSize(size);
+        box.getCenter(center);
+        modelCenter.copy(center);
+        const maxDim = Math.max(size.x, size.y, size.z);
+        if (!Number.isFinite(maxDim) || maxDim <= 0) {
+          return;
+        }
+        const fov = camera.fov * (Math.PI / 180);
+        let distance = maxDim / (2 * Math.tan(fov / 2));
+        distance = Math.max(distance * 1.6, 1.4);
+        camera.position.set(
+          center.x,
+          center.y + size.y * 0.1,
+          center.z + distance,
+        );
+        controls.target.copy(center);
+        controls.minDistance = distance * 0.6;
+        controls.maxDistance = distance * 2.2;
+        controls.update();
+      }
+
+      function updateLookAtAnchor() {
+        if (!bones.head) return;
+        bones.head.getWorldPosition(tmpEyePos);
+        tmpVec.copy(camera.position).sub(modelCenter);
+        if (tmpVec.lengthSq() > 1e-6) {
+          tmpVec.normalize();
+        }
+        lookAtBase.copy(modelCenter).add(tmpVec.multiplyScalar(8));
+        lookAtBase.y = tmpEyePos.y;
+      }
 
       async function loadVrmFromUrl(url) {
         try {
           const gltf = await loader.loadAsync(url);
+          post('info', `gltf loaded from ${url}`);
           if (currentVrm) {
             scene.remove(currentVrm.scene);
             currentVrm = null;
           }
           const vrm = gltf.userData.vrm;
           if (vrm) {
-            VRMUtils.removeUnnecessaryVertices(gltf.scene);
-            VRMUtils.combineSkeletons(gltf.scene);
-            VRMUtils.combineMorphs(vrm);
+            try { VRMUtils.removeUnnecessaryVertices?.(gltf.scene); } catch (e) { console.warn('removeUnnecessaryVertices missing', e); }
+            try { VRMUtils.combineSkeletons?.(gltf.scene); } catch (e) { console.warn('combineSkeletons missing', e); }
+            try { VRMUtils.combineMorphs?.(vrm); } catch (e) { console.warn('combineMorphs missing', e); }
+            try { VRMUtils.rotateVRM0?.(vrm); } catch (e) { console.warn('rotateVRM0 missing', e); }
             vrm.scene.traverse((obj) => {
               obj.frustumCulled = false;
             });
           }
           currentVrm = vrm;
-          currentVrm.scene.rotation.y = Math.PI; // face camera
+          cacheBones();
+          alignVrmUpright(currentVrm);
+          applyRestPose();
+          if (window.__stabilityMode === true) {
+            applyStableIdle(0);
+          }
+          if (currentVrm?.lookAt) {
+            const proxy = new VRMLookAtQuaternionProxy(currentVrm.lookAt);
+            proxy.name = 'lookAtQuaternionProxy';
+            currentVrm.scene.add(proxy);
+            currentVrm.lookAt.target = lookAtTarget;
+          }
+          currentVrm.scene.rotation.y = 0; // face camera (VRM forward is -Z)
           currentVrm.scene.position.set(0, 0, 0);
           currentVrm.scene.scale.set(1, 1, 1);
           scene.add(currentVrm.scene);
+          frameVrm(currentVrm);
+          ensureFacingCamera(currentVrm);
+          frameVrm(currentVrm);
+          updateLookAtAnchor();
+          blinkController = createBlinkController();
+          eyeSaccadeController = createIdleEyeSaccades();
+          emoteController = createEmoteController(currentVrm);
+
+          // Load idle VRM animation
+          try {
+            const anim = await loadVRMAnimation(idleAnimationUrl);
+            const clip = await clipFromVRMAnimation(currentVrm, anim);
+            if (clip) {
+              reAnchorRootPositionTrack(clip, currentVrm);
+              vrmMixer = new THREE.AnimationMixer(currentVrm.scene);
+              vrmMixer.clipAction(clip).play();
+            }
+          } catch (e) {
+            console.warn('idle animation load failed', e);
+          }
           setStatus('VRM loaded. Use expression/motion hooks to drive avatar.');
           post('info', 'VRM loaded');
+          dumpCapabilities();
         } catch (err) {
           console.error('VRM load error', err);
           setStatus(`VRM load error: ${err}`);
@@ -169,8 +540,13 @@
 
       function setExpression(clip, intensity = 1.0) {
         if (!currentVrm?.expressionManager) return;
-        currentVrm.expressionManager.setValue(clip, intensity);
-        currentVrm.expressionManager.update();
+        if (emoteController && emoteController.setEmotionWithResetAfter(clip, 1000, intensity)) {
+          // emotion controller will update on next tick
+        } else {
+          currentVrm.expressionManager.setValue(clip, intensity);
+          currentVrm.expressionManager.update();
+        }
+        post('info', `expression: ${clip}=${intensity}`);
       }
 
       function setVisemeWeights(weights) {
@@ -179,27 +555,14 @@
           currentVrm.expressionManager.setValue(clip, value);
         });
         currentVrm.expressionManager.update();
+        post('info', `viseme: ${JSON.stringify(weights)}`);
       }
 
       function setMotion(motion) {
         if (!currentVrm) return;
-        switch (motion) {
-          case 'Wave':
-            currentVrm.scene.rotation.y = Math.PI + Math.sin(Date.now() / 400) * 0.2;
-            break;
-          case 'Nod':
-            currentVrm.scene.rotation.x = Math.sin(Date.now() / 350) * 0.12;
-            break;
-          case 'LookLeft':
-            currentVrm.scene.rotation.y = Math.PI + 0.3;
-            break;
-          case 'LookRight':
-            currentVrm.scene.rotation.y = Math.PI - 0.3;
-            break;
-          default:
-            currentVrm.scene.rotation.x = 0;
-            currentVrm.scene.rotation.y = Math.PI;
-        }
+        motionMode = motion;
+        motionStart = clock.getElapsedTime();
+        post('info', `motion: ${motion}`);
       }
 
       window.loadVrmFromBase64 = loadVrmFromBase64;
@@ -207,6 +570,907 @@
       window.setExpression = setExpression;
       window.setVisemeWeights = setVisemeWeights;
       window.setMotion = setMotion;
+      window.setControlMode = (mode) => {
+        const m = 'basic';
+        window.__controlMode = m;
+        setStatus(`Mode: ${m}`);
+        post('info', `mode:${m}`);
+      };
+
+      // applyPose: expects { bones: { boneName: {x,y,z,w}}, expressions: {name: value}, visemes: {aa:0..1,...} }
+      window.applyPose = (pose) => {
+        if (window.__controlMode !== 'advanced') return;
+        if (!pose) return;
+        if (!currentVrm) return;
+        // path 1: direct quaternion map (if provided)
+        if (pose.bones) {
+          Object.entries(pose.bones).forEach(([name, q]) => {
+            const b = bones[name];
+            if (!b || !q) return;
+            const target = new THREE.Quaternion(
+              Number(q.x ?? q._x ?? 0),
+              Number(q.y ?? q._y ?? 0),
+              Number(q.z ?? q._z ?? 0),
+              Number(q.w ?? q._w ?? 1),
+            ).normalize();
+            b.quaternion.slerp(target, 0.35);
+          });
+        }
+        // path 2: direction + pole targets (partial, adapted from Studying/airi)
+        if (pose.targets) {
+          applyPoseTargets(currentVrm, pose.targets, bones);
+        }
+        // path 3: mediapipe-like landmarks
+        if (pose.worldLandmarks) {
+          const targets = poseToVrmTargets(pose, pose.options || {});
+          applyPoseTargets(currentVrm, targets, bones);
+        }
+        if (pose.expressions) {
+          Object.entries(pose.expressions).forEach(([k, v]) => setExpression(k, Number(v ?? 0)));
+        }
+        if (pose.visemes) {
+          setVisemeWeights(pose.visemes);
+        }
+      };
+
+      function applyStableMotion(time) {
+        if (!currentVrm || !motionMode) return;
+        const t = time - motionStart;
+        const phase = Math.min(t / motionDuration, 1);
+        const ease = Math.sin(Math.PI * phase);
+        switch (motionMode) {
+          case 'Wave': {
+            const wave = Math.sin(time * 6) * 0.18;
+            applyRestRotation('rightUpperArm', {
+              x: -0.15 * ease,
+              z: POSE_BASE.armZ - 0.55 * ease,
+            });
+            applyRestRotation('rightLowerArm', { z: 0.35 + wave });
+            applyRestRotation('rightHand', { z: wave * 0.6 });
+            break;
+          }
+          case 'Nod': {
+            const nod = Math.sin(time * 6) * 0.12;
+            applyRestRotation('head', { x: POSE_BASE.headX + nod });
+            applyRestRotation('neck', { x: (POSE_BASE.headX + nod) * 0.4 });
+            break;
+          }
+          case 'LookLeft':
+            applyRestRotation('head', { x: POSE_BASE.headX, y: 0.25 });
+            applyRestRotation('neck', { x: POSE_BASE.headX * 0.4, y: 0.1 });
+            break;
+          case 'LookRight':
+            applyRestRotation('head', { x: POSE_BASE.headX, y: -0.25 });
+            applyRestRotation('neck', { x: POSE_BASE.headX * 0.4, y: -0.1 });
+            break;
+          case 'LookAtUser': {
+            const nod = Math.sin(time * 3.6) * 0.06;
+            applyRestRotation('head', { x: POSE_BASE.headX + nod });
+            applyRestRotation('neck', { x: (POSE_BASE.headX + nod) * 0.4 });
+            break;
+          }
+          default:
+            break;
+        }
+        if (t > motionDuration) {
+          motionMode = null;
+          applyRestPose();
+        }
+        stabilizePose();
+      }
+
+      function applyMotion(time) {
+        if (!currentVrm) return;
+        const stabilityMode = window.__stabilityMode === true;
+        if (stabilityMode) {
+          applyStableMotion(time);
+          return;
+        }
+        const t = time - motionStart;
+        const head = bones.head;
+        const lUpper = bones.leftUpperArm;
+        const rUpper = bones.rightUpperArm;
+        const lLower = bones.leftLowerArm;
+        const rLower = bones.rightLowerArm;
+        const rHand = bones.rightHand;
+
+        // subtle idle sway when no motion
+        const idleAmp = 0.04;
+        const isAdvanced = window.__controlMode === 'advanced';
+        if (!motionMode) {
+          if (head) head.rotation.x = Math.sin(time * 0.7) * idleAmp;
+          if (isAdvanced) return; // 高阶模式只保留微动
+        }
+
+        if (isAdvanced) return; // 高阶模式完全交由外部 applyPose 驱动
+
+        switch (motionMode) {
+          case 'Wave':
+            // Raise arm to waving pose
+            if (rUpper) {
+              // Shoulder: lift forward + slight outward
+              rUpper.rotation.set(
+                -0.4 + Math.sin(time * 1.5) * 0.05,
+                -0.3,
+                1.0
+              );
+            }
+            if (rLower) {
+              // Elbow: bend and swing
+              rLower.rotation.set(
+                -0.1,
+                0.0,
+                1.0 + Math.sin(time * 5) * 0.45
+              );
+            }
+            if (rHand) {
+              rHand.rotation.set(0, 0, Math.sin(time * 6) * 0.25);
+            }
+            break;
+          case 'Nod':
+            if (head) head.rotation.x = Math.sin(time * 6) * 0.25;
+            break;
+          case 'LookLeft':
+            if (head) head.rotation.y = 0.35;
+            break;
+          case 'LookRight':
+            if (head) head.rotation.y = -0.35;
+            break;
+          default:
+            break;
+        }
+
+        // auto reset after duration
+        if (t > motionDuration) {
+          motionMode = null;
+          applyRestPose();
+        }
+      }
+
+      function dumpCapabilities() {
+        try {
+          const boneKeys = Object.entries(bones)
+            .filter(([, v]) => !!v)
+            .map(([k]) => k);
+          const expr = currentVrm?.expressionManager?.expressionMap
+            ? Object.keys(currentVrm.expressionManager.expressionMap)
+            : [];
+          post('info', `bones:${JSON.stringify(boneKeys)}`);
+          post('info', `expressions:${JSON.stringify(expr)}`);
+        } catch (e) {
+          console.warn('dumpCapabilities failed', e);
+        }
+      }
+
+      // ---- VRM Animation (from airi) ----
+      async function loadVRMAnimation(url) {
+        const gltf = await loader.loadAsync(url);
+        const userData = gltf.userData || {};
+        const anims = userData.vrmAnimations || [];
+        if (!anims.length) {
+          console.warn('No VRM animations found in .vrma');
+          return null;
+        }
+        return anims[0];
+      }
+
+      async function clipFromVRMAnimation(vrm, animation) {
+        if (!vrm || !animation) return null;
+        return createVRMAnimationClip(animation, vrm);
+      }
+
+      function reAnchorRootPositionTrack(clip, vrm) {
+        const hipNode = vrm?.humanoid?.getNormalizedBoneNode('hips');
+        if (!hipNode || !clip) return;
+        hipNode.updateMatrixWorld(true);
+        const defaultHipPos = new THREE.Vector3();
+        hipNode.getWorldPosition(defaultHipPos);
+        const hipsTrack = clip.tracks.find((track) =>
+          track instanceof THREE.VectorKeyframeTrack &&
+          track.name === `${hipNode.name}.position`
+        );
+        if (!(hipsTrack instanceof THREE.VectorKeyframeTrack)) return;
+        const animeHipPos = new THREE.Vector3(
+          hipsTrack.values[0],
+          hipsTrack.values[1],
+          hipsTrack.values[2],
+        );
+        const animeDelta = animeHipPos.clone().sub(defaultHipPos);
+        clip.tracks.forEach((track) => {
+          if (track.name.endsWith('.position') &&
+              track instanceof THREE.VectorKeyframeTrack) {
+            for (let i = 0; i < track.values.length; i += 3) {
+              track.values[i] -= animeDelta.x;
+              track.values[i + 1] -= animeDelta.y;
+              track.values[i + 2] -= animeDelta.z;
+            }
+          }
+        });
+      }
+
+      // ---- Eye saccade (from airi) ----
+      const EYE_SACCADE_INT_STEP = 400;
+      const EYE_SACCADE_INTERVAL_SCALE = 4.0;
+      const EYE_SACCADE_INT_P = [
+        [0.075, 800],
+        [0.110, 0],
+        [0.125, 0],
+        [0.140, 0],
+        [0.125, 0],
+        [0.050, 0],
+        [0.040, 0],
+        [0.030, 0],
+        [0.020, 0],
+        [1.000, 0],
+      ];
+      for (let i = 1; i < EYE_SACCADE_INT_P.length; i++) {
+        EYE_SACCADE_INT_P[i][0] += EYE_SACCADE_INT_P[i - 1][0];
+        EYE_SACCADE_INT_P[i][1] = EYE_SACCADE_INT_P[i - 1][1] + EYE_SACCADE_INT_STEP;
+      }
+      function randomSaccadeInterval() {
+        const r = Math.random();
+        for (let i = 0; i < EYE_SACCADE_INT_P.length; i++) {
+          if (r <= EYE_SACCADE_INT_P[i][0]) {
+            return (EYE_SACCADE_INT_P[i][1] + Math.random() * EYE_SACCADE_INT_STEP) *
+              EYE_SACCADE_INTERVAL_SCALE;
+          }
+        }
+        return (EYE_SACCADE_INT_P[EYE_SACCADE_INT_P.length - 1][1] +
+          Math.random() * EYE_SACCADE_INT_STEP) * EYE_SACCADE_INTERVAL_SCALE;
+      }
+
+      function createBlinkController() {
+        let isBlinking = false;
+        let blinkProgress = 0;
+        let timeSinceLastBlink = 0;
+        const BLINK_DURATION = 0.2;
+        const MIN_BLINK_INTERVAL = 1;
+        const MAX_BLINK_INTERVAL = 6;
+        let nextBlinkTime = Math.random() * (MAX_BLINK_INTERVAL - MIN_BLINK_INTERVAL) + MIN_BLINK_INTERVAL;
+        function update(vrm, delta) {
+          if (!vrm?.expressionManager) return;
+          timeSinceLastBlink += delta;
+          if (!isBlinking && timeSinceLastBlink >= nextBlinkTime) {
+            isBlinking = true;
+            blinkProgress = 0;
+          }
+          if (isBlinking) {
+            blinkProgress += delta / BLINK_DURATION;
+            const blinkValue = Math.sin(Math.PI * blinkProgress);
+            vrm.expressionManager.setValue('blink', blinkValue);
+            if (blinkProgress >= 1) {
+              isBlinking = false;
+              timeSinceLastBlink = 0;
+              vrm.expressionManager.setValue('blink', 0);
+              nextBlinkTime =
+                Math.random() * (MAX_BLINK_INTERVAL - MIN_BLINK_INTERVAL) + MIN_BLINK_INTERVAL;
+            }
+          }
+        }
+        return { update };
+      }
+
+      function createIdleEyeSaccades() {
+        let nextSaccadeAfter = -1;
+        const fixationTarget = new THREE.Vector3();
+        let timeSinceLastSaccade = 0;
+        const gazeRange = 0.0;
+        function updateFixationTarget(baseTarget) {
+          fixationTarget.set(
+            baseTarget.x + (Math.random() * (gazeRange * 2) - gazeRange),
+            baseTarget.y + (Math.random() * (gazeRange * 2) - gazeRange),
+            baseTarget.z,
+          );
+        }
+        function update(vrm, baseTarget, delta) {
+          if (!vrm?.lookAt) return;
+          if (!vrm.lookAt.target) {
+            vrm.lookAt.target = lookAtTarget;
+          }
+          if (timeSinceLastSaccade >= nextSaccadeAfter) {
+            updateFixationTarget(baseTarget);
+            timeSinceLastSaccade = 0;
+            nextSaccadeAfter = randomSaccadeInterval() / 1000;
+          } else if (!fixationTarget) {
+            updateFixationTarget(baseTarget);
+          }
+          vrm.lookAt.target.position.lerp(fixationTarget, 0.12);
+          vrm.lookAt.update(delta);
+          timeSinceLastSaccade += delta;
+        }
+        function instantUpdate(vrm, target) {
+          fixationTarget.set(target.x, target.y, target.z);
+          if (!vrm?.lookAt) return;
+          if (!vrm.lookAt.target) {
+            vrm.lookAt.target = lookAtTarget;
+          }
+          vrm.lookAt.target.position.lerp(fixationTarget, 1);
+          vrm.lookAt.update(0.016);
+        }
+        return { update, instantUpdate };
+      }
+
+      function createEmoteController(vrm) {
+        const emotionStates = new Map([
+          ['happy', { expression: [{ name: 'happy', value: 1.0 }, { name: 'aa', value: 0.3 }], blendDuration: 0.3 }],
+          ['sad', { expression: [{ name: 'sad', value: 1.0 }, { name: 'oh', value: 0.2 }], blendDuration: 0.3 }],
+          ['angry', { expression: [{ name: 'angry', value: 1.0 }, { name: 'ee', value: 0.4 }], blendDuration: 0.2 }],
+          ['surprised', { expression: [{ name: 'surprised', value: 1.0 }, { name: 'oh', value: 0.6 }], blendDuration: 0.1 }],
+          ['neutral', { expression: [{ name: 'neutral', value: 1.0 }], blendDuration: 0.5 }],
+          ['relaxed', { expression: [{ name: 'relaxed', value: 1.0 }], blendDuration: 0.4 }],
+        ]);
+        let currentEmotion = null;
+        let isTransitioning = false;
+        let transitionProgress = 0;
+        const currentValues = new Map();
+        const targetValues = new Map();
+        let resetTimeout = null;
+
+        const lerp = (a, b, t) => a + (b - a) * t;
+        const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
+
+        function clearReset() {
+          if (resetTimeout) {
+            clearTimeout(resetTimeout);
+            resetTimeout = null;
+          }
+        }
+
+        function setEmotion(emotionName, scale = 1.0) {
+          clearReset();
+          if (!emotionStates.has(emotionName)) {
+            return false;
+          }
+          currentEmotion = emotionName;
+          isTransitioning = true;
+          transitionProgress = 0;
+          if (vrm.expressionManager) {
+            const names = Object.keys(vrm.expressionManager.expressionMap || {});
+            for (const name of names) {
+              vrm.expressionManager.setValue(name, 0);
+            }
+          }
+          currentValues.clear();
+          targetValues.clear();
+          const state = emotionStates.get(emotionName);
+          for (const expr of state.expression || []) {
+            const currentValue = vrm.expressionManager?.getValue(expr.name) || 0;
+            currentValues.set(expr.name, currentValue);
+            targetValues.set(expr.name, (expr.value || 0) * scale);
+          }
+          return true;
+        }
+
+        function setEmotionWithResetAfter(emotionName, ms, scale = 1.0) {
+          clearReset();
+          const ok = setEmotion(emotionName, scale);
+          if (!ok) return false;
+          resetTimeout = setTimeout(() => {
+            setEmotion('neutral', 1.0);
+            resetTimeout = null;
+          }, ms);
+          return true;
+        }
+
+        function update(delta) {
+          if (!isTransitioning || !currentEmotion) return;
+          const state = emotionStates.get(currentEmotion) || { blendDuration: 0.3 };
+          const blendDuration = state.blendDuration || 0.3;
+          transitionProgress += delta / blendDuration;
+          if (transitionProgress >= 1) {
+            transitionProgress = 1;
+            isTransitioning = false;
+          }
+          for (const [exprName, targetValue] of targetValues) {
+            const startValue = currentValues.get(exprName) || 0;
+            const currentValue = lerp(startValue, targetValue, easeInOutCubic(transitionProgress));
+            vrm.expressionManager?.setValue(exprName, currentValue);
+          }
+        }
+
+        return { setEmotion, setEmotionWithResetAfter, update };
+      }
+
+      function getOptionalPresence(landmark) {
+        return landmark && typeof landmark === 'object' && 'presence' in landmark
+          ? landmark.presence
+          : undefined;
+      }
+
+      function getOptionalVisibility(landmark) {
+        return landmark && typeof landmark === 'object' && 'visibility' in landmark
+          ? landmark.visibility
+          : undefined;
+      }
+
+      function isConfident(pose, index, thresholds) {
+        const lm2d = pose.landmarks2d?.[index];
+        const lm3d = pose.worldLandmarks?.[index];
+        if (!lm2d && !lm3d) return false;
+        const visibility = getOptionalVisibility(lm2d) ?? getOptionalVisibility(lm3d);
+        if (visibility == null || !Number.isFinite(visibility)) return false;
+        if (visibility < thresholds.minVisibility) return false;
+        if (thresholds.minPresence > 0) {
+          const presence = getOptionalPresence(lm2d) ?? getOptionalPresence(lm3d);
+          if (presence != null && Number.isFinite(presence) && presence < thresholds.minPresence) {
+            return false;
+          }
+        }
+        return true;
+      }
+
+      function poseToVrmTargets(pose, options) {
+        const points = pose.worldLandmarks;
+        if (!points?.length) return {};
+        const axis = options?.axis ?? DEFAULT_AXIS;
+        const thresholds = {
+          minVisibility: options?.confidence?.minVisibility ?? DEFAULT_MIN_VISIBILITY,
+          minPresence: options?.confidence?.minPresence ?? DEFAULT_MIN_PRESENCE,
+        };
+        const getC = (index) => (isConfident(pose, index, thresholds) ? points[index] : null);
+
+        const leftShoulder = getC(11);
+        const rightShoulder = getC(12);
+        const leftElbow = getC(13);
+        const rightElbow = getC(14);
+        const leftWrist = getC(15);
+        const rightWrist = getC(16);
+        const leftHip = getC(23);
+        const rightHip = getC(24);
+        const leftKnee = getC(25);
+        const rightKnee = getC(26);
+        const leftAnkle = getC(27);
+        const rightAnkle = getC(28);
+
+        const out = {};
+        const shoulderCenter = leftShoulder && rightShoulder ? mid(leftShoulder, rightShoulder) : null;
+        const hipCenter = leftHip && rightHip ? mid(leftHip, rightHip) : null;
+
+        let torsoForward = null;
+        if (hipCenter && shoulderCenter && leftShoulder && rightShoulder) {
+          const rightRaw = vSub(rightShoulder, leftShoulder);
+          const upRaw = vSub(shoulderCenter, hipCenter);
+          const right = vNorm(vRemapAxis(rightRaw, axis));
+          const up = vNorm(vRemapAxis(upRaw, axis));
+          if (right && up) {
+            let fw = vNorm(vCross(right, up));
+            if (fw) {
+              const rightFromBasis = vNorm(vCross(fw, up));
+              if (rightFromBasis && vDot(rightFromBasis, right) < 0) {
+                fw = vNeg(fw);
+              }
+              torsoForward = fw;
+            }
+          }
+        }
+
+        if (hipCenter && shoulderCenter) {
+          const up = vNorm(vRemapAxis(vSub(shoulderCenter, hipCenter), axis));
+          if (up) {
+            out.hips = torsoForward ? { dir: up, pole: torsoForward } : { dir: up };
+            out.spine = torsoForward ? { dir: up, pole: torsoForward } : { dir: up };
+            out.chest = torsoForward ? { dir: up, pole: torsoForward } : { dir: up };
+          }
+        }
+
+        if (shoulderCenter && leftShoulder) {
+          const d = vNorm(vRemapAxis(vSub(leftShoulder, shoulderCenter), axis));
+          if (d) out.leftShoulder = { dir: d };
+        }
+        if (shoulderCenter && rightShoulder) {
+          const d = vNorm(vRemapAxis(vSub(rightShoulder, shoulderCenter), axis));
+          if (d) out.rightShoulder = { dir: d };
+        }
+
+        if (leftShoulder && leftElbow) {
+          const upper = vNorm(vRemapAxis(vSub(leftElbow, leftShoulder), axis));
+          if (upper) {
+            const poleRaw = leftWrist ? vCross(vSub(leftElbow, leftShoulder), vSub(leftWrist, leftElbow)) : null;
+            const pole = poleRaw ? vNorm(vRemapAxis(poleRaw, axis)) : null;
+            out.leftUpperArm = pole ? { dir: upper, pole } : { dir: upper };
+          }
+        }
+        if (leftElbow && leftWrist) {
+          const lower = vNorm(vRemapAxis(vSub(leftWrist, leftElbow), axis));
+          if (lower) out.leftLowerArm = { dir: lower };
+        }
+        if (rightShoulder && rightElbow) {
+          const upper = vNorm(vRemapAxis(vSub(rightElbow, rightShoulder), axis));
+          if (upper) {
+            const poleRaw = rightWrist ? vCross(vSub(rightElbow, rightShoulder), vSub(rightWrist, rightElbow)) : null;
+            const pole = poleRaw ? vNorm(vRemapAxis(poleRaw, axis)) : null;
+            out.rightUpperArm = pole ? { dir: upper, pole } : { dir: upper };
+          }
+        }
+        if (rightElbow && rightWrist) {
+          const lower = vNorm(vRemapAxis(vSub(rightWrist, rightElbow), axis));
+          if (lower) out.rightLowerArm = { dir: lower };
+        }
+
+        if (leftHip && leftKnee && leftAnkle) {
+          const upper = vNorm(vRemapAxis(vSub(leftKnee, leftHip), axis));
+          if (upper) {
+            const poleRaw = vCross(vSub(leftKnee, leftHip), vSub(leftAnkle, leftKnee));
+            let pole = vNorm(vRemapAxis(poleRaw, axis));
+            if (pole) pole = safePole(upper, pole);
+            out.leftUpperLeg = pole ? { dir: upper, pole } : { dir: upper };
+          }
+          const lower = vNorm(vRemapAxis(vSub(leftAnkle, leftKnee), axis));
+          if (lower) out.leftLowerLeg = { dir: lower };
+        }
+
+        if (rightHip && rightKnee && rightAnkle) {
+          const upper = vNorm(vRemapAxis(vSub(rightKnee, rightHip), axis));
+          if (upper) {
+            const poleRaw = vCross(vSub(rightKnee, rightHip), vSub(rightAnkle, rightKnee));
+            let pole = vNorm(vRemapAxis(poleRaw, axis));
+            if (pole) pole = safePole(upper, pole);
+            out.rightUpperLeg = pole ? { dir: upper, pole } : { dir: upper };
+          }
+          const lower = vNorm(vRemapAxis(vSub(rightAnkle, rightKnee), axis));
+          if (lower) out.rightLowerLeg = { dir: lower };
+        }
+
+        return out;
+      }
+
+      // --- applyPoseTargets (direction + pole), adapted from Studying/airi ---
+      function ensureRestDir(vrm, key) {
+        if (poseRestDir[key]) return poseRestDir[key];
+        const chain = CHAINS[key];
+        if (!chain) return null;
+        const bone = vrm.humanoid?.getNormalizedBoneNode(chain.bone);
+        if (!bone) return null;
+        const child = chain.childCandidates
+          .map((c) => vrm.humanoid?.getNormalizedBoneNode(c))
+          .find((x) => !!x);
+        if (!child) return null;
+        bone.updateMatrixWorld(true);
+        child.updateMatrixWorld(true);
+        const bonePos = new THREE.Vector3();
+        const childPos = new THREE.Vector3();
+        bone.getWorldPosition(bonePos);
+        child.getWorldPosition(childPos);
+        const dirWorld = childPos.clone().sub(bonePos).normalize();
+        const boneWorldQ = new THREE.Quaternion();
+        bone.getWorldQuaternion(boneWorldQ);
+        const dirLocal = dirWorld.clone().applyQuaternion(boneWorldQ.clone().invert()).normalize();
+        poseRestDir[key] = dirLocal.clone();
+        return dirLocal;
+      }
+
+      function ensureRestPole(vrm, key) {
+        if (poseRestPole[key]) return poseRestPole[key];
+        if (!LIMB_POLE_KEYS.has(key)) return null;
+        const chain = CHAINS[key];
+        const bone = vrm.humanoid?.getNormalizedBoneNode(chain.bone);
+        if (!bone) return null;
+        const child = chain.childCandidates
+          .map((c) => vrm.humanoid?.getNormalizedBoneNode(c))
+          .find((x) => !!x);
+        if (!child) return null;
+        const grand = (key === 'leftUpperArm' && vrm.humanoid?.getNormalizedBoneNode('leftHand')) ||
+          (key === 'rightUpperArm' && vrm.humanoid?.getNormalizedBoneNode('rightHand')) ||
+          (key === 'leftUpperLeg' && vrm.humanoid?.getNormalizedBoneNode('leftFoot')) ||
+          (key === 'rightUpperLeg' && vrm.humanoid?.getNormalizedBoneNode('rightFoot'));
+        if (!grand) return null;
+        bone.updateMatrixWorld(true);
+        child.updateMatrixWorld(true);
+        grand.updateMatrixWorld(true);
+        const bPos = new THREE.Vector3();
+        const cPos = new THREE.Vector3();
+        const gPos = new THREE.Vector3();
+        bone.getWorldPosition(bPos);
+        child.getWorldPosition(cPos);
+        grand.getWorldPosition(gPos);
+        const dir1 = cPos.clone().sub(bPos);
+        const dir2 = gPos.clone().sub(cPos);
+        const poleWorld = dir1.clone().cross(dir2).normalize();
+        const boneWorldQ = new THREE.Quaternion();
+        bone.getWorldQuaternion(boneWorldQ);
+        const poleLocal = poleWorld.clone().applyQuaternion(boneWorldQ.clone().invert()).normalize();
+        poseRestPole[key] = poleLocal.clone();
+        return poleLocal;
+      }
+
+      function applyPoseTargets(vrm, targets, boneCache) {
+        if (!vrm?.humanoid || !targets) return;
+        Object.keys(targets).forEach((key) => {
+          const t = targets[key];
+          const bone = boneCache[key];
+          if (!bone || !t?.dir) return;
+          const dir = vNorm(vec(t.dir.x, t.dir.y, t.dir.z ?? 0));
+          if (!dir) return;
+          const pole = t.pole ? vNorm(vec(t.pole.x, t.pole.y, t.pole.z ?? 0)) : null;
+
+          const restDir = ensureRestDir(vrm, key);
+          const restPole = pole ? ensureRestPole(vrm, key) : null;
+          if (!restDir) return;
+
+          bone.updateMatrixWorld(true);
+          const parent = bone.parent;
+          const boneWorldQ = new THREE.Quaternion();
+          const parentWorldQ = new THREE.Quaternion();
+          bone.getWorldQuaternion(boneWorldQ);
+          if (parent) {
+            parent.updateMatrixWorld(true);
+            parent.getWorldQuaternion(parentWorldQ);
+          }
+
+          const targetDirWorld = new THREE.Vector3(dir.x, dir.y, dir.z);
+          if (targetDirWorld.lengthSq() <= 1e-12) return;
+          targetDirWorld.normalize();
+
+          const prevDir = lastTargetDir[key];
+          if (prevDir && vDot(prevDir, dir) < -0.2) return;
+
+          let newLocalQ;
+          if (pole && restPole) {
+            const targetPoleWorld = new THREE.Vector3(pole.x, pole.y, pole.z).normalize();
+            const targetYWorld = new THREE.Vector3().copy(targetPoleWorld).cross(targetDirWorld).normalize();
+
+            const restDirLocal = new THREE.Vector3(restDir.x, restDir.y, restDir.z).normalize();
+            const restPoleLocal = new THREE.Vector3(restPole.x, restPole.y, restPole.z).normalize();
+            restPoleLocal.addScaledVector(restDirLocal, -restPoleLocal.dot(restDirLocal)).normalize();
+            const restYLocal = restPoleLocal.clone().cross(restDirLocal).normalize();
+
+            const restM = makeBasis(restDirLocal, restYLocal, restPoleLocal);
+            const targetM = makeBasis(targetDirWorld, targetYWorld, targetPoleWorld);
+            const rotM = new THREE.Matrix4().multiplyMatrices(targetM, restM.clone().invert());
+            const newWorldQ = new THREE.Quaternion().setFromRotationMatrix(rotM);
+            newLocalQ = parentWorldQ.invert().multiply(newWorldQ);
+          } else {
+            const currentDirWorld = new THREE.Vector3(restDir.x, restDir.y, restDir.z)
+              .applyQuaternion(boneWorldQ)
+              .normalize();
+            const deltaQ = new THREE.Quaternion().setFromUnitVectors(currentDirWorld, targetDirWorld);
+            const newWorldQ = new THREE.Quaternion().copy(deltaQ).multiply(boneWorldQ);
+            newLocalQ = parentWorldQ.invert().multiply(newWorldQ);
+          }
+          bone.quaternion.slerp(newLocalQ, 0.35);
+          lastTargetDir[key] = dir;
+          if (pole) lastTargetPole[key] = pole;
+        });
+      }
+
+      // ---------- 自动驱动（基础闲置） ----------
+      function scheduleAuto() {
+        const now = clock.getElapsedTime();
+        const rnd = (min, max) => min + Math.random() * (max - min);
+        autoDrive.nextBlink = now + rnd(1.5, 4.0);
+        autoDrive.nextGazeShift = now + rnd(1.2, 3.0);
+        autoDrive.nextMicroGesture = now + rnd(4.0, 8.0);
+        autoDrive.nextIdleExpression = now + rnd(8.0, 14.0);
+        autoDrive.nextGesture = now + rnd(2.0, 4.0);
+      }
+      scheduleAuto();
+
+      function applyStableIdle(delta) {
+        const lerp = THREE.MathUtils.lerp;
+        const rand = THREE.MathUtils.randFloat;
+        if (!stableIdleLogged) {
+          stableIdleLogged = true;
+          post('info', 'stable idle: active');
+        }
+        const now = clock.getElapsedTime();
+        const talking = window.__talking === true;
+        const headRange = talking ? 0.12 : 0.08;
+        const armRange = talking ? 0.12 : 0.08;
+        const headLerp = talking ? 5.0 : 3.6;
+        const armLerp = talking ? 4.8 : 3.6;
+        if (!talking) {
+          autoDrive.gesture = null;
+        }
+        idlePose.headTimer += delta;
+        if (idlePose.headTimer >= idlePose.headInterval) {
+          idlePose.headTimer = 0;
+          idlePose.headInterval = rand(talking ? 0.6 : 1.1, talking ? 1.2 : 2.1);
+          idlePose.headTarget.x = rand(-headRange, headRange);
+          idlePose.headTarget.y = rand(-headRange, headRange);
+          idlePose.headTarget.z = rand(-headRange * 0.8, headRange * 0.8);
+        }
+        idlePose.armTimer += delta;
+        if (idlePose.armTimer >= idlePose.armInterval) {
+          idlePose.armTimer = 0;
+          idlePose.armInterval = rand(talking ? 0.8 : 1.4, talking ? 1.5 : 2.4);
+          idlePose.armTarget.leftX = rand(-armRange, armRange);
+          idlePose.armTarget.leftZ = rand(-armRange, armRange);
+          idlePose.armTarget.rightX = rand(-armRange, armRange);
+          idlePose.armTarget.rightZ = rand(-armRange, armRange);
+        }
+        idlePose.head.x = lerp(idlePose.head.x, idlePose.headTarget.x, delta * headLerp);
+        idlePose.head.y = lerp(idlePose.head.y, idlePose.headTarget.y, delta * headLerp);
+        idlePose.head.z = lerp(idlePose.head.z, idlePose.headTarget.z, delta * headLerp);
+        idlePose.leftArm.x = lerp(idlePose.leftArm.x, idlePose.armTarget.leftX, delta * armLerp);
+        idlePose.leftArm.z = lerp(idlePose.leftArm.z, idlePose.armTarget.leftZ, delta * armLerp);
+        idlePose.rightArm.x = lerp(idlePose.rightArm.x, idlePose.armTarget.rightX, delta * armLerp);
+        idlePose.rightArm.z = lerp(idlePose.rightArm.z, idlePose.armTarget.rightZ, delta * armLerp);
+
+        autoDrive.breathPhase += delta * 1.05;
+        autoDrive.idlePhase += delta * (talking ? 1.4 : 0.9);
+        autoDrive.swayPhase += delta * (talking ? 0.9 : 0.6);
+        const breath = Math.sin(autoDrive.breathPhase) * 0.018;
+        const sway = Math.sin(autoDrive.swayPhase) * (talking ? 0.015 : 0.01);
+        const talkNod = talking ? Math.sin(autoDrive.idlePhase * 3.2) * 0.04 : 0;
+        const armSway = Math.sin(autoDrive.idlePhase * 1.2) * (talking ? 0.03 : 0.02);
+        const forearmSway = Math.sin(autoDrive.idlePhase * 1.6 + 1.2) * (talking ? 0.05 : 0.03);
+        const bodyYaw = Math.sin(autoDrive.swayPhase * 0.6) * (talking ? 0.06 : 0.04);
+        const gestureLeft = { upperX: 0, upperY: 0, upperZ: 0, lowerZ: 0, handZ: 0 };
+        const gestureRight = { upperX: 0, upperY: 0, upperZ: 0, lowerZ: 0, handZ: 0 };
+        if (talking && !autoDrive.gesture && now > autoDrive.nextGesture) {
+          autoDrive.gesture = {
+            side: Math.random() < 0.5 ? 'left' : 'right',
+            type: Math.random() < 0.65 ? 'lift' : 'open',
+            start: now,
+            duration: rand(0.6, 1.1),
+          };
+          autoDrive.nextGesture = now + rand(2.2, 3.8);
+        }
+        if (autoDrive.gesture) {
+          const t = (now - autoDrive.gesture.start) / autoDrive.gesture.duration;
+          if (t >= 1) {
+            autoDrive.gesture = null;
+          } else {
+            const g = Math.sin(Math.PI * t);
+            const sign = autoDrive.gesture.side === 'left' ? -1 : 1;
+            const lift = g * (talking ? 0.45 : 0.3);
+            const open = g * (talking ? 0.18 : 0.12);
+            const curl = g * (talking ? 0.28 : 0.2);
+            if (autoDrive.gesture.side === 'left') {
+              gestureLeft.upperX = -0.35 * lift;
+              gestureLeft.upperY = sign * open * 0.2;
+              gestureLeft.upperZ = sign * open;
+              gestureLeft.lowerZ = sign * curl;
+              gestureLeft.handZ = sign * curl * 0.5;
+            } else {
+              gestureRight.upperX = -0.35 * lift;
+              gestureRight.upperY = sign * open * 0.2;
+              gestureRight.upperZ = sign * open;
+              gestureRight.lowerZ = sign * curl;
+              gestureRight.handZ = sign * curl * 0.5;
+            }
+          }
+        }
+        applyRestRotation('hips', { x: breath * 0.25 + sway * 0.12, y: bodyYaw * 0.3, z: sway * 0.08 });
+        applyRestRotation('spine', { x: breath + sway * 0.18, y: bodyYaw * 0.4, z: sway * 0.1 });
+        applyRestRotation('chest', { x: breath * 0.7 + sway * 0.12, y: bodyYaw * 0.45, z: sway * 0.08 });
+        applyRestRotation('upperChest', { x: breath * 0.5 + sway * 0.08, y: bodyYaw * 0.5, z: sway * 0.06 });
+
+        const headYaw = idlePose.head.y + bodyYaw * 0.4;
+        applyRestRotation('head', {
+          x: POSE_BASE.headX + idlePose.head.x + talkNod,
+          y: headYaw,
+          z: idlePose.head.z,
+        });
+        applyRestRotation('neck', {
+          x: (POSE_BASE.headX + idlePose.head.x + talkNod) * 0.4,
+          y: headYaw * 0.4,
+          z: idlePose.head.z * 0.4,
+        });
+        applyRestRotation('leftUpperArm', {
+          x: idlePose.leftArm.x + armSway + gestureLeft.upperX,
+          y: gestureLeft.upperY,
+          z: -POSE_BASE.armZ + idlePose.leftArm.z + gestureLeft.upperZ,
+        });
+        applyRestRotation('rightUpperArm', {
+          x: idlePose.rightArm.x - armSway + gestureRight.upperX,
+          y: gestureRight.upperY,
+          z: POSE_BASE.armZ + idlePose.rightArm.z + gestureRight.upperZ,
+        });
+        applyRestRotation('leftLowerArm', {
+          x: 0,
+          y: 0,
+          z: -forearmSway + gestureLeft.lowerZ,
+        });
+        applyRestRotation('rightLowerArm', {
+          x: 0,
+          y: 0,
+          z: forearmSway + gestureRight.lowerZ,
+        });
+        applyRestRotation('leftHand', {
+          x: 0,
+          y: 0,
+          z: -forearmSway * 0.4 + gestureLeft.handZ,
+        });
+        applyRestRotation('rightHand', {
+          x: 0,
+          y: 0,
+          z: forearmSway * 0.4 + gestureRight.handZ,
+        });
+        stabilizePose();
+      }
+
+      function runAutoDrive(delta, time) {
+        if (window.__controlMode === 'advanced' || !window.__autoDrive) return;
+        if (!currentVrm) return;
+        const now = time;
+        const rnd = (min, max) => min + Math.random() * (max - min);
+
+        const stabilityMode = window.__stabilityMode === true;
+
+        // Blink + eye saccades + emotion blending (airi)
+        blinkController?.update(currentVrm, delta);
+        emoteController?.update(delta);
+        if (stabilityMode) {
+          applyStableIdle(delta);
+          return;
+        }
+        if (!stabilityMode) {
+          updateLookAtAnchor();
+          eyeSaccadeController?.update(currentVrm, lookAtBase, delta);
+        }
+
+        // Breath + body sway
+        autoDrive.breathPhase += delta * 1.2;
+        autoDrive.idlePhase += delta * 0.7;
+        autoDrive.swayPhase += delta * 0.45;
+        const breath = Math.sin(autoDrive.breathPhase) * 0.025;
+        const sway = Math.sin(autoDrive.swayPhase) * 0.02;
+        const sway2 = Math.sin(autoDrive.swayPhase * 0.7 + 1.1) * 0.015;
+        const headPitch = Math.sin(autoDrive.idlePhase * 0.9) * 0.05;
+        const headYaw = Math.sin(autoDrive.idlePhase * 0.6 + 0.4) * 0.06;
+        const headRoll = Math.sin(autoDrive.idlePhase * 0.4) * 0.02;
+
+        applyRestRotation('hips', { x: sway * 0.15, y: sway2 * 0.2, z: sway * 0.1 });
+        applyRestRotation('spine', { x: breath + sway * 0.2, y: sway2 * 0.1, z: sway * 0.08 });
+        applyRestRotation('chest', { x: breath * 0.6 + sway * 0.2, y: sway2 * 0.15, z: sway * 0.1 });
+        applyRestRotation('upperChest', { x: breath * 0.4 + sway * 0.15, y: sway2 * 0.1, z: sway * 0.08 });
+        applyRestRotation('neck', { x: headPitch * 0.35, y: headYaw * 0.35, z: headRoll * 0.35 });
+        applyRestRotation('head', { x: headPitch, y: headYaw, z: headRoll });
+        if (!stabilityMode) {
+          applyRestRotation('leftUpperArm', { x: 0, y: 0, z: -POSE_BASE.armZ });
+          applyRestRotation('leftLowerArm', { x: 0, y: 0, z: 0 });
+          applyRestRotation('leftHand', { x: 0, y: 0, z: 0 });
+          applyRestRotation('rightUpperArm', { x: 0, y: 0, z: POSE_BASE.armZ });
+          applyRestRotation('rightLowerArm', { x: 0, y: 0, z: 0 });
+          applyRestRotation('rightHand', { x: 0, y: 0, z: 0 });
+          applyRestRotation('leftUpperLeg', { x: 0, y: 0, z: 0 });
+          applyRestRotation('leftLowerLeg', { x: 0, y: 0, z: 0 });
+          applyRestRotation('leftFoot', { x: 0, y: 0, z: 0 });
+          applyRestRotation('rightUpperLeg', { x: 0, y: 0, z: 0 });
+          applyRestRotation('rightLowerLeg', { x: 0, y: 0, z: 0 });
+          applyRestRotation('rightFoot', { x: 0, y: 0, z: 0 });
+        }
+
+        if (!stabilityMode) {
+          // Micro gesture: small wrist/forearm sway
+          if (now > autoDrive.nextMicroGesture) {
+            autoDrive.micro = {
+              side: Math.random() < 0.5 ? 'left' : 'right',
+              upperZ: rnd(0.05, 0.15),
+              lowerZ: rnd(0.2, 0.4),
+              handZ: rnd(-0.08, 0.08),
+              duration: rnd(1.4, 2.8),
+              start: now,
+            };
+            autoDrive.nextMicroGesture = now + rnd(4.0, 8.0);
+          }
+          if (autoDrive.micro && now < autoDrive.micro.start + autoDrive.micro.duration) {
+            const s = Math.sin((now - autoDrive.micro.start) * 2.6);
+            const side = autoDrive.micro.side === 'left' ? 'left' : 'right';
+            const sign = side === 'left' ? -1 : 1;
+            const baseZ = side === 'left' ? -POSE_BASE.armZ : POSE_BASE.armZ;
+            const upperZ = baseZ + sign * (autoDrive.micro.upperZ + s * 0.04);
+            const lowerZ = sign * (autoDrive.micro.lowerZ + s * 0.06);
+            const handZ = sign * (autoDrive.micro.handZ + s * 0.08);
+            applyRestRotation(`${side}UpperArm`, { z: upperZ });
+            applyRestRotation(`${side}LowerArm`, { z: lowerZ });
+            applyRestRotation(`${side}Hand`, { z: handZ });
+          }
+        }
+
+        if (!stabilityMode) {
+          stabilizePose();
+        }
+
+        // Idle emotion shuffle
+        if (now > autoDrive.nextIdleExpression && emoteController) {
+          const exprs = ['happy', 'relaxed', 'neutral', 'surprised'];
+          const pick = exprs[Math.floor(Math.random() * exprs.length)];
+          emoteController.setEmotionWithResetAfter(pick, 1600, 0.45);
+          autoDrive.nextIdleExpression = now + rnd(8.0, 14.0);
+        }
+      }
 
       function resize() {
         const w = canvas.clientWidth;
@@ -222,12 +1486,36 @@
         requestAnimationFrame(animate);
         const delta = clock.getDelta();
         if (currentVrm) {
-          currentVrm.update(delta);
+          const stabilityMode = window.__stabilityMode === true;
+          if (stabilityMode && currentVrm.humanoid?.resetNormalizedPose) {
+            currentVrm.humanoid.resetNormalizedPose();
+          }
+          if (vrmMixer && window.__idleAnimationEnabled) {
+            vrmMixer.update(delta);
+          }
+          runAutoDrive(delta, clock.getElapsedTime());
+          if (!stabilityMode || motionMode) {
+            applyMotion(clock.getElapsedTime());
+          }
+          if (typeof currentVrm.update === 'function') {
+            if (!stabilityMode) {
+              currentVrm.update(delta);
+            } else {
+              currentVrm.humanoid?.update?.();
+            }
+          } else {
+            currentVrm.humanoid?.update?.();
+            if (!stabilityMode) {
+              currentVrm.lookAt?.update?.(delta);
+              currentVrm.springBoneManager?.update?.(delta);
+            }
+          }
         }
         renderer.render(scene, camera);
       }
       animate();
       setStatus('Viewer ready. Load a VRM to display.');
+      post('info', 'viewer:ready');
     }
 
     try {
@@ -240,6 +1528,7 @@
     } catch (e) {
       console.error('bootstrap failed', e);
       setStatus(`Bootstrap failed: ${e}`);
+      post('error', `Bootstrap failed: ${e}`);
     }
   </script>
 </body>

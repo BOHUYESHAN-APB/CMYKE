@@ -103,9 +103,17 @@ class _ModeTab extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 12),
+        _PersonaCard(
+          settingsRepository: settingsRepository,
+          settings: settings,
+        ),
+        const SizedBox(height: 12),
         const _VrmCard(),
         const SizedBox(height: 12),
-        const _Live3DTestCard(),
+        _Live3DTestCard(
+          settingsRepository: settingsRepository,
+          settings: settings,
+        ),
         const SizedBox(height: 24),
         if (settings.route == ModelRoute.standard) ...[
           _SectionHeader(
@@ -151,6 +159,29 @@ class _ModeTab extends StatelessWidget {
             onChanged: (id) {
               settingsRepository.updateSettings(
                 settings.copyWith(sttProviderId: id),
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('启用系统语音输出（保底）'),
+            subtitle: const Text('当第三方语音不可用时使用系统 TTS'),
+            value: settings.enableSystemTts,
+            onChanged: (value) {
+              settingsRepository.updateSettings(
+                settings.copyWith(enableSystemTts: value),
+              );
+            },
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('启用系统语音输入（保底）'),
+            subtitle: const Text('当第三方语音不可用时使用系统 STT'),
+            value: settings.enableSystemStt,
+            onChanged: (value) {
+              settingsRepository.updateSettings(
+                settings.copyWith(enableSystemStt: value),
               );
             },
           ),
@@ -530,6 +561,172 @@ class _HintCard extends StatelessWidget {
   }
 }
 
+class _PersonaCard extends StatefulWidget {
+  const _PersonaCard({
+    required this.settingsRepository,
+    required this.settings,
+  });
+
+  final SettingsRepository settingsRepository;
+  final AppSettings settings;
+
+  @override
+  State<_PersonaCard> createState() => _PersonaCardState();
+}
+
+class _PersonaCardState extends State<_PersonaCard> {
+  final TextEditingController _promptController = TextEditingController();
+  String? _lastSavedPrompt;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncSavedPrompt(force: true);
+  }
+
+  @override
+  void didUpdateWidget(covariant _PersonaCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncSavedPrompt();
+  }
+
+  @override
+  void dispose() {
+    _promptController.dispose();
+    super.dispose();
+  }
+
+  void _syncSavedPrompt({bool force = false}) {
+    final saved = widget.settings.personaPrompt;
+    final normalized = (saved == null || saved.trim().isEmpty) ? null : saved;
+    if (!force && normalized == _lastSavedPrompt) {
+      return;
+    }
+    final current = _promptController.text;
+    if (force || current.isEmpty || current == (_lastSavedPrompt ?? '')) {
+      _promptController.text = normalized ?? '';
+    }
+    _lastSavedPrompt = normalized;
+  }
+
+  void _updatePrompt(String value) {
+    final next = value.trim().isEmpty ? null : value;
+    widget.settingsRepository.updateSettings(
+      widget.settings.copyWith(personaPrompt: next),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '人设设置',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '人设内容会注入系统提示词，影响普通 LLM 与实时对话模式。',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: const Color(0xFF5E636F),
+                    fontWeight: FontWeight.w600,
+                  ),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<PersonaMode>(
+              value: widget.settings.personaMode,
+              decoration: const InputDecoration(labelText: '人设模式'),
+              items: PersonaMode.values
+                  .map(
+                    (mode) => DropdownMenuItem(
+                      value: mode,
+                      child: Text(_personaModeLabel(mode)),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (mode) {
+                if (mode == null) {
+                  return;
+                }
+                widget.settingsRepository.updateSettings(
+                  widget.settings.copyWith(personaMode: mode),
+                );
+              },
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: DropdownButtonFormField<PersonaLevel>(
+                    value: widget.settings.personaLevel,
+                    decoration: const InputDecoration(labelText: '人设强度'),
+                    items: PersonaLevel.values
+                        .map(
+                          (level) => DropdownMenuItem(
+                            value: level,
+                            child: Text(_personaLevelLabel(level)),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (level) {
+                      if (level == null) {
+                        return;
+                      }
+                      widget.settingsRepository.updateSettings(
+                        widget.settings.copyWith(personaLevel: level),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: DropdownButtonFormField<PersonaStyle>(
+                    value: widget.settings.personaStyle,
+                    decoration: const InputDecoration(labelText: '风格附加'),
+                    items: PersonaStyle.values
+                        .map(
+                          (style) => DropdownMenuItem(
+                            value: style,
+                            child: Text(_personaStyleLabel(style)),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (style) {
+                      if (style == null) {
+                        return;
+                      }
+                      widget.settingsRepository.updateSettings(
+                        widget.settings.copyWith(personaStyle: style),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _promptController,
+              minLines: 3,
+              maxLines: 6,
+              decoration: const InputDecoration(
+                labelText: '自定义人设补充（可选）',
+                hintText: '补充称呼、禁忌、对话习惯等内容',
+              ),
+              onChanged: _updatePrompt,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _VrmCard extends StatelessWidget {
   const _VrmCard();
 
@@ -584,7 +781,13 @@ class _VrmCard extends StatelessWidget {
 }
 
 class _Live3DTestCard extends StatefulWidget {
-  const _Live3DTestCard();
+  const _Live3DTestCard({
+    required this.settingsRepository,
+    required this.settings,
+  });
+
+  final SettingsRepository settingsRepository;
+  final AppSettings settings;
 
   @override
   State<_Live3DTestCard> createState() => _Live3DTestCardState();
@@ -593,11 +796,38 @@ class _Live3DTestCard extends StatefulWidget {
 class _Live3DTestCardState extends State<_Live3DTestCard> {
   final _pathController = TextEditingController();
   String? _status;
+  String _controlMode = 'basic';
+  String? _lastSavedPath;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncSavedPath(force: true);
+  }
+
+  @override
+  void didUpdateWidget(covariant _Live3DTestCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncSavedPath();
+  }
 
   @override
   void dispose() {
     _pathController.dispose();
     super.dispose();
+  }
+
+  void _syncSavedPath({bool force = false}) {
+    final saved = widget.settings.live3dModelPath?.trim();
+    final normalized = (saved == null || saved.isEmpty) ? null : saved;
+    if (!force && normalized == _lastSavedPath) {
+      return;
+    }
+    final current = _pathController.text.trim();
+    if (force || current.isEmpty || current == (_lastSavedPath ?? '')) {
+      _pathController.text = normalized ?? '';
+    }
+    _lastSavedPath = normalized;
   }
 
   Future<void> _loadModel() async {
@@ -606,6 +836,9 @@ class _Live3DTestCardState extends State<_Live3DTestCard> {
       setState(() => _status = '请先填写 VRM 文件路径');
       return;
     }
+    await widget.settingsRepository.updateSettings(
+      widget.settings.copyWith(live3dModelPath: path),
+    );
     await RuntimeHub.instance.live3dBridge.loadModel(path);
     setState(() => _status = '已请求加载：$path');
   }
@@ -620,6 +853,14 @@ class _Live3DTestCardState extends State<_Live3DTestCard> {
     await RuntimeHub.instance.controlAgent
         .emitStageAction(StageAction(motion: motion, intensity: 0.8));
     setState(() => _status = '已发送动作：${motion.name}');
+  }
+
+  void _setControlMode(String mode) {
+    _controlMode = 'basic';
+    RuntimeHub.instance.live3dBridge.setControlMode('basic');
+    setState(() {
+      _status = '已切换模式：基础';
+    });
   }
 
   @override
@@ -646,18 +887,29 @@ class _Live3DTestCardState extends State<_Live3DTestCard> {
                         fontWeight: FontWeight.w600,
                       ),
                 ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        const SizedBox(
-          height: 200,
-          child: Live3DPreview(),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _pathController,
-          decoration: const InputDecoration(
-            labelText: 'VRM 文件路径',
+              ],
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              children: [
+                ChoiceChip(
+                  label: const Text('基础模式'),
+                  selected: _controlMode == 'basic',
+                  onSelected: (_) => _setControlMode('basic'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            const SizedBox(
+              height: 200,
+              child: Live3DPreview(),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _pathController,
+              decoration: const InputDecoration(
+                labelText: 'VRM 文件路径',
                 hintText: '例如 C:\\\\models\\\\avatar.vrm',
               ),
             ),
@@ -835,6 +1087,9 @@ Future<void> _openProviderDialog(
   final maxTokensController = TextEditingController(
     text: provider?.maxTokens?.toString() ?? '',
   );
+  final contextWindowTokensController = TextEditingController(
+    text: provider?.contextWindowTokens?.toString() ?? '',
+  );
   final presencePenaltyController = TextEditingController(
     text: provider?.presencePenalty?.toString() ?? '',
   );
@@ -844,6 +1099,11 @@ Future<void> _openProviderDialog(
   final seedController = TextEditingController(
     text: provider?.seed?.toString() ?? '',
   );
+  bool enableEmbedding = provider?.embeddingModel?.isNotEmpty ?? false;
+  final embeddingBaseUrlController =
+      TextEditingController(text: provider?.embeddingBaseUrl ?? '');
+  final embeddingApiKeyController =
+      TextEditingController(text: provider?.embeddingApiKey ?? '');
   final wsUrlController =
       TextEditingController(text: provider?.wsUrl ?? '');
   final showAudioSettings = kind == ProviderKind.omni ||
@@ -893,13 +1153,42 @@ Future<void> _openProviderDialog(
                   ),
                   if (kind == ProviderKind.llm) ...[
                     const SizedBox(height: 12),
-                    TextField(
-                      controller: embeddingModelController,
-                      decoration: const InputDecoration(
-                        labelText: 'Embedding Model (向量检索)',
-                        hintText: '例如 text-embedding-3-small',
-                      ),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('启用向量检索'),
+                      subtitle: const Text('如需不同 Base URL，可在下方单独填写'),
+                      value: enableEmbedding,
+                      onChanged: (v) {
+                        setState(() => enableEmbedding = v);
+                      },
                     ),
+                    if (enableEmbedding) ...[
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: embeddingBaseUrlController,
+                        decoration: const InputDecoration(
+                          labelText: 'Embedding Base URL (可选)',
+                          hintText: '可与对话 Base URL 不同',
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: embeddingApiKeyController,
+                        decoration: const InputDecoration(
+                          labelText: 'Embedding API Key (可选)',
+                          hintText: '若与对话 API Key 不同，可单独填写',
+                        ),
+                        obscureText: true,
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: embeddingModelController,
+                        decoration: const InputDecoration(
+                          labelText: 'Embedding Model (向量检索)',
+                          hintText: '例如 text-embedding-3-small',
+                        ),
+                      ),
+                    ],
                   ],
                   const SizedBox(height: 12),
                   DropdownButtonFormField<ProviderProtocol>(
@@ -1120,6 +1409,15 @@ Future<void> _openProviderDialog(
                       ],
                     ),
                     const SizedBox(height: 12),
+                    TextField(
+                      controller: contextWindowTokensController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: '上下文上限 (Tokens)',
+                        hintText: '不填则不启用自动压缩',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
                     Row(
                       children: [
                         Expanded(
@@ -1298,10 +1596,18 @@ Future<void> _openProviderDialog(
                     kind: kind,
                     baseUrl: baseUrlController.text.trim(),
                     model: modelController.text.trim(),
-                    embeddingModel:
-                        embeddingModelController.text.trim().isEmpty
-                            ? null
-                            : embeddingModelController.text.trim(),
+                    embeddingModel: !enableEmbedding ||
+                            embeddingModelController.text.trim().isEmpty
+                        ? null
+                        : embeddingModelController.text.trim(),
+                    embeddingBaseUrl: !enableEmbedding ||
+                            embeddingBaseUrlController.text.trim().isEmpty
+                        ? null
+                        : embeddingBaseUrlController.text.trim(),
+                    embeddingApiKey: !enableEmbedding ||
+                            embeddingApiKeyController.text.trim().isEmpty
+                        ? null
+                        : embeddingApiKeyController.text.trim(),
                     protocol: protocol,
                     apiKey: apiKeyController.text.trim(),
                     capabilities: selectedCapabilities.toList(),
@@ -1326,6 +1632,8 @@ Future<void> _openProviderDialog(
                     temperature: _parseDouble(temperatureController.text),
                     topP: _parseDouble(topPController.text),
                     maxTokens: _parseInt(maxTokensController.text),
+                    contextWindowTokens:
+                        _parseInt(contextWindowTokensController.text),
                     presencePenalty:
                         _parseDouble(presencePenaltyController.text),
                     frequencyPenalty:
@@ -1366,6 +1674,7 @@ Future<void> _openProviderDialog(
   temperatureController.dispose();
   topPController.dispose();
   maxTokensController.dispose();
+  contextWindowTokensController.dispose();
   presencePenaltyController.dispose();
   frequencyPenaltyController.dispose();
   seedController.dispose();
@@ -1401,6 +1710,39 @@ String _capabilityLabel(ProviderCapability capability) {
       return '可打断';
     case ProviderCapability.tools:
       return '工具';
+  }
+}
+
+String _personaModeLabel(PersonaMode mode) {
+  switch (mode) {
+    case PersonaMode.persona:
+      return '拟人模式';
+    case PersonaMode.standard:
+      return '标准模式';
+  }
+}
+
+String _personaLevelLabel(PersonaLevel level) {
+  switch (level) {
+    case PersonaLevel.basic:
+      return '基础';
+    case PersonaLevel.advanced:
+      return '增强';
+    case PersonaLevel.full:
+      return '完整';
+  }
+}
+
+String _personaStyleLabel(PersonaStyle style) {
+  switch (style) {
+    case PersonaStyle.none:
+      return '无';
+    case PersonaStyle.neuro:
+      return 'Neuro';
+    case PersonaStyle.toxic:
+      return '毒舌';
+    case PersonaStyle.cute:
+      return '软萌';
   }
 }
 

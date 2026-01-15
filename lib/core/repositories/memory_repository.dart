@@ -35,11 +35,131 @@ class MemoryRepository extends ChangeNotifier {
   static const String _storageFile = 'memory_records.json';
   static const String _collectionsTable = 'memory_collections';
   static const String _recordsTable = 'memory_records';
+  static const String _sessionSummaryTag = 'session_summary';
 
   List<MemoryCollection> get collections => List.unmodifiable(_collections);
 
-  int countByTier(MemoryTier tier) => collectionsByTier(tier)
-      .fold<int>(0, (sum, collection) => sum + collection.records.length);
+  int countByTier(
+    MemoryTier tier, {
+    String? sessionId,
+    String? scope,
+  }) {
+    return recordsForTier(
+      tier,
+      sessionId: sessionId,
+      scope: scope,
+    ).length;
+  }
+
+  List<MemoryRecord> recordsForTier(
+    MemoryTier tier, {
+    String? sessionId,
+    String? scope,
+  }) {
+    final normalizedScope =
+        _normalizeScope(scope) ?? _defaultScopeForTier(tier);
+    if (tier == MemoryTier.external) {
+      final results = <MemoryRecord>[];
+      for (final collection in collectionsByTier(MemoryTier.external)) {
+        results.addAll(
+          _filterRecords(
+            collection.records,
+            tier: tier,
+            sessionId: sessionId,
+            scope: normalizedScope,
+          ),
+        );
+      }
+      return results;
+    }
+    final collection = defaultCollection(tier);
+    return _filterRecords(
+      collection.records,
+      tier: tier,
+      sessionId: sessionId,
+      scope: normalizedScope,
+    );
+  }
+
+  MemoryRecord? latestSessionSummary(String sessionId) {
+    final trimmed = sessionId.trim();
+    if (trimmed.isEmpty) {
+      return null;
+    }
+    final collection = defaultCollection(MemoryTier.context);
+    for (final record in collection.records) {
+      if (record.sessionId == trimmed &&
+          record.tags.contains(_sessionSummaryTag)) {
+        return record;
+      }
+    }
+    return null;
+  }
+
+  Future<void> replaceSessionSummary(
+    String sessionId,
+    MemoryRecord record,
+  ) async {
+    final trimmed = sessionId.trim();
+    if (trimmed.isEmpty) {
+      return;
+    }
+    final collection = defaultCollection(MemoryTier.context);
+    final normalizedTags = record.tags.contains(_sessionSummaryTag)
+        ? record.tags
+        : [...record.tags, _sessionSummaryTag];
+    final normalizedRecord = _normalizeRecord(
+      record.copyWith(tags: normalizedTags),
+      tier: MemoryTier.context,
+      sessionId: trimmed,
+      scope: record.scope,
+    );
+    final toRemove = collection.records
+        .where(
+          (item) =>
+              item.sessionId == trimmed &&
+              item.tags.contains(_sessionSummaryTag),
+        )
+        .toList();
+    for (final item in toRemove) {
+      _recordEmbeddings.remove(item.id);
+    }
+    collection.records.removeWhere(
+      (item) =>
+          item.sessionId == trimmed &&
+          item.tags.contains(_sessionSummaryTag),
+    );
+
+    final embedding = await _embedText(normalizedRecord.content);
+    collection.records.insert(0, normalizedRecord);
+    if (embedding != null) {
+      _recordEmbeddings[normalizedRecord.id] = embedding;
+    } else {
+      _recordEmbeddings.remove(normalizedRecord.id);
+    }
+    notifyListeners();
+
+    final db = await _database.database;
+    final batch = db.batch();
+    for (final item in toRemove) {
+      batch.delete(
+        _recordsTable,
+        where: 'id = ?',
+        whereArgs: [item.id],
+      );
+    }
+    batch.insert(
+      _recordsTable,
+      _recordToRow(
+        normalizedRecord,
+        collection.id,
+        embedding: embedding,
+        embeddingModel: embedding == null ? null : _embeddingModel(),
+      ),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    await batch.commit(noResult: true);
+  }
 
   List<MemoryCollection> collectionsByTier(MemoryTier tier) => _collections
       .where((collection) => collection.tier == tier)
@@ -71,7 +191,7 @@ class MemoryRepository extends ChangeNotifier {
     _recordEmbeddings.clear();
     final recordsByCollection = <String, List<MemoryRecord>>{};
     for (final row in recordRows) {
-      final record = _recordFromRow(row);
+      final record = _normalizeLoadedRecord(_recordFromRow(row));
       final collectionId = row['collection_id'] as String;
       recordsByCollection.putIfAbsent(collectionId, () => []).add(record);
       final embedding = _decodeEmbedding(row['embedding'] as String?);
@@ -106,21 +226,29 @@ class MemoryRepository extends ChangeNotifier {
     required MemoryTier tier,
     required MemoryRecord record,
     String? collectionId,
+    String? sessionId,
+    String? scope,
   }) async {
     final db = await _database.database;
     final collection = collectionId == null
         ? defaultCollection(tier)
         : _collections.firstWhere((item) => item.id == collectionId);
-    final embedding = await _embedText(record.content);
-    collection.records.insert(0, record);
+    final normalizedRecord = _normalizeRecord(
+      record,
+      tier: tier,
+      sessionId: sessionId,
+      scope: scope,
+    );
+    final embedding = await _embedText(normalizedRecord.content);
+    collection.records.insert(0, normalizedRecord);
     if (embedding != null) {
-      _recordEmbeddings[record.id] = embedding;
+      _recordEmbeddings[normalizedRecord.id] = embedding;
     }
     notifyListeners();
     await db.insert(
       _recordsTable,
       _recordToRow(
-        record,
+        normalizedRecord,
         collection.id,
         embedding: embedding,
         embeddingModel: embedding == null ? null : _embeddingModel(),
@@ -132,6 +260,8 @@ class MemoryRepository extends ChangeNotifier {
   Future<void> updateRecord({
     required String collectionId,
     required MemoryRecord record,
+    String? sessionId,
+    String? scope,
   }) async {
     final db = await _database.database;
     final collection =
@@ -141,22 +271,28 @@ class MemoryRepository extends ChangeNotifier {
       return;
     }
     final previous = collection.records[index];
-    collection.records[index] = record;
+    final normalizedRecord = _normalizeRecord(
+      record,
+      tier: record.tier,
+      sessionId: sessionId,
+      scope: scope,
+    );
+    collection.records[index] = normalizedRecord;
     List<double>? embedding;
-    if (previous.content != record.content) {
-      embedding = await _embedText(record.content);
+    if (previous.content != normalizedRecord.content) {
+      embedding = await _embedText(normalizedRecord.content);
       if (embedding != null) {
-        _recordEmbeddings[record.id] = embedding;
+        _recordEmbeddings[normalizedRecord.id] = embedding;
       } else {
-        _recordEmbeddings.remove(record.id);
+        _recordEmbeddings.remove(normalizedRecord.id);
       }
     }
     notifyListeners();
-    final storedEmbedding = embedding ?? _recordEmbeddings[record.id];
+    final storedEmbedding = embedding ?? _recordEmbeddings[normalizedRecord.id];
     await db.update(
       _recordsTable,
       _recordToRow(
-        record,
+        normalizedRecord,
         collectionId,
         embedding: storedEmbedding,
         embeddingModel: storedEmbedding == null ? null : _embeddingModel(),
@@ -233,6 +369,32 @@ class MemoryRepository extends ChangeNotifier {
       _collectionsTable,
       where: 'id = ?',
       whereArgs: [collectionId],
+    );
+  }
+
+  Future<void> removeContextForSession(String sessionId) async {
+    final trimmed = sessionId.trim();
+    if (trimmed.isEmpty) {
+      return;
+    }
+    final collection = defaultCollection(MemoryTier.context);
+    final toRemove =
+        collection.records.where((record) => record.sessionId == trimmed);
+    if (toRemove.isEmpty) {
+      return;
+    }
+    for (final record in toRemove) {
+      _recordEmbeddings.remove(record.id);
+    }
+    collection.records.removeWhere(
+      (record) => record.sessionId == trimmed,
+    );
+    notifyListeners();
+    final db = await _database.database;
+    await db.delete(
+      _recordsTable,
+      where: 'tier = ? AND session_id = ?',
+      whereArgs: [MemoryTier.context.key, trimmed],
     );
   }
 
@@ -477,17 +639,101 @@ class MemoryRepository extends ChangeNotifier {
     return model.isEmpty ? null : model;
   }
 
+  MemoryRecord _normalizeLoadedRecord(MemoryRecord record) {
+    final normalizedScope = _normalizeScope(record.scope);
+    final scope =
+        normalizedScope ?? _defaultScopeForTier(record.tier);
+    final sessionId = record.sessionId?.trim();
+    final normalizedSessionId =
+        record.tier == MemoryTier.context ? sessionId : null;
+    if (scope == record.scope && normalizedSessionId == record.sessionId) {
+      return record;
+    }
+    return record.copyWith(
+      scope: scope,
+      sessionId: normalizedSessionId,
+    );
+  }
+
+  MemoryRecord _normalizeRecord(
+    MemoryRecord record, {
+    required MemoryTier tier,
+    String? sessionId,
+    String? scope,
+  }) {
+    final normalizedScope = _normalizeScope(scope) ??
+        _normalizeScope(record.scope) ??
+        _defaultScopeForTier(tier);
+    String? normalizedSessionId = record.sessionId?.trim();
+    if (tier == MemoryTier.context) {
+      final candidate = sessionId?.trim();
+      if (candidate != null && candidate.isNotEmpty) {
+        normalizedSessionId = candidate;
+      }
+    } else {
+      normalizedSessionId = null;
+    }
+    return record.copyWith(
+      tier: tier,
+      scope: normalizedScope,
+      sessionId: normalizedSessionId,
+    );
+  }
+
+  String? _normalizeScope(String? scope) {
+    if (scope == null) {
+      return null;
+    }
+    final trimmed = scope.trim();
+    return trimmed.isEmpty ? null : trimmed;
+  }
+
+  String _defaultScopeForTier(MemoryTier tier) {
+    switch (tier) {
+      case MemoryTier.external:
+        return 'knowledge.docs';
+      case MemoryTier.context:
+      case MemoryTier.crossSession:
+      case MemoryTier.autonomous:
+      default:
+        return 'brain.user';
+    }
+  }
+
+  List<MemoryRecord> _filterRecords(
+    List<MemoryRecord> records, {
+    required MemoryTier tier,
+    String? sessionId,
+    String? scope,
+  }) {
+    Iterable<MemoryRecord> filtered = records;
+    if (tier == MemoryTier.context) {
+      final normalizedSessionId = sessionId?.trim();
+      if (normalizedSessionId != null && normalizedSessionId.isNotEmpty) {
+        filtered = filtered.where(
+          (record) => record.sessionId == normalizedSessionId,
+        );
+      }
+    } else {
+      filtered = filtered.where((record) => record.sessionId == null);
+    }
+    if (scope != null && scope.isNotEmpty) {
+      filtered = filtered.where((record) => record.scope == scope);
+    }
+    return filtered.toList();
+  }
+
   List<MemoryRecord> _candidateRecords() {
     final records = <MemoryRecord>[];
     records.addAll(
-      defaultCollection(MemoryTier.crossSession).records,
+      recordsForTier(MemoryTier.crossSession),
     );
     records.addAll(
-      defaultCollection(MemoryTier.autonomous).records,
+      recordsForTier(MemoryTier.autonomous),
     );
-    for (final collection in collectionsByTier(MemoryTier.external)) {
-      records.addAll(collection.records);
-    }
+    records.addAll(
+      recordsForTier(MemoryTier.external),
+    );
     return records;
   }
 
@@ -533,6 +779,8 @@ class MemoryRepository extends ChangeNotifier {
       sourceMessageId: row['source_message_id'] as String?,
       title: row['title'] as String?,
       tags: tags,
+      sessionId: row['session_id'] as String?,
+      scope: row['scope'] as String?,
     );
   }
 
@@ -553,6 +801,8 @@ class MemoryRepository extends ChangeNotifier {
       'tags': _encodeTags(record.tags),
       'embedding': embedding == null ? null : _encodeEmbedding(embedding),
       'embedding_model': embeddingModel,
+      'session_id': record.sessionId,
+      'scope': record.scope,
     };
   }
 

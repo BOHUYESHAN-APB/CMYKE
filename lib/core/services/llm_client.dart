@@ -320,6 +320,19 @@ class LlmClient {
     return headers;
   }
 
+  Map<String, String> _embeddingHeaders(ProviderConfig provider) {
+    final headers = <String, String>{
+      HttpHeaders.contentTypeHeader: 'application/json',
+    };
+    final apiKey = provider.embeddingApiKey?.trim().isNotEmpty == true
+        ? provider.embeddingApiKey!.trim()
+        : provider.apiKey?.trim();
+    if (apiKey != null && apiKey.isNotEmpty) {
+      headers[HttpHeaders.authorizationHeader] = 'Bearer $apiKey';
+    }
+    return headers;
+  }
+
   Map<String, dynamic> _payload({
     required ProviderConfig provider,
     required List<ChatMessage> messages,
@@ -385,8 +398,11 @@ class LlmClient {
     required ProviderConfig provider,
     required List<String> inputs,
   }) async {
-    final uri = _buildEmbeddingUri(provider.baseUrl);
-    final headers = _headers(provider);
+    final base = provider.embeddingBaseUrl?.trim().isNotEmpty == true
+        ? provider.embeddingBaseUrl!.trim()
+        : provider.baseUrl;
+    final uri = _buildEmbeddingUri(base);
+    final headers = _embeddingHeaders(provider);
     final payload = {
       'model': _resolveEmbeddingModel(provider),
       'input': inputs.length == 1 ? inputs.first : inputs,
@@ -412,8 +428,11 @@ class LlmClient {
     required ProviderConfig provider,
     required List<String> inputs,
   }) async {
-    final uri = _buildOllamaEmbeddingUri(provider.baseUrl);
-    final headers = _headers(provider);
+    final base = provider.embeddingBaseUrl?.trim().isNotEmpty == true
+        ? provider.embeddingBaseUrl!.trim()
+        : provider.baseUrl;
+    final uri = _buildOllamaEmbeddingUri(base);
+    final headers = _embeddingHeaders(provider);
     final model = _resolveEmbeddingModel(provider);
     final embeddings = <List<double>>[];
     for (final input in inputs) {

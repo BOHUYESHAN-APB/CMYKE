@@ -36,6 +36,9 @@ realtime, multimodal agent runtime without breaking core UX.
 - Standard LLM
   - Primary agent for tool-heavy workflows and document generation.
   - Can directly trigger tool calls when in Standard mode.
+- Universal Agent (Standard-only)
+  - Planner + executor pipeline for deep research and multi-step workflows.
+  - Always uses base persona + standard LLM provider (no realtime dependency).
 - Realtime Voice Model
   - Low-latency speech dialog; avoids heavy tool calls.
   - Emits lightweight emotion hints (optional) for avatar expression.
@@ -61,12 +64,16 @@ Realtime mode:
 
 1) Context (in-session)
    - Short-term context window for the active chat.
+   - Persisted with `session_id`; deleting a session clears its context records.
 2) Cross-session memory
    - Frequently used persona facts that can be injected into system prompts.
 3) Autonomous memory
    - Self-saved insights from the model (text/image summaries).
 4) External knowledge base
    - User-imported professional data; only fetched on-demand.
+
+Memory records carry a lightweight `scope` tag to prevent domain mixing:
+`brain.user` for persona/context memory, `knowledge.docs` for external knowledge.
 
 Current storage uses SQLite for local persistence with optional vector
 backends (SQLite + FTS5, LanceDB, Qdrant, etc.) without UI changes.
@@ -100,6 +107,16 @@ agent to handle tool calls and advanced workflows.
 - Mapping: `<|EMOTE_*|>` → Emotion/Action Agent → ExpressionEvent → VRM BlendShapeClip (configurable表情映射); LipSyncFrame (AA/EE/IH/OH/OU) → Mouth blendshapes; StageAction → Humanoid 动作/Animator trigger。
 - Separation of concerns: Realtime/Omni 模型仅输出对话 + 轻量表情提示；Control/Planner 触发工具调用；Emotion/Action Agent 负责表情/动作；嘴型由音频驱动。
 - Licensing: 不内置第三方模型；用户加载自有/授权 VRM，保留原许可；SDK 依赖（three-vrm/UniVRM）遵循 MIT。
+
+### Live3D 深化迁移（Studying/airi-main）
+
+- 姿态驱动：移植 `pose-to-vrm` / `apply-pose-to-vrm` 思路（方向+pole、rest dir/pole、翻转抑制、平滑 slerp），JS 侧 `applyPose` 支持：
+  - bones 四元数直驱。
+  - targets（dir+pole）驱动。
+  - worldLandmarks（mediapipe-like）自动生成 targets。
+- 闲置动作：移植 `useBlink`、`useIdleEyeSaccades`、`useVRMEmote` 逻辑，让模型在基础模式下自然眨眼、注视漂移、表情过渡与呼吸微动。
+- 动画：引入 `@pixiv/three-vrm-animation`，加载 `idle_loop.vrma` 作为基础 idle 动画，并通过 AnimationMixer 播放。
+- LookAt：使用 `VRMLookAtQuaternionProxy` 作为 lookAt 动画支撑。
 
 ## MCP and Skills (Draft)
 
@@ -295,3 +312,43 @@ flowchart LR
 - Add file uploads and voice capture flows.
 - Add avatar stage with Live2D/Live3D switching + expression events.
 - Implement deep search + deep research workflows.
+
+## Live3D 高阶控制模式（规划）
+
+目标：在基础模式（本地 WebView 渲染 + 按钮动作/表情）之外，增加高阶模式，支持外部动捕/人形机器人/第三方引擎驱动 VRM，并能向其他软件（如 VRChat）输出控制。
+
+### 控制模式
+- 基础模式（当前默认）：
+  - 轻量动作/表情/闲置微动；按钮触发挥手/点头/表情。
+  - 在 WebView 内的 JS 使用本地逻辑（applyMotion/applyExpression）。
+- 高阶模式（规划）：
+  - WebView 暴露 pplyPose(pose) JS 接口，接收外部骨架/表情/口型驱动。
+  - Flutter 侧 Live3D 卡片提供模式切换：basic/advanced，并将模式下发给 WebView。
+
+### VRM 可控通道（需枚举并诊断）
+- 骨骼（Humanoid）：头/颈/脊/胸/髋/肩/肘/腕/手/腿/膝/踝；缺骨需 fallback。
+- 表情（ExpressionManager）：VRM 1.0 预设小写；自定义表情需枚举。
+- 口型（Viseme）：aa/ih/uu/ee/oh。
+- 动作片段（可选）：VRMA/BVH/MMD 转换片段作为兜底。
+
+### Pose → VRM 映射框架（参考 Studying/airi-main）
+- 参考：Studying/airi-main/packages/model-driver-mediapipe/src/three/pose-to-vrm.ts、pply-pose-to-vrm.ts。
+- 流程：
+  1) 载入 VRM 后打印骨骼/表情/viseme 列表（诊断日志）。
+  2) 坐标系对齐：统一右手坐标，记录休止姿态 quaternion 作为偏移基准。
+  3) 每帧 pplyPose(pose)：对骨骼 one.quaternion.slerp(target, alpha) 平滑；缺骨 fallback；对肘/膝限幅防穿模。
+  4) 表情/口型：用 pose 概率驱动 xpressionManager 和 viseme（VRM 1.0 小写预设）。
+  5) 动作片段作为兜底（wave/nod/point 等），当外部驱动缺失时触发。
+
+### 输入适配与输出扩展
+- 输入：Flutter 侧通过 Live3DBridge 将外部算法的 pose JSON 透传到 WebView pplyPose；统一格式（关节四元数，右手坐标，含表情/口型概率）。
+- 输出：预留接口将本地姿态/表情流输出到其他软件（如 VRChat），作为未来集成：
+  - VRChat OSC/Avatar 控制：将 pose/表情映射到 VRChat Avatar 参数（需独立模块）。
+  - 视觉接入：在高阶模式下可选接入视觉流，驱动视线/头部朝向。
+
+### 后续实施顺序
+1) WebView：加入控制模式开关、骨骼/表情诊断、pplyPose(pose) 框架（含平滑/限幅占位）。
+2) Flutter：Live3D 卡片增加 basic/advanced 切换，下发模式；Live3DBridge 增加 sendPose 透传。
+3) 映射表：根据诊断结果调整 rm_mapping.dart（表情/口型），并为缺骨做 fallback。
+4) 输出扩展（后续）：VRChat/其他软件的桥接模块，将 pose/表情转换为目标协议（如 OSC）。
+

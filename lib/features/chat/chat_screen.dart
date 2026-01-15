@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../../core/models/app_settings.dart';
 import '../../core/models/chat_message.dart';
+import '../../core/models/chat_session.dart';
 import '../../core/models/memory_record.dart';
 import '../../core/models/memory_tier.dart';
+import '../../core/models/research_job.dart';
 import '../../core/repositories/chat_repository.dart';
 import '../../core/repositories/memory_repository.dart';
 import '../../core/repositories/settings_repository.dart';
@@ -68,6 +71,23 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollToBottom();
   }
 
+  Future<void> _createSessionForRoute() async {
+    final route = widget.settingsRepository.settings.route;
+    final mode = _sessionModeForRoute(route);
+    await widget.chatRepository.createSession(mode: mode);
+  }
+
+  ChatSessionMode _sessionModeForRoute(ModelRoute route) {
+    switch (route) {
+      case ModelRoute.standard:
+        return ChatSessionMode.standard;
+      case ModelRoute.realtime:
+        return ChatSessionMode.realtime;
+      case ModelRoute.omni:
+        return ChatSessionMode.standard;
+    }
+  }
+
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) {
@@ -86,14 +106,24 @@ class _ChatScreenState extends State<ChatScreen> {
     if (session == null) {
       return;
     }
-    final path = await _exportService.exportSession(session);
-    _showSnack('会话日志已导出: $path');
+    final path = await _exportService.exportSession(
+      session,
+      memoryCollections: widget.memoryRepository.collections,
+    );
+    _showSnack('会话日志已导出: $path（同时生成 .md）');
   }
 
   Future<void> _exportAllSessions() async {
-    final path =
-        await _exportService.exportAll(widget.chatRepository.sessions);
-    _showSnack('全部会话已导出: $path');
+    final path = await _exportService.exportAll(
+      widget.chatRepository.sessions,
+      memoryCollections: widget.memoryRepository.collections,
+    );
+    _showSnack('全部会话已导出: $path（同时生成 .md）');
+  }
+
+  Future<void> _removeSession(String sessionId) async {
+    await widget.memoryRepository.removeContextForSession(sessionId);
+    await widget.chatRepository.removeSession(sessionId);
   }
 
   void _showSnack(String message) {
@@ -109,6 +139,7 @@ class _ChatScreenState extends State<ChatScreen> {
     ChatMessage message,
     MemoryTier tier,
   ) async {
+    final sessionId = widget.chatRepository.activeSessionId;
     final record = MemoryRecord(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
       tier: tier,
@@ -119,6 +150,7 @@ class _ChatScreenState extends State<ChatScreen> {
     await widget.memoryRepository.addRecord(
       tier: tier,
       record: record,
+      sessionId: sessionId,
     );
     _showSnack('已写入 ${tier.label}');
   }
@@ -175,6 +207,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   return;
                 }
                 final navigator = Navigator.of(context);
+                final sessionId = widget.chatRepository.activeSessionId;
                 await widget.memoryRepository.addRecord(
                   tier: selectedTier,
                   record: MemoryRecord(
@@ -183,10 +216,98 @@ class _ChatScreenState extends State<ChatScreen> {
                     content: content,
                     createdAt: DateTime.now(),
                   ),
+                  sessionId: sessionId,
                 );
                 navigator.pop();
               },
               child: const Text('写入'),
+            ),
+          ],
+        );
+      },
+    );
+    controller.dispose();
+  }
+
+  Future<void> _openUniversalAgentDialog() async {
+    final controller = TextEditingController();
+    ResearchDeliverable deliverable = ResearchDeliverable.report;
+    ResearchDepth depth = ResearchDepth.deep;
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('通用 Agent 任务'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: controller,
+                minLines: 2,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                  labelText: '目标',
+                  hintText: '例如：整理近期 AI 通用 Agent 的趋势并输出报告',
+                ),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<ResearchDeliverable>(
+                value: deliverable,
+                decoration: const InputDecoration(labelText: '交付形式'),
+                items: ResearchDeliverable.values
+                    .map(
+                      (item) => DropdownMenuItem(
+                        value: item,
+                        child: Text(_deliverableLabel(item)),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  if (value != null) {
+                    deliverable = value;
+                  }
+                },
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<ResearchDepth>(
+                value: depth,
+                decoration: const InputDecoration(labelText: '研究深度'),
+                items: ResearchDepth.values
+                    .map(
+                      (item) => DropdownMenuItem(
+                        value: item,
+                        child: Text(_depthLabel(item)),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  if (value != null) {
+                    depth = value;
+                  }
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final goal = controller.text.trim();
+                if (goal.isEmpty) {
+                  return;
+                }
+                Navigator.of(context).pop();
+                await _chatEngine.runUniversalAgent(
+                  goal: goal,
+                  deliverable: deliverable,
+                  depth: depth,
+                );
+                _scrollToBottom();
+              },
+              child: const Text('开始'),
             ),
           ],
         );
@@ -205,7 +326,7 @@ class _ChatScreenState extends State<ChatScreen> {
       builder: (context) {
         return const Padding(
           padding: EdgeInsets.all(16),
-          child: AvatarStage(compact: false),
+          child: AvatarStage(compact: false, height: 260),
         );
       },
     );
@@ -217,6 +338,7 @@ class _ChatScreenState extends State<ChatScreen> {
         builder: (_) => MemoryTierScreen(
           tier: tier,
           memoryRepository: widget.memoryRepository,
+          sessionId: widget.chatRepository.activeSessionId,
         ),
       ),
     );
@@ -245,6 +367,8 @@ class _ChatScreenState extends State<ChatScreen> {
         return LayoutBuilder(
           builder: (context, constraints) {
             final isWide = constraints.maxWidth >= 1000;
+            final rightPanelWidth =
+                constraints.maxWidth >= 1200 ? 420.0 : 340.0;
             return Scaffold(
               drawer: isWide
                   ? null
@@ -255,6 +379,8 @@ class _ChatScreenState extends State<ChatScreen> {
                         onAddMemory: _openManualMemoryDialog,
                         onOpenTier: _openMemoryTier,
                         onOpenSettings: _openSettings,
+                        onRemoveSession: _removeSession,
+                        onCreateSession: () => _createSessionForRoute(),
                         dense: true,
                         onSelect: () => Navigator.of(context).pop(),
                       ),
@@ -279,6 +405,8 @@ class _ChatScreenState extends State<ChatScreen> {
                             onAddMemory: _openManualMemoryDialog,
                             onOpenTier: _openMemoryTier,
                             onOpenSettings: _openSettings,
+                            onRemoveSession: _removeSession,
+                            onCreateSession: () => _createSessionForRoute(),
                           ),
                         ),
                       Expanded(
@@ -289,9 +417,11 @@ class _ChatScreenState extends State<ChatScreen> {
                                   session?.title ?? 'New chat',
                               onExportSession: () => _exportActiveSession(),
                               onExportAll: () => _exportAllSessions(),
-                              onCreateSession: () =>
-                                  widget.chatRepository.createSession(),
+                              onCreateSession: () => _createSessionForRoute(),
                               showMenuButton: !isWide,
+                              estimatedTokens: _chatEngine.estimatedTokens,
+                              tokenLimit: _chatEngine.tokenLimit,
+                              isCompressing: _chatEngine.isCompressing,
                               onOpenAvatar: isWide ? null : _openAvatarSheet,
                             ),
                             if (widget.embeddingConfigMissing)
@@ -353,14 +483,15 @@ class _ChatScreenState extends State<ChatScreen> {
                               isStreaming: _chatEngine.isStreaming,
                               partialTranscript:
                                   _chatEngine.partialTranscript,
+                              onOpenAgent: _openUniversalAgentDialog,
                             ),
                           ],
                         ),
                       ),
                       if (isWide)
                         SizedBox(
-                          width: 280,
-                          child: const AvatarStage(),
+                          width: rightPanelWidth,
+                          child: const AvatarStage(fill: true),
                         ),
                     ],
                   ),
@@ -412,5 +543,27 @@ class _EmbeddingWarning extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+String _deliverableLabel(ResearchDeliverable deliverable) {
+  switch (deliverable) {
+    case ResearchDeliverable.summary:
+      return '摘要';
+    case ResearchDeliverable.report:
+      return '报告';
+    case ResearchDeliverable.table:
+      return '表格';
+    case ResearchDeliverable.slides:
+      return 'PPT 大纲';
+  }
+}
+
+String _depthLabel(ResearchDepth depth) {
+  switch (depth) {
+    case ResearchDepth.quick:
+      return '快速';
+    case ResearchDepth.deep:
+      return '深度';
   }
 }

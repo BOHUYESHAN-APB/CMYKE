@@ -35,8 +35,11 @@ class _Live3DPreviewState extends State<Live3DPreview> {
   String? _path;
   bool _winReady = false;
   bool _winInitFailed = false;
+  bool _viewerReady = false;
   String? _bundlePath;
   String? _pendingModelPath;
+  String? _lastRequestedPath;
+  String? _lastLoadedPath;
   static HttpServer? _staticServer;
   static String? _staticBaseUrl;
 
@@ -80,12 +83,16 @@ class _Live3DPreviewState extends State<Live3DPreview> {
           'assets/vrm_core/jsm/controls/OrbitControls.js',
       'assets/live3d/vendor/GLTFLoader.js':
           'assets/vrm_core/jsm/loaders/GLTFLoader.js',
+      'assets/live3d/vendor/three-vrm-animation.module.js':
+          'assets/vrm_core/three-vrm-animation.module.js',
       'assets/live3d/vendor/utils/BufferGeometryUtils.js':
           'assets/vrm_core/jsm/utils/BufferGeometryUtils.js',
       'assets/live3d/vendor/three-vrm.module.js':
           'assets/vrm_core/three-vrm.module.js',
       'assets/live3d/vendor/es-module-shims.js':
           'assets/vrm_core/es-module-shims.js',
+      'assets/live3d/animations/idle_loop.vrma':
+          'assets/vrm_core/animations/idle_loop.vrma',
     };
     for (final entry in assets.entries) {
       final data = await _loadAssetBytes(entry.key);
@@ -155,6 +162,8 @@ class _Live3DPreviewState extends State<Live3DPreview> {
         return ContentType('application', 'javascript', charset: 'utf-8');
       case '.vrm':
         return ContentType('model', 'gltf-binary');
+      case '.vrma':
+        return ContentType('model', 'gltf-binary');
       default:
         return ContentType.binary;
     }
@@ -178,18 +187,31 @@ class _Live3DPreviewState extends State<Live3DPreview> {
       await controller.initialize();
       await controller.setBackgroundColor(Colors.transparent);
       await controller.setPopupWindowPolicy(WebviewPopupWindowPolicy.deny);
-      await controller.loadUrl('${baseUrl}viewer.html');
+      // Listen to structured messages from the viewer for easier debugging.
       controller.webMessage.listen((message) {
         if (!mounted) return;
+        try {
+          final data = jsonDecode(message) as Map<String, dynamic>;
+          final type = data['type'] ?? 'msg';
+          final msg = data['msg'] ?? '';
+          if (type == 'info' && msg == 'viewer:ready') {
+            _viewerReady = true;
+            unawaited(_maybeLoadPending());
+          }
+          if (type == 'info' && msg == 'VRM loaded') {
+            _lastLoadedPath = _lastRequestedPath;
+          }
+          _setStatus('viewer[$type]: $msg');
+          return;
+        } catch (_) {
+          // Fallback: treat as plain text.
+        }
         _setStatus('viewer: $message');
       });
+      await controller.loadUrl('${baseUrl}viewer.html');
       _hub.live3dBridge.attachJsInvoker(
         (script) => controller.executeScript(script),
       );
-      if (_pendingModelPath != null) {
-        await _loadModelFromPath(_pendingModelPath!);
-        _pendingModelPath = null;
-      }
       setState(() {
         _winController = controller;
         _winReady = true;
@@ -212,10 +234,11 @@ class _Live3DPreviewState extends State<Live3DPreview> {
 
   Future<void> _loadModel(String? path) async {
     if (!mounted) return;
+    final normalizedPath = path == null ? '' : _normalizePath(path);
     setState(() {
-      _path = path;
+      _path = normalizedPath;
     });
-    if (path == null || path.isEmpty) {
+    if (normalizedPath.isEmpty) {
       _setStatus('未加载模型');
       return;
     }
@@ -225,11 +248,11 @@ class _Live3DPreviewState extends State<Live3DPreview> {
             !_winReady ||
             _bundlePath == null ||
             _staticBaseUrl == null) {
-          _pendingModelPath = path;
+          _pendingModelPath = normalizedPath;
           _setStatus('等待 WebView 初始化');
           return;
         }
-        await _loadModelFromPath(path);
+        await _loadModelFromPath(normalizedPath);
       } else {
         _setStatus('当前平台尚未实现渲染');
         return;
@@ -248,6 +271,7 @@ class _Live3DPreviewState extends State<Live3DPreview> {
       _setStatus('加载失败: 本地服务未就绪');
       return;
     }
+    _lastRequestedPath = path;
     final modelsDir = Directory(p.join(bundle, 'assets/vrm_model'));
     if (!await modelsDir.exists()) {
       await modelsDir.create(recursive: true);
@@ -258,6 +282,7 @@ class _Live3DPreviewState extends State<Live3DPreview> {
     if (!await destFile.exists()) {
       try {
         await File(path).copy(destPath);
+        _debug('Copied VRM to $destPath');
       } catch (e) {
         _setStatus('复制模型失败: $e');
         return;
@@ -266,7 +291,44 @@ class _Live3DPreviewState extends State<Live3DPreview> {
     final url = '${baseUrl}assets/vrm_model/${Uri.encodeComponent(fileName)}';
     final js = 'window.loadVrmFromUrl(${jsonEncode(url)});';
     _debug('Loading VRM via $url');
-    await controller.executeScript(js);
+    try {
+      await controller.executeScript(js);
+    } catch (e) {
+      _pendingModelPath = path;
+      _setStatus('等待 WebView 加载: $e');
+      return;
+    }
+  }
+
+  String _normalizePath(String path) {
+    // 去除首尾引号以及多余空白，防止用户输入包含 "C:\\path\\file.vrm"
+    var cleaned = path.trim();
+    cleaned = cleaned.replaceAll(RegExp(r'^[\"“”]+'), '');
+    cleaned = cleaned.replaceAll(RegExp(r'[\"“”]+$'), '');
+    return cleaned;
+  }
+
+  Future<void> _maybeLoadPending() async {
+    if (!mounted || !_viewerReady) {
+      return;
+    }
+    final candidate = _pendingModelPath ?? _path;
+    if (candidate == null || candidate.isEmpty) {
+      return;
+    }
+    final normalized = _normalizePath(candidate);
+    if (_lastLoadedPath == normalized) {
+      return;
+    }
+    if (_winController == null ||
+        !_winReady ||
+        _bundlePath == null ||
+        _staticBaseUrl == null) {
+      _pendingModelPath = normalized;
+      return;
+    }
+    _pendingModelPath = null;
+    await _loadModelFromPath(normalized);
   }
 
   @override
@@ -290,10 +352,25 @@ class _Live3DPreviewState extends State<Live3DPreview> {
       } else if (_winController == null) {
         viewer = const Center(child: CircularProgressIndicator(strokeWidth: 2));
       } else {
-        viewer = Webview(
-          _winController!,
-          permissionRequested: (url, kind, isUserInitiated) =>
-              WebviewPermissionDecision.deny,
+        viewer = Stack(
+          children: [
+            Positioned.fill(
+              child: Webview(
+                _winController!,
+                permissionRequested: (url, kind, isUserInitiated) =>
+                    WebviewPermissionDecision.deny,
+              ),
+            ),
+            Positioned(
+              right: 8,
+              top: 8,
+              child: IconButton(
+                tooltip: '打开 DevTools',
+                icon: const Icon(Icons.bug_report_outlined, size: 18),
+                onPressed: () => _winController?.openDevTools(),
+              ),
+            ),
+          ],
         );
       }
     } else {

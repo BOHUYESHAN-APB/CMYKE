@@ -25,7 +25,7 @@ class MessageBubble extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (!isUser) _Avatar(label: 'C', color: const Color(0xFF1B9B7B)),
+          if (!isUser) _Avatar(label: 'L', color: const Color(0xFF1B9B7B)),
           if (!isUser) const SizedBox(width: 10),
           Expanded(
             child: Align(
@@ -105,7 +105,7 @@ class MessageBubble extends StatelessWidget {
       case ChatRole.user:
         return 'You';
       case ChatRole.assistant:
-        return 'CMYKE';
+        return 'Lumi';
       case ChatRole.system:
         return 'System';
     }

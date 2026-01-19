@@ -41,6 +41,8 @@
     const statusEl = document.getElementById('status');
     window.__setStatus = (msg) => {
       statusEl.textContent = msg;
+      statusEl.style.display = 'block';
+      statusEl.style.opacity = '1';
     };
     window.__setStatus('Booting viewer...');
     window.__pendingVrmUrl = null;
@@ -65,14 +67,70 @@
     window.setStabilityMode = (flag) => {
       window.__stabilityMode = !!flag;
     };
-    window.__idleAnimationEnabled = false;
+    window.__idleAnimationEnabled = true;
     window.setIdleAnimationEnabled = (flag) => {
       window.__idleAnimationEnabled = !!flag;
+    };
+    // Procedural idle overlays can fight authored VRMA clips (double transforms),
+    // causing twitch/lean especially in legs/hips. Keep it OFF by default; it will
+    // still be used as a fallback when VRMA idle is unavailable.
+    window.__proceduralIdleEnabled = false;
+    window.setProceduralIdleEnabled = (flag) => {
+      window.__proceduralIdleEnabled = !!flag;
     };
     window.__talking = false;
     window.setTalking = (flag) => {
       window.__talking = !!flag;
     };
+    window.__cursorFollow = false;
+    window.__cursorNdc = null;
+    window.setCursorFollow = (flag) => {
+      window.__cursorFollow = !!flag;
+    };
+    window.__petMode = false;
+    window.setPetMode = (flag) => {
+      window.__petMode = !!flag;
+    };
+    window.setCursorNdc = (x, y) => {
+      const nx = Number(x);
+      const ny = Number(y);
+      if (!Number.isFinite(nx) || !Number.isFinite(ny)) return;
+      window.__cursorNdc = {
+        x: Math.min(1, Math.max(0, nx)),
+        y: Math.min(1, Math.max(0, ny)),
+      };
+    };
+    const canvasEl = document.getElementById('c');
+    if (canvasEl) {
+      let dragging = false;
+      canvasEl.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        dragging = true;
+        try {
+          window.triggerPetDrag && window.triggerPetDrag();
+        } catch (_) {}
+      });
+      window.addEventListener('mouseup', () => {
+        dragging = false;
+      });
+      canvasEl.addEventListener('mousemove', (e) => {
+        const rect = canvasEl.getBoundingClientRect();
+        const w = Math.max(1, rect.width);
+        const h = Math.max(1, rect.height);
+        const nx = (e.clientX - rect.left) / w;
+        const ny = (e.clientY - rect.top) / h;
+        window.setCursorNdc(nx, ny);
+        if (dragging) {
+          try {
+            window.triggerPetDrag && window.triggerPetDrag();
+          } catch (_) {}
+        }
+      });
+      canvasEl.addEventListener('mouseleave', () => {
+        dragging = false;
+        window.__cursorNdc = null;
+      });
+    }
     window.addEventListener('error', (e) => {
       const detail = e?.message || 'Unknown error';
       window.__setStatus(`JS error: ${detail}`);
@@ -182,7 +240,8 @@
       scene.background = new THREE.Color(0xf6f2ea);
 
       const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
-      camera.position.set(0, 1.4, 1.5);
+      // Align with AIRI: camera is in front of a -Z-facing model (negative Z).
+      camera.position.set(0, 1.4, -1.5);
 
       const controls = new OrbitControls(camera, renderer.domElement);
       controls.target.set(0, 1.3, 0);
@@ -228,6 +287,90 @@
       const clock = new THREE.Clock();
       const idleAnimationUrl = '/assets/vrm_core/animations/idle_loop.vrma';
       let vrmMixer = null;
+      let idleAction = null;
+      let activeVrmaMotionAction = null;
+      let vrmaMotionPlaying = false;
+      let vrmaMotionRestoreTimer = null;
+      const vrmaMotionActionCache = new Map();
+      let availableVrmaAnimations = [];
+      // Optional catalog describing each VRMA clip (id/name/type/auto flags).
+      // When provided, we only auto-play "talk" gestures during speaking.
+      let vrmaCatalog = [];
+      let vrmaById = new Map();
+      let vrmaByName = new Map();
+      let autoMotionWhitelist = null;
+      let nextPetDragAt = 0;
+      const normalizeMotionKey = (motion) => {
+        const raw = String(motion ?? '').trim();
+        return raw ? raw.toLowerCase() : '';
+      };
+      const isAutoMotionAllowed = (motion) => {
+        if (!autoMotionWhitelist || autoMotionWhitelist.size === 0) return true;
+        const key = normalizeMotionKey(motion);
+        if (!key) return false;
+        if (autoMotionWhitelist.has(key)) return true;
+        const base = key.split('/').pop();
+        return !!base && autoMotionWhitelist.has(base);
+      };
+      function setAutoMotionWhitelist(list) {
+        if (!Array.isArray(list) || list.length === 0) {
+          autoMotionWhitelist = null;
+          post('info', 'auto motion whitelist: off');
+          return;
+        }
+        const set = new Set();
+        list.forEach((item) => {
+          const key = normalizeMotionKey(item);
+          if (key) set.add(key);
+        });
+        autoMotionWhitelist = set.size ? set : null;
+        post(
+          'info',
+          `auto motion whitelist: ${autoMotionWhitelist ? autoMotionWhitelist.size : 0}`,
+        );
+      }
+
+      function resolvePetDragMotionKey() {
+        const preferred = ['mme_pet_misc_pet_dragging', 'pet_dragging', 'hover_reaction'];
+        for (const id of preferred) {
+          if (vrmaById.has(String(id).toLowerCase())) return id;
+        }
+        const match = vrmaCatalog.find((m) => {
+          const id = (m?.id ?? '').toString();
+          const name = (m?.name ?? '').toString();
+          const url = (m?.url ?? '').toString();
+          const hay = `${id} ${name} ${url}`.toLowerCase();
+          return hay.includes('pet_drag') || hay.includes('drag');
+        });
+        if (match) {
+          const id = (match.id ?? '').toString().trim();
+          if (id) return id;
+          const url = (match.url ?? '').toString().trim();
+          if (url) return url;
+        }
+        return 'mme_pet_misc_pet_dragging';
+      }
+
+      function triggerPetDrag() {
+        if (window.__petMode !== true) return;
+        if (!currentVrm) return;
+        const now = clock.getElapsedTime();
+        if (now < nextPetDragAt) return;
+        nextPetDragAt = now + THREE.MathUtils.randFloat(1.2, 2.4);
+
+        // If we have explicit talk VRMAs, avoid interrupting them while speaking.
+        if (window.__talking === true && vrmaCatalog.some((m) => m?.auto?.talk === true)) {
+          return;
+        }
+
+        const key = resolvePetDragMotionKey();
+        if (!key) return;
+        tryPlayVrmaMotion(key).then((played) => {
+          if (played) {
+            post('info', `motion(vrma): ${key}`);
+          }
+        });
+      }
       const lookAtTarget = new THREE.Object3D();
       const lookAtBase = new THREE.Vector3(0, 1.3, 1.5);
       const tmpEyePos = new THREE.Vector3();
@@ -235,7 +378,11 @@
       const tmpVec = new THREE.Vector3();
       const tmpVec2 = new THREE.Vector3();
       const tmpQuat = new THREE.Quaternion();
+      const tmpQuat2 = new THREE.Quaternion();
+      const tmpQuat3 = new THREE.Quaternion();
+      const tmpEuler = new THREE.Euler();
       const worldUp = new THREE.Vector3(0, 1, 0);
+      const modelForward = new THREE.Vector3(0, 0, -1);
       let blinkController = null;
       let eyeSaccadeController = null;
       let emoteController = null;
@@ -250,8 +397,15 @@
         nextMicroGesture: 0,
         micro: null,
         nextIdleExpression: 0,
+        nextIdleAction: 0,
         nextGesture: 0,
         gesture: null,
+      };
+      // Procedural one-shot actions (small, clamped overlays) that have explicit names.
+      // These are not random; they are only triggered by the app (StageMotion / commands).
+      const procedural = {
+        nod: { active: false, start: 0, duration: 0.9, strength: 0.14 },
+        look: { until: 0, dx: 0, dy: 0 },
       };
       const idlePose = {
         head: { x: 0, y: 0, z: 0 },
@@ -264,6 +418,29 @@
         armTimer: 0,
         armInterval: 1.8,
       };
+      // Talking overlay (ported from Studying/ai_virtual_mate_web-main)
+      const talkOverlay = {
+        headTimer: 0,
+        headInterval: 0.55,
+        headTarget: { x: 0, y: 0, z: 0 },
+        head: { x: 0, y: 0, z: 0 },
+        armTimer: 0,
+        armInterval: 0.7,
+        armTarget: {
+          leftX: 0,
+          leftZ: 0,
+          rightX: 0,
+          rightZ: 0,
+        },
+        arm: {
+          leftX: 0,
+          leftZ: 0,
+          rightX: 0,
+          rightZ: 0,
+        },
+        torso: { x: 0, y: 0, z: 0, tx: 0, ty: 0, tz: 0 },
+        shoulder: { lz: 0, rz: 0, tlz: 0, trz: 0 },
+      };
       const POSE_BASE = {
         headX: 0.1,
         armZ: Math.PI / 2.3,
@@ -271,10 +448,38 @@
       let stableIdleLogged = false;
       const poseRestDir = {};
       const poseRestPole = {};
-      const restRotations = {};
+      const restQuaternions = {};
+      const baseQuaternions = {};
       const lastTargetDir = {};
       const lastTargetPole = {};
       setStatus('Scene ready. Waiting for VRM...');
+
+      function hideStatusSoon(delayMs = 1200) {
+        const el = document.getElementById('status');
+        if (!el) return;
+        window.setTimeout(() => {
+          el.style.transition = 'opacity 240ms ease';
+          el.style.opacity = '0';
+          window.setTimeout(() => {
+            el.style.display = 'none';
+          }, 260);
+        }, delayMs);
+      }
+
+      const FINGER_BONES = (() => {
+        const result = [];
+        const sides = ['left', 'right'];
+        const fingers = ['Thumb', 'Index', 'Middle', 'Ring', 'Little'];
+        const segments = ['Proximal', 'Intermediate', 'Distal'];
+        for (const side of sides) {
+          for (const finger of fingers) {
+            for (const seg of segments) {
+              result.push(`${side}${finger}${seg}`);
+            }
+          }
+        }
+        return result;
+      })();
 
       const bones = {};
       function cacheBones() {
@@ -286,6 +491,8 @@
           'chest',
           'spine',
           'hips',
+          'leftShoulder',
+          'rightShoulder',
           'leftUpperArm',
           'leftLowerArm',
           'rightUpperArm',
@@ -298,6 +505,7 @@
           'rightUpperLeg',
           'rightLowerLeg',
           'rightFoot',
+          ...FINGER_BONES,
         ];
         names.forEach((n) => {
           bones[n] = currentVrm.humanoid.getNormalizedBoneNode(n);
@@ -312,6 +520,8 @@
           'chest',
           'spine',
           'hips',
+          'leftShoulder',
+          'rightShoulder',
           'leftUpperArm',
           'leftLowerArm',
           'leftHand',
@@ -324,42 +534,104 @@
           'rightUpperLeg',
           'rightLowerLeg',
           'rightFoot',
+          ...FINGER_BONES,
         ];
         names.forEach((n) => {
           const bone = bones[n];
           if (bone) {
-            restRotations[n] = bone.rotation.clone();
+            let rest = restQuaternions[n];
+            if (!rest) {
+              rest = new THREE.Quaternion();
+              restQuaternions[n] = rest;
+            }
+            rest.copy(bone.quaternion);
           }
+        });
+      }
+
+      function captureBasePose() {
+        Object.keys(baseQuaternions).forEach((k) => delete baseQuaternions[k]);
+        Object.entries(bones).forEach(([name, bone]) => {
+          if (!bone) return;
+          const q = new THREE.Quaternion();
+          q.copy(bone.quaternion);
+          baseQuaternions[name] = q;
+        });
+      }
+
+      function resetToBasePose() {
+        Object.entries(baseQuaternions).forEach(([name, q]) => {
+          const bone = bones[name];
+          if (!bone || !q) return;
+          bone.quaternion.copy(q);
         });
       }
 
       function applyRestRotation(name, offset) {
         const bone = bones[name];
         if (!bone) return;
-        let rest = restRotations[name];
+        let rest = restQuaternions[name];
         if (!rest) {
-          rest = bone.rotation.clone();
-          restRotations[name] = rest;
+          rest = new THREE.Quaternion();
+          rest.copy(bone.quaternion);
+          restQuaternions[name] = rest;
         }
-        bone.rotation.set(
-          rest.x + (offset?.x ?? 0),
-          rest.y + (offset?.y ?? 0),
-          rest.z + (offset?.z ?? 0),
-        );
+        bone.quaternion.copy(rest);
+        if (offset) {
+          tmpEuler.set(
+            offset?.x ?? 0,
+            offset?.y ?? 0,
+            offset?.z ?? 0,
+            bone.rotation.order,
+          );
+          tmpQuat2.setFromEuler(tmpEuler);
+          bone.quaternion.multiply(tmpQuat2);
+        }
       }
 
       function clampRotation(name, limits) {
         const bone = bones[name];
-        const rest = restRotations[name];
+        const rest = restQuaternions[name];
         if (!bone || !rest || !limits) return;
-        const offX = bone.rotation.x - rest.x;
-        const offY = bone.rotation.y - rest.y;
-        const offZ = bone.rotation.z - rest.z;
         const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
-        const nx = limits.x ? clamp(offX, limits.x[0], limits.x[1]) : offX;
-        const ny = limits.y ? clamp(offY, limits.y[0], limits.y[1]) : offY;
-        const nz = limits.z ? clamp(offZ, limits.z[0], limits.z[1]) : offZ;
-        bone.rotation.set(rest.x + nx, rest.y + ny, rest.z + nz);
+        tmpQuat2.copy(rest).invert();
+        tmpQuat3.copy(tmpQuat2).multiply(bone.quaternion);
+        tmpEuler.setFromQuaternion(tmpQuat3, bone.rotation.order);
+        const nx = limits.x ? clamp(tmpEuler.x, limits.x[0], limits.x[1]) : tmpEuler.x;
+        const ny = limits.y ? clamp(tmpEuler.y, limits.y[0], limits.y[1]) : tmpEuler.y;
+        const nz = limits.z ? clamp(tmpEuler.z, limits.z[0], limits.z[1]) : tmpEuler.z;
+        tmpEuler.set(nx, ny, nz, bone.rotation.order);
+        tmpQuat3.setFromEuler(tmpEuler);
+        bone.quaternion.copy(rest).multiply(tmpQuat3);
+      }
+
+      // Clamp relative to the *base pose* (not the current animation rest).
+      // This prevents authored VRMA clips from accidentally introducing huge yaw/roll flips
+      // that then become the new "rest" and cannot be corrected by stabilizePose().
+      function clampRotationToBase(name, limits) {
+        const bone = bones[name];
+        const base = baseQuaternions[name];
+        if (!bone || !base || !limits) return;
+        const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
+        tmpQuat2.copy(base).invert();
+        tmpQuat3.copy(tmpQuat2).multiply(bone.quaternion);
+        tmpEuler.setFromQuaternion(tmpQuat3, bone.rotation.order);
+        const nx = limits.x ? clamp(tmpEuler.x, limits.x[0], limits.x[1]) : tmpEuler.x;
+        const ny = limits.y ? clamp(tmpEuler.y, limits.y[0], limits.y[1]) : tmpEuler.y;
+        const nz = limits.z ? clamp(tmpEuler.z, limits.z[0], limits.z[1]) : tmpEuler.z;
+        tmpEuler.set(nx, ny, nz, bone.rotation.order);
+        tmpQuat3.setFromEuler(tmpEuler);
+        bone.quaternion.copy(base).multiply(tmpQuat3);
+      }
+
+      function stabilizeAnimationPose() {
+        // Prevent full-body spins from any animation clip (idle or gestures).
+        // Allow a wide but safe range so authored motion packs (sit/dance/lean)
+        // can play naturally while still preventing 180°/360° flips.
+        clampRotationToBase('hips', { x: [-1.15, 1.15], y: [-1.3, 1.3], z: [-0.7, 0.7] });
+        clampRotationToBase('spine', { x: [-1.0, 1.0], y: [-1.0, 1.0], z: [-0.7, 0.7] });
+        clampRotationToBase('chest', { x: [-1.0, 1.0], y: [-1.0, 1.0], z: [-0.7, 0.7] });
+        clampRotationToBase('upperChest', { x: [-0.85, 0.85], y: [-0.85, 0.85], z: [-0.6, 0.6] });
       }
 
       function stabilizePose() {
@@ -370,6 +642,8 @@
         clampRotation('spine', { x: [-0.4, 0.4], y: [-0.35, 0.35], z: [-0.3, 0.3] });
         clampRotation('chest', { x: [-0.45, 0.45], y: [-0.35, 0.35], z: [-0.3, 0.3] });
         clampRotation('upperChest', { x: [-0.4, 0.4], y: [-0.3, 0.3], z: [-0.25, 0.25] });
+        clampRotation('leftShoulder', { x: [-0.35, 0.35], y: [-0.35, 0.35], z: [-0.6, 0.6] });
+        clampRotation('rightShoulder', { x: [-0.35, 0.35], y: [-0.35, 0.35], z: [-0.6, 0.6] });
         clampRotation('leftUpperArm', { x: [-1.2, 0.6], y: [-0.8, 0.8], z: [-1.4, 1.4] });
         clampRotation('rightUpperArm', { x: [-1.2, 0.6], y: [-0.8, 0.8], z: [-1.4, 1.4] });
         clampRotation('leftLowerArm', { x: [-0.3, 1.6], y: [-0.6, 0.6], z: [-1.2, 1.2] });
@@ -382,6 +656,28 @@
         clampRotation('rightLowerLeg', { x: [-0.1, 0.7], y: [-0.25, 0.25], z: [-0.2, 0.2] });
         clampRotation('leftFoot', { x: [-0.4, 0.4], y: [-0.3, 0.3], z: [-0.3, 0.3] });
         clampRotation('rightFoot', { x: [-0.4, 0.4], y: [-0.3, 0.3], z: [-0.3, 0.3] });
+        // Finger curl/splay safety net (prevents occasional spikes from animations/overlays).
+        for (const finger of FINGER_BONES) {
+          clampRotation(finger, { x: [-1.0, 1.0], y: [-0.9, 0.9], z: [-0.9, 0.9] });
+        }
+      }
+
+      // Natural pose baseline (ported from Studying/ai_virtual_mate_web-main).
+      // Helps avoid transient T-pose when VRMA idle fails to load.
+      function applyNaturalPose() {
+        const setEuler = (name, x, y, z) => {
+          const b = bones[name];
+          if (!b) return;
+          b.rotation.set(x, y, z, b.rotation.order);
+        };
+        setEuler('leftUpperArm', 0, 0, -POSE_BASE.armZ);
+        setEuler('leftLowerArm', 0, 0, 0);
+        setEuler('leftHand', 0, 0, 0);
+        setEuler('rightUpperArm', 0, 0, POSE_BASE.armZ);
+        setEuler('rightLowerArm', 0, 0, 0);
+        setEuler('rightHand', 0, 0, 0);
+        setEuler('head', POSE_BASE.headX, 0, 0);
+        setEuler('neck', POSE_BASE.headX * 0.4, 0, 0);
       }
 
       function applyRestPose() {
@@ -409,13 +705,43 @@
         vrm.scene.updateMatrixWorld(true);
       }
 
-      function ensureFacingCamera(vrm) {
-        if (!vrm?.scene || !bones.head) return;
+      function alignVrmFacing(vrm) {
+        const faceFront = vrm?.lookAt?.faceFront;
+        if (!vrm?.scene || !faceFront) return;
+        tmpVec.copy(faceFront);
+        // Keep only yaw; pitch/roll should be handled by alignVrmUpright.
+        tmpVec.y = 0;
+        if (tmpVec.lengthSq() < 1e-6) return;
+        tmpVec.normalize();
+        tmpQuat.setFromUnitVectors(tmpVec, modelForward);
+        vrm.scene.quaternion.premultiply(tmpQuat);
         vrm.scene.updateMatrixWorld(true);
-        bones.head.getWorldPosition(tmpEyePos);
-        bones.head.getWorldQuaternion(tmpQuat);
-        const forward = tmpVec.set(0, 0, -1).applyQuaternion(tmpQuat).normalize();
+      }
+
+      function ensureFacingCamera(vrm) {
+        if (!vrm?.scene) return;
+        const head = bones.head || bones.neck || bones.spine;
+        if (!head) return;
+        vrm.scene.updateMatrixWorld(true);
+        head.getWorldPosition(tmpEyePos);
+        head.getWorldQuaternion(tmpQuat);
+        // IMPORTANT:
+        // - VRM0 uses faceFront = (0,0,-1)
+        // - VRM1 defaults to faceFront = (0,0, 1)
+        // So we must use VRM's faceFront as the head-local forward axis, otherwise
+        // some models will be flipped 180° and appear "back-facing".
+        const faceFront = vrm?.lookAt?.faceFront;
+        const headLocalForward =
+          faceFront && typeof faceFront.x === 'number'
+            ? tmpVec.copy(faceFront)
+            : tmpVec.set(0, 0, 1);
+        const forward = headLocalForward.applyQuaternion(tmpQuat).normalize();
         const toCam = tmpVec2.copy(camera.position).sub(tmpEyePos).normalize();
+        // Compare yaw only; pitch/roll should not decide the facing flip.
+        forward.y = 0;
+        toCam.y = 0;
+        if (forward.lengthSq() > 1e-6) forward.normalize();
+        if (toCam.lengthSq() > 1e-6) toCam.normalize();
         if (forward.dot(toCam) < 0) {
           vrm.scene.rotation.y += Math.PI;
           vrm.scene.updateMatrixWorld(true);
@@ -441,7 +767,7 @@
         camera.position.set(
           center.x,
           center.y + size.y * 0.1,
-          center.z + distance,
+          center.z - distance,
         );
         controls.target.copy(center);
         controls.minDistance = distance * 0.6;
@@ -452,12 +778,473 @@
       function updateLookAtAnchor() {
         if (!bones.head) return;
         bones.head.getWorldPosition(tmpEyePos);
+        // Prefer looking "in front" of the model to avoid 180° flips when the
+        // camera is behind the avatar (which can cause sudden 360° twists).
         tmpVec.copy(camera.position).sub(modelCenter);
+        const cursor = window.__cursorNdc;
+        if (window.__cursorFollow === true && cursor && camera) {
+          const nx = Math.min(1, Math.max(0, Number(cursor.x ?? 0.5)));
+          const ny = Math.min(1, Math.max(0, Number(cursor.y ?? 0.5)));
+          // Unproject cursor to a world direction, then place the look target
+          // at a fixed distance in front of the camera.
+          tmpVec.set(nx * 2 - 1, (1 - ny) * 2 - 1, 0.5);
+          tmpVec.unproject(camera);
+          tmpVec.sub(camera.position).normalize();
+          lookAtBase.copy(camera.position).add(tmpVec.multiplyScalar(8));
+          // Clamp vertical movement to avoid sudden up/down snaps.
+          lookAtBase.y = THREE.MathUtils.clamp(
+            lookAtBase.y,
+            tmpEyePos.y - 0.8,
+            tmpEyePos.y + 0.8,
+          );
+          // Apply temporary look override even when cursor follow is enabled.
+          if (procedural.look.until > 0) {
+            const now = clock.getElapsedTime();
+            if (now < procedural.look.until) {
+              lookAtBase.x += procedural.look.dx;
+              lookAtBase.y += procedural.look.dy;
+            } else {
+              procedural.look.until = 0;
+              procedural.look.dx = 0;
+              procedural.look.dy = 0;
+            }
+          }
+          return;
+        }
         if (tmpVec.lengthSq() > 1e-6) {
           tmpVec.normalize();
         }
+        if (currentVrm?.scene) {
+          tmpVec2.set(0, 0, -1).applyQuaternion(currentVrm.scene.quaternion);
+          if (tmpVec2.lengthSq() > 1e-6) {
+            tmpVec2.normalize();
+            if (tmpVec.dot(tmpVec2) < 0) {
+              tmpVec.copy(tmpVec2);
+            }
+          }
+        }
         lookAtBase.copy(modelCenter).add(tmpVec.multiplyScalar(8));
         lookAtBase.y = tmpEyePos.y;
+        if (procedural.look.until > 0) {
+          const now = clock.getElapsedTime();
+          if (now < procedural.look.until) {
+            lookAtBase.x += procedural.look.dx;
+            lookAtBase.y += procedural.look.dy;
+          } else {
+            procedural.look.until = 0;
+            procedural.look.dx = 0;
+            procedural.look.dy = 0;
+          }
+        }
+      }
+
+      function motionToVrmaCandidates(motion) {
+        const raw = String(motion ?? '').trim();
+        if (!raw) return [];
+
+        const key = raw.trim().toLowerCase();
+        const byId = vrmaById.get(key);
+        if (byId?.url) {
+          return [byId.url];
+        }
+        const byName = vrmaByName.get(key);
+        if (byName?.url) {
+          return [byName.url];
+        }
+
+        // Allow selecting by numeric index shown in the app's Motion Debug panel.
+        // Supports "12" / "012" / "#12" (1-based).
+        const idxMatch = raw.match(/^#?(\d+)$/);
+        if (idxMatch && Array.isArray(vrmaCatalog) && vrmaCatalog.length) {
+          const idx = Number.parseInt(idxMatch[1], 10);
+          if (Number.isFinite(idx) && idx >= 1 && idx <= vrmaCatalog.length) {
+            const entry = vrmaCatalog[idx - 1];
+            const url = typeof entry?.url === 'string' ? entry.url.trim() : '';
+            if (url) return [url];
+          }
+        }
+
+        if (/^https?:\/\//i.test(raw) || raw.startsWith('/')) {
+          return raw.toLowerCase().endsWith('.vrma') ? [raw] : [];
+        }
+
+        // allow passing just "wave.vrma"
+        if (raw.toLowerCase().endsWith('.vrma')) {
+          return [`/assets/vrm_core/animations/${raw}`];
+        }
+
+        // "LookAtUser" -> "look_at_user.vrma"
+        const snake = raw
+          .replace(/([a-z])([A-Z])/g, '$1_$2')
+          .replace(/[^a-zA-Z0-9_]+/g, '_')
+          .toLowerCase();
+        const clean = raw.replace(/[^a-zA-Z0-9]+/g, '_').toLowerCase();
+        const candidates = [snake, clean]
+          .filter((v, idx, arr) => v && arr.indexOf(v) === idx)
+          .map((name) => `/assets/vrm_core/animations/${name}.vrma`);
+
+        // convention: Idle -> idle_loop.vrma
+        if (snake === 'idle' || clean === 'idle') {
+          candidates.unshift(idleAnimationUrl);
+        }
+        return candidates;
+      }
+
+      function setVrmaCatalog(catalog) {
+        vrmaCatalog = [];
+        vrmaById = new Map();
+        vrmaByName = new Map();
+
+        const motions = catalog?.motions;
+        if (Array.isArray(motions)) {
+          motions.forEach((m) => {
+            if (!m || typeof m !== 'object') return;
+            const url = typeof m.url === 'string' ? m.url.trim() : '';
+            if (!url || !url.toLowerCase().endsWith('.vrma')) return;
+            const id = typeof m.id === 'string' ? m.id.trim() : '';
+            const name = typeof m.name === 'string' ? m.name.trim() : '';
+            const type = typeof m.type === 'string' ? m.type.trim() : '';
+            const auto = typeof m.auto === 'object' && m.auto ? m.auto : {};
+            const entry = { id, name, type, auto, url };
+            vrmaCatalog.push(entry);
+            if (id) vrmaById.set(id.toLowerCase(), entry);
+            if (name) vrmaByName.set(name.toLowerCase(), entry);
+          });
+        }
+
+        const uniq = new Set();
+        // Prefer urls declared in catalog; fallback to whatever we already have.
+        if (vrmaCatalog.length) {
+          vrmaCatalog.forEach((m) => {
+            if (m?.url) uniq.add(m.url);
+          });
+        } else if (Array.isArray(availableVrmaAnimations)) {
+          availableVrmaAnimations.forEach((u) => {
+            if (typeof u === 'string') uniq.add(u);
+          });
+        }
+        // Ensure idle is always present as a fallback.
+        if (!uniq.has(idleAnimationUrl)) {
+          uniq.add(idleAnimationUrl);
+        }
+        availableVrmaAnimations = Array.from(uniq);
+
+        const talkCount = vrmaCatalog.filter((m) => m?.auto?.talk === true).length;
+        post('info', `vrma catalog: ${vrmaCatalog.length} (talk=${talkCount})`);
+      }
+
+      function stopActiveVrmaMotion() {
+        const hadMotion = !!activeVrmaMotionAction || vrmaMotionPlaying === true;
+        if (vrmaMotionRestoreTimer) {
+          clearTimeout(vrmaMotionRestoreTimer);
+          vrmaMotionRestoreTimer = null;
+        }
+        if (activeVrmaMotionAction) {
+          try {
+            // Fade out instead of an abrupt stop to avoid visible "twitch" when
+            // returning to idle (especially noticeable on short gestures).
+            activeVrmaMotionAction.fadeOut(0.18);
+          } catch (_) {}
+          // Don't stop() immediately; let fadeOut take effect.
+          const actionToStop = activeVrmaMotionAction;
+          setTimeout(() => {
+            // If the same action got re-used, don't kill it.
+            if (activeVrmaMotionAction === actionToStop) return;
+            try {
+              actionToStop.stop();
+            } catch (_) {}
+          }, 260);
+          activeVrmaMotionAction = null;
+        }
+        vrmaMotionPlaying = false;
+        if (idleAction) {
+          try {
+            const enabled = window.__idleAnimationEnabled === true;
+            idleAction.enabled = enabled;
+            if (enabled) {
+              // Keep idle running continuously (no reset) to avoid snapping back
+              // to the first keyframe every time a gesture ends.
+              idleAction.play();
+            }
+          } catch (_) {}
+        }
+        if (hadMotion) {
+          post('info', 'motion: Idle');
+        }
+      }
+
+      // Keep idle as a base layer so partial clips don't snap unanimated bones to base pose.
+      // We only reduce idle weight during one-shot gestures to let them read clearly.
+      const IDLE_WEIGHT_WHILE_GESTURE = 0.35;
+      const IDLE_WEIGHT_LERP_SPEED = 7.5;
+      function updateIdleActionWeight(delta) {
+        if (!idleAction) return;
+        const enabled = window.__idleAnimationEnabled === true;
+        const target =
+          enabled ? (vrmaMotionPlaying ? IDLE_WEIGHT_WHILE_GESTURE : 1.0) : 0.0;
+        try {
+          const cur = typeof idleAction.getEffectiveWeight === 'function'
+            ? idleAction.getEffectiveWeight()
+            : Number(idleAction.weight ?? 1.0);
+          const t = Math.min(1, Math.max(0, delta) * IDLE_WEIGHT_LERP_SPEED);
+          const next = THREE.MathUtils.lerp(cur, target, t);
+          idleAction.setEffectiveWeight(next);
+          idleAction.enabled = next > 0.001;
+          if (idleAction.enabled && typeof idleAction.isRunning === 'function' && !idleAction.isRunning()) {
+            idleAction.play();
+          }
+        } catch (_) {}
+      }
+
+      function applyTalkOverlay(delta) {
+        if (!currentVrm) return;
+        const lerp = THREE.MathUtils.lerp;
+        const rand = THREE.MathUtils.randFloat;
+        const talking = window.__talking === true;
+
+        const headMaxAngle = 0.08;
+        const armMaxAngle = 0.12;
+        const torsoMax = { x: 0.05, y: 0.06, z: 0.04 };
+
+        if (talking) {
+          talkOverlay.headTimer += delta;
+          if (talkOverlay.headTimer >= talkOverlay.headInterval) {
+            talkOverlay.headTimer = 0;
+            talkOverlay.headInterval = rand(0.35, 0.7);
+            talkOverlay.headTarget.x = rand(-headMaxAngle, headMaxAngle);
+            talkOverlay.headTarget.y = rand(-headMaxAngle, headMaxAngle);
+            talkOverlay.headTarget.z = rand(-headMaxAngle, headMaxAngle);
+          }
+
+          talkOverlay.armTimer += delta;
+          if (talkOverlay.armTimer >= talkOverlay.armInterval) {
+            talkOverlay.armTimer = 0;
+            talkOverlay.armInterval = rand(0.45, 0.9);
+            talkOverlay.armTarget.leftX = rand(-armMaxAngle, armMaxAngle);
+            talkOverlay.armTarget.leftZ = rand(-armMaxAngle, armMaxAngle);
+            talkOverlay.armTarget.rightX = rand(-armMaxAngle, armMaxAngle);
+            talkOverlay.armTarget.rightZ = rand(-armMaxAngle, armMaxAngle);
+
+            talkOverlay.torso.tx = rand(-torsoMax.x, torsoMax.x);
+            talkOverlay.torso.ty = rand(-torsoMax.y, torsoMax.y);
+            talkOverlay.torso.tz = rand(-torsoMax.z, torsoMax.z);
+
+            const shoulderLift = rand(-0.06, 0.06);
+            talkOverlay.shoulder.tlz = shoulderLift;
+            talkOverlay.shoulder.trz = -shoulderLift;
+          }
+        } else {
+          talkOverlay.headTarget.x = 0;
+          talkOverlay.headTarget.y = 0;
+          talkOverlay.headTarget.z = 0;
+          talkOverlay.armTarget.leftX = 0;
+          talkOverlay.armTarget.leftZ = 0;
+          talkOverlay.armTarget.rightX = 0;
+          talkOverlay.armTarget.rightZ = 0;
+          talkOverlay.torso.tx = 0;
+          talkOverlay.torso.ty = 0;
+          talkOverlay.torso.tz = 0;
+          talkOverlay.shoulder.tlz = 0;
+          talkOverlay.shoulder.trz = 0;
+        }
+
+        const headLerp = talking ? 5.0 : 3.0;
+        const armLerp = talking ? 5.0 : 3.0;
+        const torsoLerp = talking ? 3.6 : 2.4;
+
+        talkOverlay.head.x = lerp(talkOverlay.head.x, talkOverlay.headTarget.x, delta * headLerp);
+        talkOverlay.head.y = lerp(talkOverlay.head.y, talkOverlay.headTarget.y, delta * headLerp);
+        talkOverlay.head.z = lerp(talkOverlay.head.z, talkOverlay.headTarget.z, delta * headLerp);
+
+        talkOverlay.arm.leftX = lerp(talkOverlay.arm.leftX, talkOverlay.armTarget.leftX, delta * armLerp);
+        talkOverlay.arm.leftZ = lerp(talkOverlay.arm.leftZ, talkOverlay.armTarget.leftZ, delta * armLerp);
+        talkOverlay.arm.rightX = lerp(talkOverlay.arm.rightX, talkOverlay.armTarget.rightX, delta * armLerp);
+        talkOverlay.arm.rightZ = lerp(talkOverlay.arm.rightZ, talkOverlay.armTarget.rightZ, delta * armLerp);
+
+        talkOverlay.torso.x = lerp(talkOverlay.torso.x, talkOverlay.torso.tx, delta * torsoLerp);
+        talkOverlay.torso.y = lerp(talkOverlay.torso.y, talkOverlay.torso.ty, delta * torsoLerp);
+        talkOverlay.torso.z = lerp(talkOverlay.torso.z, talkOverlay.torso.tz, delta * torsoLerp);
+
+        talkOverlay.shoulder.lz = lerp(talkOverlay.shoulder.lz, talkOverlay.shoulder.tlz, delta * torsoLerp);
+        talkOverlay.shoulder.rz = lerp(talkOverlay.shoulder.rz, talkOverlay.shoulder.trz, delta * torsoLerp);
+
+        // Keep gaze stable: avoid fighting lookAt by not touching head/neck here.
+        applyRestRotation('spine', {
+          x: talkOverlay.torso.x * 0.35,
+          y: talkOverlay.torso.y * 0.25,
+          z: talkOverlay.torso.z * 0.25,
+        });
+        applyRestRotation('chest', {
+          x: talkOverlay.torso.x * 0.25,
+          y: talkOverlay.torso.y * 0.4,
+          z: talkOverlay.torso.z * 0.3,
+        });
+        applyRestRotation('upperChest', {
+          x: talkOverlay.torso.x * 0.18,
+          y: talkOverlay.torso.y * 0.5,
+          z: talkOverlay.torso.z * 0.24,
+        });
+        applyRestRotation('leftShoulder', { z: talkOverlay.shoulder.lz });
+        applyRestRotation('rightShoulder', { z: talkOverlay.shoulder.rz });
+        applyRestRotation('leftUpperArm', { x: talkOverlay.arm.leftX, z: talkOverlay.arm.leftZ });
+        applyRestRotation('rightUpperArm', { x: talkOverlay.arm.rightX, z: talkOverlay.arm.rightZ });
+      }
+
+      function playRandomVrmaGesture(now) {
+        if (!currentVrm) return;
+        if (vrmaMotionPlaying) {
+          // If the current clip is longer than the scheduling interval, avoid an
+          // immediate back-to-back trigger right after it ends.
+          autoDrive.nextGesture = Math.max(
+            autoDrive.nextGesture,
+            now + THREE.MathUtils.randFloat(0.35, 0.8),
+          );
+          return;
+        }
+        if (window.__talking !== true) return;
+        if (!Array.isArray(availableVrmaAnimations) || !availableVrmaAnimations.length) return;
+
+        // Only auto-play motions explicitly marked for "talk" to avoid
+        // inappropriate actions (spin/squat/shoot) during normal conversation.
+        const autoTalkUrls = vrmaCatalog
+          .filter((m) => m?.auto?.talk === true)
+          .map((m) => (typeof m.id === 'string' && m.id.trim() ? m.id : m.url))
+          .filter((u) => typeof u === 'string' && u && u !== idleAnimationUrl)
+          .filter((u) => isAutoMotionAllowed(u));
+
+        if (!autoTalkUrls.length) {
+          // No explicit talk motions: rely on the (safe) talk overlay instead of
+          // picking arbitrary full-body clips from the library.
+          autoDrive.nextGesture = now + THREE.MathUtils.randFloat(4.0, 8.0);
+          return;
+        }
+        const candidates = autoTalkUrls;
+
+        const pick = candidates[Math.floor(Math.random() * candidates.length)];
+        tryPlayVrmaMotion(pick).then((played) => {
+          if (played) {
+            post('info', `motion(vrma): ${pick}`);
+            autoDrive.nextGesture = now + THREE.MathUtils.randFloat(6.0, 12.0);
+          } else {
+            autoDrive.nextGesture = now + THREE.MathUtils.randFloat(4.0, 8.0);
+          }
+        });
+      }
+
+      function playRandomVrmaIdleAction(now) {
+        if (!currentVrm) return;
+        if (vrmaMotionPlaying) {
+          autoDrive.nextIdleAction = Math.max(
+            autoDrive.nextIdleAction,
+            now + THREE.MathUtils.randFloat(1.2, 2.4),
+          );
+          return;
+        }
+        if (window.__talking === true) return;
+        if (!Array.isArray(availableVrmaAnimations) || !availableVrmaAnimations.length) return;
+
+        // Idle variations should be explicitly whitelisted by the catalog.
+        const autoIdle = vrmaCatalog
+          .filter((m) => m?.auto?.idle === true && typeof m.url === 'string')
+          .map((m) => (typeof m.id === 'string' && m.id.trim() ? m.id : m.url))
+          .filter((u) => u && u !== idleAnimationUrl && u !== 'idle_loop')
+          .filter((u) => isAutoMotionAllowed(u));
+
+        const candidates = autoIdle;
+        if (!candidates.length) {
+          autoDrive.nextIdleAction = now + THREE.MathUtils.randFloat(30.0, 60.0);
+          return;
+        }
+
+        const pick = candidates[Math.floor(Math.random() * candidates.length)];
+        tryPlayVrmaMotion(pick).then((played) => {
+          if (played) {
+            post('info', `motion(vrma): ${pick}`);
+            autoDrive.nextIdleAction = now + THREE.MathUtils.randFloat(30.0, 300.0);
+          } else {
+            autoDrive.nextIdleAction = now + THREE.MathUtils.randFloat(30.0, 90.0);
+          }
+        });
+      }
+
+      async function tryPlayVrmaMotion(motion) {
+        if (!currentVrm) return false;
+        const urls = motionToVrmaCandidates(motion);
+        if (!urls.length) return false;
+
+        // Ensure mixer exists even if idle failed to load.
+        if (!vrmMixer) {
+          vrmMixer = new THREE.AnimationMixer(currentVrm.scene);
+        }
+
+        for (const url of urls) {
+          let action = vrmaMotionActionCache.get(url);
+          if (!action) {
+            try {
+              const anim = await loadVRMAnimation(url);
+              const clip = await clipFromVRMAnimation(currentVrm, anim);
+              if (!clip) {
+                continue;
+              }
+              reAnchorRootPositionTrack(clip, currentVrm);
+              action = vrmMixer.clipAction(clip);
+              action.setLoop(THREE.LoopOnce, 1);
+              action.clampWhenFinished = true;
+              vrmaMotionActionCache.set(url, action);
+            } catch (_) {
+              continue;
+            }
+          }
+
+           try {
+             // Stop previous one-shot if any.
+             if (activeVrmaMotionAction && activeVrmaMotionAction !== action) {
+              try {
+                // Cross-fade out to avoid snapping when chaining gestures.
+                activeVrmaMotionAction.fadeOut(0.12);
+              } catch (_) {}
+              const prev = activeVrmaMotionAction;
+              setTimeout(() => {
+                // If the action got re-used as the active one, don't kill it.
+                if (activeVrmaMotionAction === prev) return;
+                try {
+                  prev.stop();
+                } catch (_) {}
+              }, 220);
+             }
+             activeVrmaMotionAction = action;
+             vrmaMotionPlaying = true;
+
+            // Keep idle running as a base layer to avoid transient T-poses when a
+            // gesture clip doesn't key every bone (common in third-party packs).
+            if (idleAction && window.__idleAnimationEnabled === true) {
+              try {
+                idleAction.enabled = true;
+                idleAction.play();
+              } catch (_) {}
+            }
+
+             action.enabled = true;
+             action.reset();
+             action.fadeIn(0.12);
+             action.play();
+
+            const duration = Number(action.getClip?.()?.duration ?? 0);
+            const stopAfter =
+              Number.isFinite(duration) && duration > 0.02
+                ? (duration + 0.05)
+                : 0.45;
+            vrmaMotionRestoreTimer = setTimeout(() => {
+              if (activeVrmaMotionAction === action) {
+                stopActiveVrmaMotion();
+              }
+            }, stopAfter * 1000);
+            return true;
+          } catch (_) {
+            // continue trying other candidates
+          }
+        }
+        return false;
       }
 
       async function loadVrmFromUrl(url) {
@@ -468,6 +1255,16 @@
             scene.remove(currentVrm.scene);
             currentVrm = null;
           }
+          vrmMixer?.stopAllAction?.();
+          vrmMixer = null;
+          idleAction = null;
+          activeVrmaMotionAction = null;
+          vrmaMotionPlaying = false;
+          if (vrmaMotionRestoreTimer) {
+            clearTimeout(vrmaMotionRestoreTimer);
+            vrmaMotionRestoreTimer = null;
+          }
+          vrmaMotionActionCache.clear();
           const vrm = gltf.userData.vrm;
           if (vrm) {
             try { VRMUtils.removeUnnecessaryVertices?.(gltf.scene); } catch (e) { console.warn('removeUnnecessaryVertices missing', e); }
@@ -481,6 +1278,11 @@
           currentVrm = vrm;
           cacheBones();
           alignVrmUpright(currentVrm);
+          alignVrmFacing(currentVrm);
+          applyNaturalPose();
+          currentVrm.humanoid?.update?.();
+          currentVrm.springBoneManager?.reset?.();
+          captureBasePose();
           applyRestPose();
           if (window.__stabilityMode === true) {
             applyStableIdle(0);
@@ -491,13 +1293,11 @@
             currentVrm.scene.add(proxy);
             currentVrm.lookAt.target = lookAtTarget;
           }
-          currentVrm.scene.rotation.y = 0; // face camera (VRM forward is -Z)
           currentVrm.scene.position.set(0, 0, 0);
           currentVrm.scene.scale.set(1, 1, 1);
           scene.add(currentVrm.scene);
           frameVrm(currentVrm);
           ensureFacingCamera(currentVrm);
-          frameVrm(currentVrm);
           updateLookAtAnchor();
           blinkController = createBlinkController();
           eyeSaccadeController = createIdleEyeSaccades();
@@ -505,17 +1305,31 @@
 
           // Load idle VRM animation
           try {
+            vrmMixer = new THREE.AnimationMixer(currentVrm.scene);
             const anim = await loadVRMAnimation(idleAnimationUrl);
             const clip = await clipFromVRMAnimation(currentVrm, anim);
             if (clip) {
               reAnchorRootPositionTrack(clip, currentVrm);
-              vrmMixer = new THREE.AnimationMixer(currentVrm.scene);
-              vrmMixer.clipAction(clip).play();
+              idleAction = vrmMixer.clipAction(clip);
+              if (window.__idleAnimationEnabled === true) {
+                idleAction.play();
+              }
+              // Prime the idle action once so rest rotations can be captured.
+              try {
+                if (typeof vrmMixer.setTime === 'function') {
+                  vrmMixer.setTime(0);
+                } else {
+                  vrmMixer.update(1 / 60);
+                }
+              } catch (_) {}
+              captureRestRotations();
+              post('info', 'idle vrma: loaded');
             }
           } catch (e) {
             console.warn('idle animation load failed', e);
           }
-          setStatus('VRM loaded. Use expression/motion hooks to drive avatar.');
+          setStatus('Lumi ready.');
+          hideStatusSoon();
           post('info', 'VRM loaded');
           dumpCapabilities();
         } catch (err) {
@@ -560,9 +1374,104 @@
 
       function setMotion(motion) {
         if (!currentVrm) return;
-        motionMode = motion;
-        motionStart = clock.getElapsedTime();
-        post('info', `motion: ${motion}`);
+        const m = String(motion ?? '').trim();
+        if (!m) return;
+
+        const key = m.toLowerCase();
+
+        // Idle just restores the base animation state.
+        if (key === 'idle' || key === 'idle_loop') {
+          stopActiveVrmaMotion();
+          motionMode = null;
+          motionStart = clock.getElapsedTime();
+          post('info', 'motion: Idle');
+          return;
+        }
+
+        // Procedural actions (named explicitly so the app can decide when to trigger them).
+        if (key === 'procedural_nod' || key === 'nod') {
+          procedural.nod.active = true;
+          procedural.nod.start = clock.getElapsedTime();
+          motionMode = null;
+          motionStart = clock.getElapsedTime();
+          post('info', 'motion(procedural): nod');
+          return;
+        }
+        if (key === 'procedural_look_left' || key === 'lookleft') {
+          procedural.look.until = clock.getElapsedTime() + 1.6;
+          procedural.look.dx = -0.9;
+          procedural.look.dy = 0.0;
+          motionMode = null;
+          motionStart = clock.getElapsedTime();
+          post('info', 'motion(procedural): lookLeft');
+          return;
+        }
+        if (key === 'procedural_look_right' || key === 'lookright') {
+          procedural.look.until = clock.getElapsedTime() + 1.6;
+          procedural.look.dx = 0.9;
+          procedural.look.dy = 0.0;
+          motionMode = null;
+          motionStart = clock.getElapsedTime();
+          post('info', 'motion(procedural): lookRight');
+          return;
+        }
+        if (key === 'procedural_look_at_user' || key === 'lookatuser') {
+          procedural.look.until = 0;
+          procedural.look.dx = 0;
+          procedural.look.dy = 0;
+          motionMode = null;
+          motionStart = clock.getElapsedTime();
+          post('info', 'motion(procedural): lookAtUser');
+          return;
+        }
+
+        // Prefer authored VRMA motions (from reference projects / external assets).
+        // Backward-compatible aliases for older configs.
+        const alias =
+          key === 'wave' ? 'gesture_greeting' :
+          key === 'greeting' ? 'gesture_greeting' :
+          key === 'peace' ? 'gesture_peace' :
+          m;
+
+        tryPlayVrmaMotion(alias).then((played) => {
+          if (played) {
+            motionMode = null;
+            motionStart = clock.getElapsedTime();
+            post('info', `motion(vrma): ${alias}`);
+            return;
+          }
+          // No procedural fallback: avoid scary joint twists from hand-written motions.
+          motionMode = null;
+          motionStart = clock.getElapsedTime();
+          post('info', `motion: unavailable (${alias})`);
+        });
+      }
+
+      function setTalking(flag) {
+        const next = !!flag;
+        const prev = window.__talking === true;
+        window.__talking = next;
+
+        // Make sure even short utterances can trigger a gesture:
+        // schedule the first talk gesture almost immediately on rising edge.
+       if (next && !prev) {
+          const now = clock.getElapsedTime();
+         autoDrive.nextGesture = now + THREE.MathUtils.randFloat(0.08, 0.35);
+         // Avoid idle variations firing right after speech starts.
+         autoDrive.nextIdleAction = Math.max(autoDrive.nextIdleAction, now + 30.0);
+          // Give short utterances a chance to still animate.
+          playRandomVrmaGesture(now);
+          return;
+        }
+
+        // After speech ends, allow idle variations sooner so the avatar stays alive.
+        if (!next && prev) {
+          const now = clock.getElapsedTime();
+          autoDrive.nextIdleAction = Math.min(
+            autoDrive.nextIdleAction,
+            now + THREE.MathUtils.randFloat(30.0, 60.0),
+          );
+        }
       }
 
       window.loadVrmFromBase64 = loadVrmFromBase64;
@@ -570,6 +1479,22 @@
       window.setExpression = setExpression;
       window.setVisemeWeights = setVisemeWeights;
       window.setMotion = setMotion;
+      window.setTalking = setTalking;
+      window.triggerPetDrag = triggerPetDrag;
+      window.setVrmaCatalog = setVrmaCatalog;
+      window.setAutoMotionWhitelist = setAutoMotionWhitelist;
+      window.setAvailableVrmaAnimations = (list) => {
+        if (Array.isArray(list)) {
+          availableVrmaAnimations = list.filter((v) => typeof v === 'string');
+        } else {
+          availableVrmaAnimations = [];
+        }
+        // Ensure idle is always present as a fallback.
+        if (!availableVrmaAnimations.includes(idleAnimationUrl)) {
+          availableVrmaAnimations.unshift(idleAnimationUrl);
+        }
+        post('info', `vrma library: ${availableVrmaAnimations.length}`);
+      };
       window.setControlMode = (mode) => {
         const m = 'basic';
         window.__controlMode = m;
@@ -622,10 +1547,11 @@
           case 'Wave': {
             const wave = Math.sin(time * 6) * 0.18;
             applyRestRotation('rightUpperArm', {
-              x: -0.15 * ease,
-              z: POSE_BASE.armZ - 0.55 * ease,
+              x: -0.35 * ease,
+              y: -0.15 * ease,
+              z: 0.25 * ease,
             });
-            applyRestRotation('rightLowerArm', { z: 0.35 + wave });
+            applyRestRotation('rightLowerArm', { z: 0.45 * ease + wave });
             applyRestRotation('rightHand', { z: wave * 0.6 });
             break;
           }
@@ -875,7 +1801,6 @@
             updateFixationTarget(baseTarget);
           }
           vrm.lookAt.target.position.lerp(fixationTarget, 0.12);
-          vrm.lookAt.update(delta);
           timeSinceLastSaccade += delta;
         }
         function instantUpdate(vrm, target) {
@@ -1241,7 +2166,8 @@
         autoDrive.nextGazeShift = now + rnd(1.2, 3.0);
         autoDrive.nextMicroGesture = now + rnd(4.0, 8.0);
         autoDrive.nextIdleExpression = now + rnd(8.0, 14.0);
-        autoDrive.nextGesture = now + rnd(2.0, 4.0);
+        autoDrive.nextIdleAction = now + rnd(30.0, 300.0);
+        autoDrive.nextGesture = now + rnd(6.0, 12.0);
       }
       scheduleAuto();
 
@@ -1252,32 +2178,46 @@
           stableIdleLogged = true;
           post('info', 'stable idle: active');
         }
-        const now = clock.getElapsedTime();
         const talking = window.__talking === true;
-        const headRange = talking ? 0.12 : 0.08;
-        const armRange = talking ? 0.12 : 0.08;
-        const headLerp = talking ? 5.0 : 3.6;
-        const armLerp = talking ? 4.8 : 3.6;
-        if (!talking) {
-          autoDrive.gesture = null;
+        const motionPlaying = vrmaMotionPlaying === true;
+        const useVrmIdleAnimation = window.__idleAnimationEnabled === true && !!idleAction;
+
+        // Avoid fighting authored full-body clips: procedural idle overlays can
+        // introduce unintended lean/twist when a VRMA one-shot is active.
+        if (motionPlaying) {
+          stabilizePose();
+          return;
         }
+
+        // Even in stability mode, we want the avatar to look alive while "idle"
+        // (otherwise it feels like standing still / 站桩). Keep movements small
+        // and clamp them later to avoid any sudden 360° spins.
+        const headRange = motionPlaying ? 0.03 : (talking ? 0.12 : 0.06);
+        const armRange = motionPlaying ? 0.0 : (talking ? 0.26 : 0.16);
+        const headLerp = talking ? 5.0 : 2.4;
+        const armLerp = talking ? 5.0 : 2.4;
+
+        const applyStableRotation = (name, offset) => applyRestRotation(name, offset);
+
         idlePose.headTimer += delta;
         if (idlePose.headTimer >= idlePose.headInterval) {
           idlePose.headTimer = 0;
-          idlePose.headInterval = rand(talking ? 0.6 : 1.1, talking ? 1.2 : 2.1);
+          idlePose.headInterval = talking ? 0.5 : rand(2.8, 4.8);
           idlePose.headTarget.x = rand(-headRange, headRange);
           idlePose.headTarget.y = rand(-headRange, headRange);
-          idlePose.headTarget.z = rand(-headRange * 0.8, headRange * 0.8);
+          idlePose.headTarget.z = rand(-headRange, headRange);
         }
+
         idlePose.armTimer += delta;
         if (idlePose.armTimer >= idlePose.armInterval) {
           idlePose.armTimer = 0;
-          idlePose.armInterval = rand(talking ? 0.8 : 1.4, talking ? 1.5 : 2.4);
+          idlePose.armInterval = talking ? 0.65 : rand(2.8, 4.6);
           idlePose.armTarget.leftX = rand(-armRange, armRange);
           idlePose.armTarget.leftZ = rand(-armRange, armRange);
           idlePose.armTarget.rightX = rand(-armRange, armRange);
           idlePose.armTarget.rightZ = rand(-armRange, armRange);
         }
+
         idlePose.head.x = lerp(idlePose.head.x, idlePose.headTarget.x, delta * headLerp);
         idlePose.head.y = lerp(idlePose.head.y, idlePose.headTarget.y, delta * headLerp);
         idlePose.head.z = lerp(idlePose.head.z, idlePose.headTarget.z, delta * headLerp);
@@ -1286,97 +2226,98 @@
         idlePose.rightArm.x = lerp(idlePose.rightArm.x, idlePose.armTarget.rightX, delta * armLerp);
         idlePose.rightArm.z = lerp(idlePose.rightArm.z, idlePose.armTarget.rightZ, delta * armLerp);
 
+        // Subtle breathing overlay: pitch only, avoid yaw/roll spins.
         autoDrive.breathPhase += delta * 1.05;
-        autoDrive.idlePhase += delta * (talking ? 1.4 : 0.9);
-        autoDrive.swayPhase += delta * (talking ? 0.9 : 0.6);
-        const breath = Math.sin(autoDrive.breathPhase) * 0.018;
-        const sway = Math.sin(autoDrive.swayPhase) * (talking ? 0.015 : 0.01);
-        const talkNod = talking ? Math.sin(autoDrive.idlePhase * 3.2) * 0.04 : 0;
-        const armSway = Math.sin(autoDrive.idlePhase * 1.2) * (talking ? 0.03 : 0.02);
-        const forearmSway = Math.sin(autoDrive.idlePhase * 1.6 + 1.2) * (talking ? 0.05 : 0.03);
-        const bodyYaw = Math.sin(autoDrive.swayPhase * 0.6) * (talking ? 0.06 : 0.04);
-        const gestureLeft = { upperX: 0, upperY: 0, upperZ: 0, lowerZ: 0, handZ: 0 };
-        const gestureRight = { upperX: 0, upperY: 0, upperZ: 0, lowerZ: 0, handZ: 0 };
-        if (talking && !autoDrive.gesture && now > autoDrive.nextGesture) {
-          autoDrive.gesture = {
-            side: Math.random() < 0.5 ? 'left' : 'right',
-            type: Math.random() < 0.65 ? 'lift' : 'open',
-            start: now,
-            duration: rand(0.6, 1.1),
-          };
-          autoDrive.nextGesture = now + rand(2.2, 3.8);
-        }
-        if (autoDrive.gesture) {
-          const t = (now - autoDrive.gesture.start) / autoDrive.gesture.duration;
+        autoDrive.swayPhase += delta * 0.55;
+        autoDrive.idlePhase += delta * (talking ? 1.25 : 0.75);
+        const breathAmp = useVrmIdleAnimation ? 0.014 : 0.02;
+        const breath = Math.sin(autoDrive.breathPhase) * breathAmp;
+        const swayAmp = talking ? 0.018 : 0.012;
+        const sway = Math.sin(autoDrive.swayPhase) * swayAmp;
+        const sway2 = Math.sin(autoDrive.swayPhase * 0.7 + 1.1) * (swayAmp * 0.8);
+        const shoulderLift = breath * 0.85;
+        const wristWiggle = motionPlaying
+          ? 0
+          : Math.sin(autoDrive.idlePhase * 1.6) * (talking ? 0.08 : 0.04);
+        const wristWiggle2 = motionPlaying
+          ? 0
+          : Math.cos(autoDrive.idlePhase * 1.15 + 0.6) * (talking ? 0.06 : 0.03);
+
+        applyStableRotation('hips', { x: 0, y: sway * 0.18, z: sway2 * 0.12 });
+        applyStableRotation('spine', { x: breath + sway2 * 0.12, y: sway * 0.22, z: sway2 * 0.18 });
+        applyStableRotation('chest', { x: breath * 0.6 + sway2 * 0.10, y: sway * 0.28, z: sway2 * 0.22 });
+        applyStableRotation('upperChest', { x: breath * 0.4 + sway2 * 0.08, y: sway * 0.3, z: sway2 * 0.2 });
+
+        applyStableRotation('leftShoulder', { z: shoulderLift * 0.4 });
+        applyStableRotation('rightShoulder', { z: -shoulderLift * 0.4 });
+
+        const headBase = POSE_BASE.headX * (useVrmIdleAnimation ? 0.35 : 1.0);
+        let headPitch = headBase + idlePose.head.x;
+        // Procedural nod: small pitch-only motion, used for StageMotion.nod etc.
+        if (procedural.nod.active) {
+          const now = clock.getElapsedTime();
+          const t = (now - procedural.nod.start) / Math.max(0.001, procedural.nod.duration);
           if (t >= 1) {
-            autoDrive.gesture = null;
-          } else {
-            const g = Math.sin(Math.PI * t);
-            const sign = autoDrive.gesture.side === 'left' ? -1 : 1;
-            const lift = g * (talking ? 0.45 : 0.3);
-            const open = g * (talking ? 0.18 : 0.12);
-            const curl = g * (talking ? 0.28 : 0.2);
-            if (autoDrive.gesture.side === 'left') {
-              gestureLeft.upperX = -0.35 * lift;
-              gestureLeft.upperY = sign * open * 0.2;
-              gestureLeft.upperZ = sign * open;
-              gestureLeft.lowerZ = sign * curl;
-              gestureLeft.handZ = sign * curl * 0.5;
-            } else {
-              gestureRight.upperX = -0.35 * lift;
-              gestureRight.upperY = sign * open * 0.2;
-              gestureRight.upperZ = sign * open;
-              gestureRight.lowerZ = sign * curl;
-              gestureRight.handZ = sign * curl * 0.5;
-            }
+            procedural.nod.active = false;
+          } else if (t >= 0) {
+            const env = Math.sin(Math.PI * t);
+            headPitch += env * procedural.nod.strength;
           }
         }
-        applyRestRotation('hips', { x: breath * 0.25 + sway * 0.12, y: bodyYaw * 0.3, z: sway * 0.08 });
-        applyRestRotation('spine', { x: breath + sway * 0.18, y: bodyYaw * 0.4, z: sway * 0.1 });
-        applyRestRotation('chest', { x: breath * 0.7 + sway * 0.12, y: bodyYaw * 0.45, z: sway * 0.08 });
-        applyRestRotation('upperChest', { x: breath * 0.5 + sway * 0.08, y: bodyYaw * 0.5, z: sway * 0.06 });
-
-        const headYaw = idlePose.head.y + bodyYaw * 0.4;
-        applyRestRotation('head', {
-          x: POSE_BASE.headX + idlePose.head.x + talkNod,
-          y: headYaw,
-          z: idlePose.head.z,
-        });
-        applyRestRotation('neck', {
-          x: (POSE_BASE.headX + idlePose.head.x + talkNod) * 0.4,
-          y: headYaw * 0.4,
+        applyStableRotation('head', { x: headPitch, y: idlePose.head.y, z: idlePose.head.z });
+        applyStableRotation('neck', {
+          x: headPitch * 0.4,
+          y: idlePose.head.y * 0.4,
           z: idlePose.head.z * 0.4,
         });
-        applyRestRotation('leftUpperArm', {
-          x: idlePose.leftArm.x + armSway + gestureLeft.upperX,
-          y: gestureLeft.upperY,
-          z: -POSE_BASE.armZ + idlePose.leftArm.z + gestureLeft.upperZ,
+
+        // Hands/arms: keep motion visible even when the idle VRMA has few arm tracks.
+        applyStableRotation('leftUpperArm', {
+          x: idlePose.leftArm.x,
+          y: idlePose.leftArm.z * 0.18 + wristWiggle2 * 0.15,
+          z: idlePose.leftArm.z + wristWiggle * 0.15,
         });
-        applyRestRotation('rightUpperArm', {
-          x: idlePose.rightArm.x - armSway + gestureRight.upperX,
-          y: gestureRight.upperY,
-          z: POSE_BASE.armZ + idlePose.rightArm.z + gestureRight.upperZ,
+        applyStableRotation('rightUpperArm', {
+          x: idlePose.rightArm.x,
+          y: -idlePose.rightArm.z * 0.18 - wristWiggle2 * 0.15,
+          z: idlePose.rightArm.z - wristWiggle * 0.15,
         });
-        applyRestRotation('leftLowerArm', {
+        applyStableRotation('leftLowerArm', {
           x: 0,
           y: 0,
-          z: -forearmSway + gestureLeft.lowerZ,
+          z: idlePose.leftArm.z * 0.6 + wristWiggle * 0.18,
         });
-        applyRestRotation('rightLowerArm', {
+        applyStableRotation('rightLowerArm', {
           x: 0,
           y: 0,
-          z: forearmSway + gestureRight.lowerZ,
+          z: idlePose.rightArm.z * 0.6 - wristWiggle * 0.18,
         });
-        applyRestRotation('leftHand', {
-          x: 0,
-          y: 0,
-          z: -forearmSway * 0.4 + gestureLeft.handZ,
+        applyStableRotation('leftHand', {
+          x: wristWiggle2 * 0.35,
+          y: wristWiggle * 0.28,
+          z: idlePose.leftArm.z * 0.45 + wristWiggle * 0.22,
         });
-        applyRestRotation('rightHand', {
-          x: 0,
-          y: 0,
-          z: forearmSway * 0.4 + gestureRight.handZ,
+        applyStableRotation('rightHand', {
+          x: wristWiggle2 * 0.35,
+          y: -wristWiggle * 0.28,
+          z: idlePose.rightArm.z * 0.45 - wristWiggle * 0.22,
         });
+
+        // Fingers: small curl to avoid rigid palms (very conservative to prevent weird twists).
+        if (!motionPlaying) {
+          const fingerAmp = talking ? 0.08 : 0.04;
+          const fingerCurl =
+            Math.abs(Math.sin(autoDrive.idlePhase * 2.3 + 1.2)) * fingerAmp;
+          for (const name of FINGER_BONES) {
+            const weight = name.endsWith('Proximal')
+              ? 1.0
+              : name.endsWith('Intermediate')
+                ? 0.7
+                : 0.45;
+            applyRestRotation(name, { x: fingerCurl * weight, y: 0, z: 0 });
+          }
+        }
+
         stabilizePose();
       }
 
@@ -1391,8 +2332,29 @@
         // Blink + eye saccades + emotion blending (airi)
         blinkController?.update(currentVrm, delta);
         emoteController?.update(delta);
-        if (stabilityMode) {
-          applyStableIdle(delta);
+          if (stabilityMode) {
+            updateLookAtAnchor();
+            eyeSaccadeController?.update(currentVrm, lookAtBase, delta);
+            const useVrmIdleAnimation =
+              window.__idleAnimationEnabled === true && !!idleAction;
+            const allowProcedural =
+              window.__proceduralIdleEnabled === true || !useVrmIdleAnimation;
+            if (allowProcedural) {
+              applyStableIdle(delta);
+            } else if (window.__talking === true && !vrmaMotionPlaying) {
+              // Prefer authored VRMA talk motions; only fall back to a procedural
+              // talk overlay when no talk-tagged motions exist.
+              const hasTalkVrma = vrmaCatalog.some((m) => m?.auto?.talk === true);
+              if (!hasTalkVrma) {
+                applyTalkOverlay(delta);
+              }
+            }
+            if (window.__talking === true && now > autoDrive.nextGesture) {
+              playRandomVrmaGesture(now);
+            }
+          if (window.__talking !== true && now > autoDrive.nextIdleAction) {
+            playRandomVrmaIdleAction(now);
+          }
           return;
         }
         if (!stabilityMode) {
@@ -1484,31 +2446,53 @@
 
       function animate() {
         requestAnimationFrame(animate);
-        const delta = clock.getDelta();
+        let delta = clock.getDelta();
+        if (!Number.isFinite(delta) || delta <= 0) {
+          delta = 1 / 60;
+        }
+        // Clamp delta to prevent spring/lookAt instability on frame hitches (common in WebView2)
+        delta = Math.min(delta, 1 / 30);
         if (currentVrm) {
           const stabilityMode = window.__stabilityMode === true;
-          if (stabilityMode && currentVrm.humanoid?.resetNormalizedPose) {
-            currentVrm.humanoid.resetNormalizedPose();
+          if (stabilityMode) {
+            // Prevent pose drift: always start from the model's base pose, then apply
+            // VRMA + overlays for this frame (mirrors the reference projects' approach).
+            resetToBasePose();
           }
-          if (vrmMixer && window.__idleAnimationEnabled) {
+          if (vrmMixer && (window.__idleAnimationEnabled || vrmaMotionPlaying)) {
+            updateIdleActionWeight(delta);
             vrmMixer.update(delta);
+          }
+          if (stabilityMode && vrmMixer && (window.__idleAnimationEnabled || vrmaMotionPlaying)) {
+            stabilizeAnimationPose();
+            captureRestRotations();
           }
           runAutoDrive(delta, clock.getElapsedTime());
           if (!stabilityMode || motionMode) {
-            applyMotion(clock.getElapsedTime());
+            if (!vrmaMotionPlaying) {
+              applyMotion(clock.getElapsedTime());
+            }
           }
           if (typeof currentVrm.update === 'function') {
             if (!stabilityMode) {
               currentVrm.update(delta);
             } else {
               currentVrm.humanoid?.update?.();
+              currentVrm.lookAt?.update?.(delta);
+              stabilizePose();
+              // Apply clamped bone rotations to the actual skeleton this frame
+              // (prevents one-frame spikes).
+              currentVrm.humanoid?.update?.();
+              currentVrm.springBoneManager?.update?.(delta);
             }
           } else {
             currentVrm.humanoid?.update?.();
-            if (!stabilityMode) {
-              currentVrm.lookAt?.update?.(delta);
-              currentVrm.springBoneManager?.update?.(delta);
+            currentVrm.lookAt?.update?.(delta);
+            if (stabilityMode) {
+              stabilizePose();
+              currentVrm.humanoid?.update?.();
             }
+            currentVrm.springBoneManager?.update?.(delta);
           }
         }
         renderer.render(scene, camera);

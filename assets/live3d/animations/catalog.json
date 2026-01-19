@@ -1,0 +1,668 @@
+{
+  "version": 1,
+  "motions": [
+    {
+      "id": "idle_loop",
+      "name": "Idle（呼吸循环）",
+      "type": "idle",
+      "url": "/assets/vrm_core/animations/idle_loop.vrma",
+      "auto": {
+        "idle": true
+      }
+    },
+    {
+      "id": "gesture_greeting",
+      "name": "Greeting / Wave（打招呼）",
+      "type": "gesture",
+      "subtype": "idle",
+      "url": "/assets/vrm_core/animations/vroid_vrma_motion_pack/VRMA_02.vrma",
+      "auto": {
+        "idle": true
+      },
+      "tags": [
+        "greet",
+        "wave"
+      ]
+    },
+    {
+      "id": "gesture_peace",
+      "name": "Peace Sign（比耶）",
+      "type": "gesture",
+      "subtype": "idle",
+      "url": "/assets/vrm_core/animations/vroid_vrma_motion_pack/VRMA_03.vrma",
+      "auto": {
+        "idle": true
+      },
+      "tags": [
+        "peace"
+      ]
+    },
+    {
+      "id": "hover_reaction",
+      "name": "Hover Reaction（鼠标悬停反馈）",
+      "type": "interaction",
+      "subtype": "hover",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_MISC/HoverReaction.vrma",
+      "auto": {
+        "hover": true
+      },
+      "tags": [
+        "hover",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "pose_model",
+      "name": "Model Pose（摆拍）",
+      "type": "pose",
+      "url": "/assets/vrm_core/animations/vroid_vrma_motion_pack/VRMA_06.vrma",
+      "auto": {
+        "idle": true
+      },
+      "tags": [
+        "pose",
+        "selfie",
+        "photo"
+      ]
+    },
+    {
+      "id": "action_show_full_body",
+      "name": "Show Full Body（展示全身）",
+      "type": "action",
+      "url": "/assets/vrm_core/animations/vroid_vrma_motion_pack/VRMA_01.vrma",
+      "auto": {
+        "idle": true
+      },
+      "tags": [
+        "fullbody",
+        "show",
+        "selfie"
+      ]
+    },
+    {
+      "id": "action_shoot",
+      "name": "Shoot（射击动作）",
+      "type": "action",
+      "url": "/assets/vrm_core/animations/vroid_vrma_motion_pack/VRMA_04.vrma",
+      "auto": {
+        "idle": true
+      },
+      "tags": [
+        "shoot"
+      ]
+    },
+    {
+      "id": "action_spin",
+      "name": "Spin（旋转）",
+      "type": "action",
+      "url": "/assets/vrm_core/animations/vroid_vrma_motion_pack/VRMA_05.vrma",
+      "auto": {
+        "idle": true
+      },
+      "tags": [
+        "spin"
+      ]
+    },
+    {
+      "id": "action_squat",
+      "name": "Squat（下蹲）",
+      "type": "action",
+      "url": "/assets/vrm_core/animations/vroid_vrma_motion_pack/VRMA_07.vrma",
+      "auto": {
+        "idle": true
+      },
+      "tags": [
+        "squat"
+      ]
+    },
+    {
+      "id": "mme_face_layer_face_idle_1",
+      "name": "My-Mate FACE_LAYER/FACE_IDLE_1",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/FACE_LAYER/FACE_IDLE_1.vrma",
+      "type": "expression",
+      "tags": [
+        "face",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_face_layer_pet_happy",
+      "name": "My-Mate FACE_LAYER/PET_HAPPY",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/FACE_LAYER/PET_HAPPY.vrma",
+      "type": "expression",
+      "tags": [
+        "face",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_big_screen_pet_idle_4",
+      "name": "My-Mate PET_BIG_SCREEN/PET_IDLE_4",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_BIG_SCREEN/PET_IDLE_4.vrma",
+      "type": "idle",
+      "tags": [
+        "idle",
+        "my-mate-engine",
+        "pet_big_screen"
+      ]
+    },
+    {
+      "id": "mme_pet_dancing_pet_dancing",
+      "name": "My-Mate PET_DANCING/PET_DANCING",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_DANCING/PET_DANCING.vrma",
+      "type": "dance",
+      "tags": [
+        "dance",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_dancing_pet_dancing_10",
+      "name": "My-Mate PET_DANCING/PET_DANCING_10",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_DANCING/PET_DANCING_10.vrma",
+      "type": "dance",
+      "tags": [
+        "dance",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_dancing_pet_dancing_11",
+      "name": "My-Mate PET_DANCING/PET_DANCING_11",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_DANCING/PET_DANCING_11.vrma",
+      "type": "dance",
+      "tags": [
+        "dance",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_dancing_pet_dancing_12",
+      "name": "My-Mate PET_DANCING/PET_DANCING_12",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_DANCING/PET_DANCING_12.vrma",
+      "type": "dance",
+      "tags": [
+        "dance",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_dancing_pet_dancing_13",
+      "name": "My-Mate PET_DANCING/PET_DANCING_13",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_DANCING/PET_DANCING_13.vrma",
+      "type": "dance",
+      "tags": [
+        "dance",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_dancing_pet_dancing_2",
+      "name": "My-Mate PET_DANCING/PET_DANCING_2",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_DANCING/PET_DANCING_2.vrma",
+      "type": "dance",
+      "tags": [
+        "dance",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_dancing_pet_dancing_3",
+      "name": "My-Mate PET_DANCING/PET_DANCING_3",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_DANCING/PET_DANCING_3.vrma",
+      "type": "dance",
+      "tags": [
+        "dance",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_dancing_pet_dancing_4",
+      "name": "My-Mate PET_DANCING/PET_DANCING_4",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_DANCING/PET_DANCING_4.vrma",
+      "type": "dance",
+      "tags": [
+        "dance",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_dancing_pet_dancing_5",
+      "name": "My-Mate PET_DANCING/PET_DANCING_5",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_DANCING/PET_DANCING_5.vrma",
+      "type": "dance",
+      "tags": [
+        "dance",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_dancing_pet_dancing_6",
+      "name": "My-Mate PET_DANCING/PET_DANCING_6",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_DANCING/PET_DANCING_6.vrma",
+      "type": "dance",
+      "tags": [
+        "dance",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_dancing_pet_dancing_7",
+      "name": "My-Mate PET_DANCING/PET_DANCING_7",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_DANCING/PET_DANCING_7.vrma",
+      "type": "dance",
+      "tags": [
+        "dance",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_dancing_pet_dancing_8",
+      "name": "My-Mate PET_DANCING/PET_DANCING_8",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_DANCING/PET_DANCING_8.vrma",
+      "type": "dance",
+      "tags": [
+        "dance",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_dancing_pet_dancing_9",
+      "name": "My-Mate PET_DANCING/PET_DANCING_9",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_DANCING/PET_DANCING_9.vrma",
+      "type": "dance",
+      "tags": [
+        "dance",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_idle_pet_idle",
+      "name": "My-Mate PET_IDLE/PET_IDLE",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_IDLE/PET_IDLE.vrma",
+      "type": "idle",
+      "tags": [
+        "idle",
+        "my-mate-engine",
+        "pet_idle"
+      ]
+    },
+    {
+      "id": "mme_pet_idle_pet_idle_10",
+      "name": "My-Mate PET_IDLE/PET_IDLE_10",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_IDLE/PET_IDLE_10.vrma",
+      "type": "idle",
+      "tags": [
+        "idle",
+        "my-mate-engine",
+        "pet_idle"
+      ]
+    },
+    {
+      "id": "mme_pet_idle_pet_idle_11",
+      "name": "My-Mate PET_IDLE/PET_IDLE_11",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_IDLE/PET_IDLE_11.vrma",
+      "type": "idle",
+      "tags": [
+        "idle",
+        "my-mate-engine",
+        "pet_idle"
+      ]
+    },
+    {
+      "id": "mme_pet_idle_pet_idle_12",
+      "name": "My-Mate PET_IDLE/PET_IDLE_12",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_IDLE/PET_IDLE_12.vrma",
+      "type": "idle",
+      "tags": [
+        "idle",
+        "my-mate-engine",
+        "pet_idle"
+      ]
+    },
+    {
+      "id": "mme_pet_idle_pet_idle_13",
+      "name": "My-Mate PET_IDLE/PET_IDLE_13",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_IDLE/PET_IDLE_13.vrma",
+      "type": "idle",
+      "tags": [
+        "idle",
+        "my-mate-engine",
+        "pet_idle"
+      ]
+    },
+    {
+      "id": "mme_pet_idle_pet_idle_14",
+      "name": "My-Mate PET_IDLE/PET_IDLE_14",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_IDLE/PET_IDLE_14.vrma",
+      "type": "idle",
+      "tags": [
+        "idle",
+        "my-mate-engine",
+        "pet_idle"
+      ]
+    },
+    {
+      "id": "mme_pet_idle_pet_idle_15",
+      "name": "My-Mate PET_IDLE/PET_IDLE_15",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_IDLE/PET_IDLE_15.vrma",
+      "type": "idle",
+      "tags": [
+        "idle",
+        "my-mate-engine",
+        "pet_idle"
+      ]
+    },
+    {
+      "id": "mme_pet_idle_pet_idle_2",
+      "name": "My-Mate PET_IDLE/PET_IDLE_2",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_IDLE/PET_IDLE_2.vrma",
+      "type": "idle",
+      "tags": [
+        "idle",
+        "my-mate-engine",
+        "pet_idle"
+      ]
+    },
+    {
+      "id": "mme_pet_idle_pet_idle_3",
+      "name": "My-Mate PET_IDLE/PET_IDLE_3",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_IDLE/PET_IDLE_3.vrma",
+      "type": "idle",
+      "tags": [
+        "idle",
+        "my-mate-engine",
+        "pet_idle"
+      ]
+    },
+    {
+      "id": "mme_pet_idle_pet_idle_4",
+      "name": "My-Mate PET_IDLE/PET_IDLE_4",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_IDLE/PET_IDLE_4.vrma",
+      "type": "idle",
+      "tags": [
+        "idle",
+        "my-mate-engine",
+        "pet_idle"
+      ]
+    },
+    {
+      "id": "mme_pet_idle_pet_idle_5",
+      "name": "My-Mate PET_IDLE/PET_IDLE_5",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_IDLE/PET_IDLE_5.vrma",
+      "type": "idle",
+      "tags": [
+        "idle",
+        "my-mate-engine",
+        "pet_idle"
+      ]
+    },
+    {
+      "id": "mme_pet_idle_pet_idle_6",
+      "name": "My-Mate PET_IDLE/PET_IDLE_6",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_IDLE/PET_IDLE_6.vrma",
+      "type": "idle",
+      "tags": [
+        "idle",
+        "my-mate-engine",
+        "pet_idle"
+      ]
+    },
+    {
+      "id": "mme_pet_idle_pet_idle_7",
+      "name": "My-Mate PET_IDLE/PET_IDLE_7",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_IDLE/PET_IDLE_7.vrma",
+      "type": "idle",
+      "tags": [
+        "idle",
+        "my-mate-engine",
+        "pet_idle"
+      ]
+    },
+    {
+      "id": "mme_pet_idle_pet_idle_8",
+      "name": "My-Mate PET_IDLE/PET_IDLE_8",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_IDLE/PET_IDLE_8.vrma",
+      "type": "idle",
+      "tags": [
+        "idle",
+        "my-mate-engine",
+        "pet_idle"
+      ]
+    },
+    {
+      "id": "mme_pet_idle_pet_idle_9",
+      "name": "My-Mate PET_IDLE/PET_IDLE_9",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_IDLE/PET_IDLE_9.vrma",
+      "type": "idle",
+      "tags": [
+        "idle",
+        "my-mate-engine",
+        "pet_idle"
+      ]
+    },
+    {
+      "id": "mme_pet_idle_pet_idle_non_1",
+      "name": "My-Mate PET_IDLE/PET_IDLE_NON_1",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_IDLE/PET_IDLE_NON_1.vrma",
+      "type": "idle",
+      "tags": [
+        "idle",
+        "my-mate-engine",
+        "pet_idle"
+      ]
+    },
+    {
+      "id": "mme_pet_idle_2",
+      "name": "My-Mate PET_IDLE/ちょっとした紹介2号",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_IDLE/ちょっとした紹介2号.vrma",
+      "type": "idle",
+      "tags": [
+        "idle",
+        "my-mate-engine",
+        "pet_idle"
+      ]
+    },
+    {
+      "id": "mme_pet_intro_pet_intro",
+      "name": "My-Mate PET_INTRO/PET_INTRO",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_INTRO/PET_INTRO.vrma",
+      "type": "action",
+      "subtype": "intro",
+      "tags": [
+        "intro",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_intro_pet_intro_end",
+      "name": "My-Mate PET_INTRO/PET_INTRO_END",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_INTRO/PET_INTRO_END.vrma",
+      "type": "action",
+      "subtype": "intro",
+      "tags": [
+        "intro",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_intro_pet_intro_loop",
+      "name": "My-Mate PET_INTRO/PET_INTRO_LOOP",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_INTRO/PET_INTRO_LOOP.vrma",
+      "type": "action",
+      "subtype": "intro",
+      "tags": [
+        "intro",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_intro_pet_intro_start",
+      "name": "My-Mate PET_INTRO/PET_INTRO_START",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_INTRO/PET_INTRO_START.vrma",
+      "type": "action",
+      "subtype": "intro",
+      "tags": [
+        "intro",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_misc_beta_pet_window_lay",
+      "name": "My-Mate PET_MISC/BETA_PET_WINDOW_LAY",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_MISC/BETA_PET_WINDOW_LAY.vrma",
+      "type": "action",
+      "tags": [
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_misc_face_smile_1",
+      "name": "My-Mate PET_MISC/FACE_SMILE 1",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_MISC/FACE_SMILE 1.vrma",
+      "type": "gesture",
+      "subtype": "talk",
+      "tags": [
+        "talk",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_misc_face_smile",
+      "name": "My-Mate PET_MISC/FACE_SMILE",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_MISC/FACE_SMILE.vrma",
+      "type": "gesture",
+      "subtype": "talk",
+      "tags": [
+        "talk",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_misc_hoverface",
+      "name": "My-Mate PET_MISC/HoverFace",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_MISC/HoverFace.vrma",
+      "type": "interaction",
+      "subtype": "hover",
+      "tags": [
+        "hover",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_misc_pet_dragging",
+      "name": "My-Mate PET_MISC/PET_DRAGGING",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_MISC/PET_DRAGGING.vrma",
+      "type": "interaction",
+      "subtype": "drag",
+      "tags": [
+        "drag",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_misc_pet_happy",
+      "name": "My-Mate PET_MISC/PET_HAPPY",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_MISC/PET_HAPPY.vrma",
+      "type": "gesture",
+      "subtype": "talk",
+      "tags": [
+        "talk",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_misc_pet_laughing",
+      "name": "My-Mate PET_MISC/PET_LAUGHING",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_MISC/PET_LAUGHING.vrma",
+      "type": "gesture",
+      "subtype": "talk",
+      "tags": [
+        "talk",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_misc_pet_shy_point",
+      "name": "My-Mate PET_MISC/PET_SHY_POINT",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_MISC/PET_SHY_POINT.vrma",
+      "type": "gesture",
+      "subtype": "talk",
+      "tags": [
+        "talk",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_misc_place_holder_animation",
+      "name": "My-Mate PET_MISC/PLACE_HOLDER_ANIMATION",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_MISC/PLACE_HOLDER_ANIMATION.vrma",
+      "type": "action",
+      "tags": [
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_pose_pet_pose_1",
+      "name": "My-Mate PET_POSE/PET_POSE_1",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_POSE/PET_POSE_1.vrma",
+      "type": "pose",
+      "tags": [
+        "pose",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_pose_pet_pose_2",
+      "name": "My-Mate PET_POSE/PET_POSE_2",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_POSE/PET_POSE_2.vrma",
+      "type": "pose",
+      "tags": [
+        "pose",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_pose_pet_pose_3",
+      "name": "My-Mate PET_POSE/PET_POSE_3",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_POSE/PET_POSE_3.vrma",
+      "type": "pose",
+      "tags": [
+        "pose",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_pose_pet_pose_4",
+      "name": "My-Mate PET_POSE/PET_POSE_4",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_POSE/PET_POSE_4.vrma",
+      "type": "pose",
+      "tags": [
+        "pose",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_sitting_pet_sitting_demo",
+      "name": "My-Mate PET_SITTING/PET_SITTING_DEMO",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_SITTING/PET_SITTING_DEMO.vrma",
+      "type": "pose",
+      "subtype": "sit",
+      "tags": [
+        "sit",
+        "my-mate-engine"
+      ]
+    },
+    {
+      "id": "mme_pet_sitting_pet_sitting_demo_2",
+      "name": "My-Mate PET_SITTING/PET_SITTING_DEMO_2",
+      "url": "/assets/vrm_core/animations/my_mate_engine_converted/PET_SITTING/PET_SITTING_DEMO_2.vrma",
+      "type": "pose",
+      "subtype": "sit",
+      "tags": [
+        "sit",
+        "my-mate-engine"
+      ]
+    }
+  ]
+}

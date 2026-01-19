@@ -40,6 +40,15 @@ class AppSettings {
     this.personaPrompt,
     this.enableSystemTts = true,
     this.enableSystemStt = true,
+    this.petMode = false,
+    this.petFollowCursor = true,
+    this.motionAgentEnabled = false,
+    this.motionAgentProviderId,
+    this.motionBasicCount = 9,
+    this.motionAgentCooldownSeconds = 12,
+    this.memoryAgentEnabled = false,
+    this.memoryAgentProviderId,
+    this.memoryAgentCooldownSeconds = 20,
   });
 
   ModelRoute route;
@@ -56,6 +65,15 @@ class AppSettings {
   String? personaPrompt;
   bool enableSystemTts;
   bool enableSystemStt;
+  bool petMode;
+  bool petFollowCursor;
+  bool motionAgentEnabled;
+  String? motionAgentProviderId;
+  int motionBasicCount;
+  int motionAgentCooldownSeconds;
+  bool memoryAgentEnabled;
+  String? memoryAgentProviderId;
+  int memoryAgentCooldownSeconds;
 
   AppSettings copyWith({
     ModelRoute? route,
@@ -72,6 +90,15 @@ class AppSettings {
     Object? personaPrompt = _unset,
     bool? enableSystemTts,
     bool? enableSystemStt,
+    bool? petMode,
+    bool? petFollowCursor,
+    bool? motionAgentEnabled,
+    String? motionAgentProviderId,
+    int? motionBasicCount,
+    int? motionAgentCooldownSeconds,
+    bool? memoryAgentEnabled,
+    String? memoryAgentProviderId,
+    int? memoryAgentCooldownSeconds,
   }) {
     return AppSettings(
       route: route ?? this.route,
@@ -90,6 +117,17 @@ class AppSettings {
           : personaPrompt as String?,
       enableSystemTts: enableSystemTts ?? this.enableSystemTts,
       enableSystemStt: enableSystemStt ?? this.enableSystemStt,
+      petMode: petMode ?? this.petMode,
+      petFollowCursor: petFollowCursor ?? this.petFollowCursor,
+      motionAgentEnabled: motionAgentEnabled ?? this.motionAgentEnabled,
+      motionAgentProviderId: motionAgentProviderId ?? this.motionAgentProviderId,
+      motionBasicCount: motionBasicCount ?? this.motionBasicCount,
+      motionAgentCooldownSeconds:
+          motionAgentCooldownSeconds ?? this.motionAgentCooldownSeconds,
+      memoryAgentEnabled: memoryAgentEnabled ?? this.memoryAgentEnabled,
+      memoryAgentProviderId: memoryAgentProviderId ?? this.memoryAgentProviderId,
+      memoryAgentCooldownSeconds:
+          memoryAgentCooldownSeconds ?? this.memoryAgentCooldownSeconds,
     );
   }
 
@@ -108,6 +146,15 @@ class AppSettings {
         'persona_prompt': personaPrompt,
         'enable_system_tts': enableSystemTts,
         'enable_system_stt': enableSystemStt,
+        'pet_mode': petMode,
+        'pet_follow_cursor': petFollowCursor,
+        'motion_agent_enabled': motionAgentEnabled,
+        'motion_agent_provider_id': motionAgentProviderId,
+        'motion_basic_count': motionBasicCount,
+        'motion_agent_cooldown_seconds': motionAgentCooldownSeconds,
+        'memory_agent_enabled': memoryAgentEnabled,
+        'memory_agent_provider_id': memoryAgentProviderId,
+        'memory_agent_cooldown_seconds': memoryAgentCooldownSeconds,
       };
 
   factory AppSettings.fromJson(Map<String, dynamic> json) => AppSettings(
@@ -137,5 +184,16 @@ class AppSettings {
         personaPrompt: json['persona_prompt'] as String?,
         enableSystemTts: json['enable_system_tts'] as bool? ?? true,
         enableSystemStt: json['enable_system_stt'] as bool? ?? true,
+        petMode: json['pet_mode'] as bool? ?? false,
+        petFollowCursor: json['pet_follow_cursor'] as bool? ?? true,
+        motionAgentEnabled: json['motion_agent_enabled'] as bool? ?? false,
+        motionAgentProviderId: json['motion_agent_provider_id'] as String?,
+        motionBasicCount: json['motion_basic_count'] as int? ?? 9,
+        motionAgentCooldownSeconds:
+            json['motion_agent_cooldown_seconds'] as int? ?? 12,
+        memoryAgentEnabled: json['memory_agent_enabled'] as bool? ?? false,
+        memoryAgentProviderId: json['memory_agent_provider_id'] as String?,
+        memoryAgentCooldownSeconds:
+            json['memory_agent_cooldown_seconds'] as int? ?? 20,
       );
 }

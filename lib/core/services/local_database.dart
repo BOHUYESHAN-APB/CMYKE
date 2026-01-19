@@ -2,20 +2,46 @@ import 'dart:io';
 
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart' as ffi;
 
 class LocalDatabase {
   Database? _database;
+  Future<Database>? _opening;
 
   Future<Database> get database async {
-    if (_database != null) {
-      return _database!;
+    final cached = _database;
+    if (cached != null) {
+      return cached;
     }
-    _database = await _open();
-    return _database!;
+    final opening = _opening;
+    if (opening != null) {
+      return opening;
+    }
+    final future = _open();
+    _opening = future;
+    try {
+      final db = await future;
+      _database = db;
+      return db;
+    } finally {
+      if (identical(_opening, future)) {
+        _opening = null;
+      }
+    }
   }
 
   Future<void> close() async {
+    final opening = _opening;
+    if (opening != null) {
+      try {
+        final db = await opening;
+        await db.close();
+      } catch (_) {}
+      _opening = null;
+      _database = null;
+      return;
+    }
     final db = _database;
     if (db == null) {
       return;
@@ -25,16 +51,24 @@ class LocalDatabase {
   }
 
   Future<Database> _open() async {
-    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
-      sqfliteFfiInit();
-      if (databaseFactoryOrNull == null) {
-        databaseFactory = databaseFactoryFfi;
-      }
-    }
     final dbPath = await _databasePath();
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      ffi.sqfliteFfiInit();
+      return ffi.databaseFactoryFfi.openDatabase(
+        dbPath,
+        options: OpenDatabaseOptions(
+          version: 12,
+          onConfigure: (db) async {
+            await db.execute('PRAGMA foreign_keys = ON');
+          },
+          onCreate: _createSchema,
+          onUpgrade: _upgradeSchema,
+        ),
+      );
+    }
     return openDatabase(
       dbPath,
-      version: 9,
+      version: 12,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
       },
@@ -161,7 +195,16 @@ class LocalDatabase {
         persona_style TEXT,
         persona_prompt TEXT,
         enable_system_tts INTEGER NOT NULL DEFAULT 1,
-        enable_system_stt INTEGER NOT NULL DEFAULT 1
+        enable_system_stt INTEGER NOT NULL DEFAULT 1,
+        pet_mode INTEGER NOT NULL DEFAULT 0,
+        pet_follow_cursor INTEGER NOT NULL DEFAULT 1,
+        motion_agent_enabled INTEGER NOT NULL DEFAULT 0,
+        motion_agent_provider_id TEXT,
+        motion_basic_count INTEGER NOT NULL DEFAULT 9,
+        motion_agent_cooldown_seconds INTEGER NOT NULL DEFAULT 12,
+        memory_agent_enabled INTEGER NOT NULL DEFAULT 0,
+        memory_agent_provider_id TEXT,
+        memory_agent_cooldown_seconds INTEGER NOT NULL DEFAULT 20
       )
     ''');
   }
@@ -202,6 +245,39 @@ class LocalDatabase {
       );
       await db.execute(
         'ALTER TABLE app_settings ADD COLUMN enable_system_stt INTEGER NOT NULL DEFAULT 1',
+      );
+    }
+    if (oldVersion < 10) {
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN pet_mode INTEGER NOT NULL DEFAULT 0',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN pet_follow_cursor INTEGER NOT NULL DEFAULT 1',
+      );
+    }
+    if (oldVersion < 11) {
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN motion_agent_enabled INTEGER NOT NULL DEFAULT 0',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN motion_agent_provider_id TEXT',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN motion_basic_count INTEGER NOT NULL DEFAULT 9',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN motion_agent_cooldown_seconds INTEGER NOT NULL DEFAULT 12',
+      );
+    }
+    if (oldVersion < 12) {
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN memory_agent_enabled INTEGER NOT NULL DEFAULT 0',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN memory_agent_provider_id TEXT',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN memory_agent_cooldown_seconds INTEGER NOT NULL DEFAULT 20',
       );
     }
   }

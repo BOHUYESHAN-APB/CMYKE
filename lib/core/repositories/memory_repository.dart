@@ -36,6 +36,8 @@ class MemoryRepository extends ChangeNotifier {
   static const String _collectionsTable = 'memory_collections';
   static const String _recordsTable = 'memory_records';
   static const String _sessionSummaryTag = 'session_summary';
+  static const String _coreKeyTagPrefix = 'core_key:';
+  static const String _agentTag = 'agent:auto';
 
   List<MemoryCollection> get collections => List.unmodifiable(_collections);
 
@@ -131,7 +133,7 @@ class MemoryRepository extends ChangeNotifier {
     );
 
     final embedding = await _embedText(normalizedRecord.content);
-    collection.records.insert(0, normalizedRecord);
+    _insertRecordSorted(collection, normalizedRecord);
     if (embedding != null) {
       _recordEmbeddings[normalizedRecord.id] = embedding;
     } else {
@@ -165,8 +167,20 @@ class MemoryRepository extends ChangeNotifier {
       .where((collection) => collection.tier == tier)
       .toList(growable: false);
 
-  MemoryCollection defaultCollection(MemoryTier tier) =>
-      collectionsByTier(tier).first;
+  MemoryCollection defaultCollection(MemoryTier tier) {
+    var collections = collectionsByTier(tier);
+    if (collections.isNotEmpty) {
+      return collections.first;
+    }
+    if (_collections.isEmpty) {
+      _collections.addAll(_bootstrapCollections());
+      collections = collectionsByTier(tier);
+      if (collections.isNotEmpty) {
+        return collections.first;
+      }
+    }
+    throw StateError('No memory collection available for tier: ${tier.key}');
+  }
 
   Future<void> load() async {
     final db = await _database.database;
@@ -228,6 +242,7 @@ class MemoryRepository extends ChangeNotifier {
     String? collectionId,
     String? sessionId,
     String? scope,
+    bool embed = true,
   }) async {
     final db = await _database.database;
     final collection = collectionId == null
@@ -239,8 +254,11 @@ class MemoryRepository extends ChangeNotifier {
       sessionId: sessionId,
       scope: scope,
     );
-    final embedding = await _embedText(normalizedRecord.content);
-    collection.records.insert(0, normalizedRecord);
+    List<double>? embedding;
+    if (embed) {
+      embedding = await _embedText(normalizedRecord.content);
+    }
+    _insertRecordSorted(collection, normalizedRecord);
     if (embedding != null) {
       _recordEmbeddings[normalizedRecord.id] = embedding;
     }
@@ -262,6 +280,7 @@ class MemoryRepository extends ChangeNotifier {
     required MemoryRecord record,
     String? sessionId,
     String? scope,
+    bool embed = true,
   }) async {
     final db = await _database.database;
     final collection =
@@ -279,13 +298,15 @@ class MemoryRepository extends ChangeNotifier {
     );
     collection.records[index] = normalizedRecord;
     List<double>? embedding;
-    if (previous.content != normalizedRecord.content) {
+    if (embed && previous.content != normalizedRecord.content) {
       embedding = await _embedText(normalizedRecord.content);
       if (embedding != null) {
         _recordEmbeddings[normalizedRecord.id] = embedding;
       } else {
         _recordEmbeddings.remove(normalizedRecord.id);
       }
+    } else if (!embed && previous.content != normalizedRecord.content) {
+      _recordEmbeddings.remove(normalizedRecord.id);
     }
     notifyListeners();
     final storedEmbedding = embedding ?? _recordEmbeddings[normalizedRecord.id];
@@ -299,6 +320,156 @@ class MemoryRepository extends ChangeNotifier {
       ),
       where: 'id = ?',
       whereArgs: [record.id],
+    );
+  }
+
+  MemoryRecord? coreMemoryByKey(String key) {
+    final normalizedKey = key.trim();
+    if (normalizedKey.isEmpty) return null;
+    final tag = '$_coreKeyTagPrefix$normalizedKey';
+    final scope = _defaultScopeForTier(MemoryTier.crossSession);
+    final collection = defaultCollection(MemoryTier.crossSession);
+    for (final record in collection.records) {
+      if (record.scope == scope && record.tags.contains(tag)) {
+        return record;
+      }
+    }
+    return null;
+  }
+
+  List<Map<String, String>> exportCoreKeyValues({int limit = 40}) {
+    final scope = _defaultScopeForTier(MemoryTier.crossSession);
+    final collection = defaultCollection(MemoryTier.crossSession);
+    final out = <Map<String, String>>[];
+    for (final record in collection.records) {
+      if (record.scope != scope) continue;
+      final key = record.tags
+          .where((t) => t.startsWith(_coreKeyTagPrefix))
+          .map((t) => t.substring(_coreKeyTagPrefix.length).trim())
+          .firstWhere((k) => k.isNotEmpty, orElse: () => '');
+      if (key.isEmpty) continue;
+      final value = record.content.trim();
+      if (value.isEmpty) continue;
+      out.add({'key': key, 'value': value});
+      if (out.length >= limit) break;
+    }
+    return out;
+  }
+
+  Future<void> upsertCoreMemory({
+    required String key,
+    required String content,
+    String? title,
+    String? sourceMessageId,
+    String? originSessionId,
+    List<String> tags = const [],
+    bool includeAgentTag = true,
+    bool embed = true,
+  }) async {
+    final normalizedKey = key.trim();
+    final normalizedContent = content.trim();
+    if (normalizedKey.isEmpty || normalizedContent.isEmpty) {
+      return;
+    }
+    final coreTag = '$_coreKeyTagPrefix$normalizedKey';
+    final scope = _defaultScopeForTier(MemoryTier.crossSession);
+    final normalizedTags = <String>{
+      if (includeAgentTag) _agentTag,
+      coreTag,
+      ...tags.where((t) => t.trim().isNotEmpty),
+      if (originSessionId != null && originSessionId.trim().isNotEmpty)
+        'session:${originSessionId.trim()}',
+    }.toList(growable: false);
+
+    final existing = coreMemoryByKey(normalizedKey);
+    final collection = defaultCollection(MemoryTier.crossSession);
+    if (existing == null) {
+      await addRecord(
+        tier: MemoryTier.crossSession,
+        collectionId: collection.id,
+        record: MemoryRecord(
+          id: DateTime.now().microsecondsSinceEpoch.toString(),
+          tier: MemoryTier.crossSession,
+          content: normalizedContent,
+          createdAt: DateTime.now(),
+          sourceMessageId: sourceMessageId?.trim().isEmpty == true
+              ? null
+              : sourceMessageId?.trim(),
+          title: title?.trim().isEmpty == true ? null : title?.trim(),
+          tags: normalizedTags,
+          scope: scope,
+        ),
+        embed: embed,
+      );
+      return;
+    }
+
+    await updateRecord(
+      collectionId: collection.id,
+      record: existing.copyWith(
+        content: normalizedContent,
+        title: title?.trim().isEmpty == true ? existing.title : title?.trim(),
+        tags: normalizedTags,
+        sourceMessageId: sourceMessageId?.trim().isEmpty == true
+            ? existing.sourceMessageId
+            : sourceMessageId?.trim(),
+        scope: scope,
+      ),
+      embed: embed,
+    );
+  }
+
+  Future<void> deleteCoreMemory(String key) async {
+    final existing = coreMemoryByKey(key);
+    if (existing == null) return;
+    final collection = defaultCollection(MemoryTier.crossSession);
+    await removeRecord(collectionId: collection.id, recordId: existing.id);
+  }
+
+  Future<void> addDiaryMemory({
+    required DateTime occurredAt,
+    required String content,
+    String? title,
+    String? sourceMessageId,
+    String? originSessionId,
+    List<String> tags = const [],
+    bool includeAgentTag = true,
+    bool embed = true,
+  }) async {
+    final normalizedContent = content.trim();
+    if (normalizedContent.isEmpty) return;
+    final scope = _defaultScopeForTier(MemoryTier.autonomous);
+    final collection = defaultCollection(MemoryTier.autonomous);
+    final alreadyExists = collection.records.any(
+      (record) =>
+          record.scope == scope && record.content.trim() == normalizedContent,
+    );
+    if (alreadyExists) {
+      return;
+    }
+    final normalizedTags = <String>{
+      if (includeAgentTag) _agentTag,
+      ...tags.where((t) => t.trim().isNotEmpty),
+      if (originSessionId != null && originSessionId.trim().isNotEmpty)
+        'session:${originSessionId.trim()}',
+      'day:${occurredAt.toIso8601String().substring(0, 10)}',
+    }.toList(growable: false);
+    await addRecord(
+      tier: MemoryTier.autonomous,
+      collectionId: collection.id,
+      record: MemoryRecord(
+        id: DateTime.now().microsecondsSinceEpoch.toString(),
+        tier: MemoryTier.autonomous,
+        content: normalizedContent,
+        createdAt: occurredAt,
+        sourceMessageId: sourceMessageId?.trim().isEmpty == true
+            ? null
+            : sourceMessageId?.trim(),
+        title: title?.trim().isEmpty == true ? null : title?.trim(),
+        tags: normalizedTags,
+        scope: scope,
+      ),
+      embed: embed,
     );
   }
 
@@ -319,7 +490,7 @@ class MemoryRepository extends ChangeNotifier {
     );
   }
 
-  Future<void> addExternalCollection(String name) async {
+  Future<MemoryCollection> addExternalCollection(String name) async {
     final db = await _database.database;
     final collection = MemoryCollection(
       id: _newId(),
@@ -334,6 +505,7 @@ class MemoryRepository extends ChangeNotifier {
       _collectionToRow(collection),
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+    return collection;
   }
 
   Future<void> renameCollection(String collectionId, String name) async {
@@ -443,21 +615,21 @@ class MemoryRepository extends ChangeNotifier {
       MemoryCollection(
         id: _newId(),
         tier: MemoryTier.context,
-        name: '对话上下文',
+        name: '会话上下文',
         createdAt: now,
         locked: true,
       ),
       MemoryCollection(
         id: _newId(),
         tier: MemoryTier.crossSession,
-        name: '跨会话记忆',
+        name: '核心记忆',
         createdAt: now,
         locked: true,
       ),
       MemoryCollection(
         id: _newId(),
         tier: MemoryTier.autonomous,
-        name: '自主沉淀',
+        name: '日记记忆',
         createdAt: now,
         locked: true,
       ),
@@ -471,7 +643,19 @@ class MemoryRepository extends ChangeNotifier {
       MemoryTier.crossSession,
       MemoryTier.autonomous,
     ]) {
-      if (_collections.any((item) => item.tier == tier)) {
+      final existing = _collections.where((item) => item.tier == tier).toList();
+      if (existing.isNotEmpty) {
+        final primary = existing.first;
+        if (primary.locked && primary.name != tier.label) {
+          primary.name = tier.label;
+          await db.update(
+            _collectionsTable,
+            _collectionToRow(primary),
+            where: 'id = ?',
+            whereArgs: [primary.id],
+          );
+          changed = true;
+        }
         continue;
       }
       final collection = MemoryCollection(
@@ -492,6 +676,21 @@ class MemoryRepository extends ChangeNotifier {
     if (changed) {
       notifyListeners();
     }
+  }
+
+  void _insertRecordSorted(MemoryCollection collection, MemoryRecord record) {
+    if (collection.records.isEmpty) {
+      collection.records.add(record);
+      return;
+    }
+    final index = collection.records.indexWhere(
+      (existing) => existing.createdAt.isBefore(record.createdAt),
+    );
+    if (index < 0) {
+      collection.records.add(record);
+      return;
+    }
+    collection.records.insert(index, record);
   }
 
   Future<void> _insertCollections(
@@ -641,8 +840,9 @@ class MemoryRepository extends ChangeNotifier {
 
   MemoryRecord _normalizeLoadedRecord(MemoryRecord record) {
     final normalizedScope = _normalizeScope(record.scope);
-    final scope =
-        normalizedScope ?? _defaultScopeForTier(record.tier);
+    final scope = (normalizedScope == null || normalizedScope == 'brain.user')
+        ? _defaultScopeForTier(record.tier)
+        : normalizedScope;
     final sessionId = record.sessionId?.trim();
     final normalizedSessionId =
         record.tier == MemoryTier.context ? sessionId : null;
@@ -661,9 +861,12 @@ class MemoryRepository extends ChangeNotifier {
     String? sessionId,
     String? scope,
   }) {
-    final normalizedScope = _normalizeScope(scope) ??
-        _normalizeScope(record.scope) ??
-        _defaultScopeForTier(tier);
+    final explicitScope = _normalizeScope(scope);
+    final recordScope = _normalizeScope(record.scope);
+    final normalizedScope = explicitScope ??
+        ((recordScope == null || recordScope == 'brain.user')
+            ? _defaultScopeForTier(tier)
+            : recordScope);
     String? normalizedSessionId = record.sessionId?.trim();
     if (tier == MemoryTier.context) {
       final candidate = sessionId?.trim();
@@ -693,10 +896,11 @@ class MemoryRepository extends ChangeNotifier {
       case MemoryTier.external:
         return 'knowledge.docs';
       case MemoryTier.context:
+        return 'brain.session';
       case MemoryTier.crossSession:
+        return 'brain.core';
       case MemoryTier.autonomous:
-      default:
-        return 'brain.user';
+        return 'brain.diary';
     }
   }
 

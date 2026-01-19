@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -10,6 +12,7 @@ import 'core/services/local_database.dart';
 import 'core/services/local_storage.dart';
 import 'core/services/runtime_hub.dart';
 import 'features/chat/chat_screen.dart';
+import 'features/pet/pet_screen.dart';
 
 class CMYKEApp extends StatefulWidget {
   const CMYKEApp({super.key});
@@ -46,12 +49,21 @@ class _CMYKEAppState extends State<CMYKEApp> {
       legacyStorage: _legacyStorage,
       resolveEmbeddingProvider: _resolveEmbeddingProvider,
     );
-    _settingsRepository.addListener(_refreshEmbeddingConfig);
+    _settingsRepository.addListener(_handleSettingsChanged);
     _bootstrap();
   }
 
   Future<void> _bootstrap() async {
     try {
+      if (Platform.environment.containsKey('FLUTTER_TEST')) {
+        if (mounted) {
+          setState(() {
+            _embeddingConfigMissing = false;
+            _ready = true;
+          });
+        }
+        return;
+      }
       await Future.wait([
         _chatRepository.load(),
         _memoryRepository.load(),
@@ -79,7 +91,7 @@ class _CMYKEAppState extends State<CMYKEApp> {
   void dispose() {
     _chatRepository.dispose();
     _memoryRepository.dispose();
-    _settingsRepository.removeListener(_refreshEmbeddingConfig);
+    _settingsRepository.removeListener(_handleSettingsChanged);
     _settingsRepository.dispose();
     _database.close();
     super.dispose();
@@ -92,6 +104,9 @@ class _CMYKEAppState extends State<CMYKEApp> {
       brightness: Brightness.light,
       surface: const Color(0xFFFDFCF9),
     );
+    final baseTextTheme = Platform.environment.containsKey('FLUTTER_TEST')
+        ? ThemeData(brightness: Brightness.light).textTheme
+        : GoogleFonts.notoSansScTextTheme();
 
     return MaterialApp(
       title: 'CMYKE',
@@ -100,7 +115,7 @@ class _CMYKEAppState extends State<CMYKEApp> {
         useMaterial3: true,
         colorScheme: colorScheme,
         scaffoldBackgroundColor: const Color(0xFFF6F2EA),
-        textTheme: GoogleFonts.notoSansScTextTheme().apply(
+        textTheme: baseTextTheme.apply(
           bodyColor: const Color(0xFF1F2228),
           displayColor: const Color(0xFF1F2228),
         ),
@@ -138,6 +153,13 @@ class _CMYKEAppState extends State<CMYKEApp> {
     }
     if (!_ready) {
       return const _StartupLoading();
+    }
+    if (_settingsRepository.settings.petMode) {
+      return PetScreen(
+        chatRepository: _chatRepository,
+        memoryRepository: _memoryRepository,
+        settingsRepository: _settingsRepository,
+      );
     }
     return ChatScreen(
       chatRepository: _chatRepository,
@@ -191,14 +213,13 @@ class _CMYKEAppState extends State<CMYKEApp> {
     }
   }
 
-  void _refreshEmbeddingConfig() {
+  void _handleSettingsChanged() {
     if (!_ready || !mounted) {
       return;
     }
-    final missing = _isEmbeddingMissing();
-    if (missing != _embeddingConfigMissing) {
-      setState(() => _embeddingConfigMissing = missing);
-    }
+    setState(() {
+      _embeddingConfigMissing = _isEmbeddingMissing();
+    });
   }
 }
 

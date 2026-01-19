@@ -58,10 +58,16 @@ const Map<String, String> defaultVisemeClips = {
 };
 
 const Map<StageMotion, String> defaultMotionClips = {
-  StageMotion.idle: 'Idle',
-  StageMotion.wave: 'Wave',
-  StageMotion.nod: 'Nod',
-  StageMotion.lookLeft: 'LookLeft',
-  StageMotion.lookRight: 'LookRight',
-  StageMotion.lookAtUser: 'LookAtUser',
+  // "idle" is handled as a special keyword by the viewer (restores VRMA idle loop).
+  StageMotion.idle: 'idle',
+
+  // Prefer authored VRMA clips via catalog ids (assets/live3d/animations/catalog.json).
+  StageMotion.wave: 'gesture_greeting',
+
+  // Not all reference packs include a dedicated nod/look clip; keep ids so the
+  // viewer (or a future motion pack) can provide them without code changes.
+  StageMotion.nod: 'procedural_nod',
+  StageMotion.lookLeft: 'procedural_look_left',
+  StageMotion.lookRight: 'procedural_look_right',
+  StageMotion.lookAtUser: 'procedural_look_at_user',
 };

@@ -18,7 +18,7 @@ class SettingsRepository extends ChangeNotifier {
   final LocalDatabase _database;
   final LocalStorage _legacyStorage;
   final List<ProviderConfig> _providers = [];
-  late AppSettings _settings;
+  AppSettings _settings = AppSettings(route: ModelRoute.standard);
 
   static const String _providersFile = 'providers.json';
   static const String _settingsFile = 'settings.json';
@@ -132,6 +132,18 @@ class SettingsRepository extends ChangeNotifier {
         providersByKind(ProviderKind.llm).isNotEmpty) {
       _settings.llmProviderId = providersByKind(ProviderKind.llm).first.id;
     }
+    if (_settings.motionAgentEnabled &&
+        _settings.motionAgentProviderId == null &&
+        providersByKind(ProviderKind.llm).isNotEmpty) {
+      _settings.motionAgentProviderId =
+          providersByKind(ProviderKind.llm).first.id;
+    }
+    if (_settings.memoryAgentEnabled &&
+        _settings.memoryAgentProviderId == null &&
+        providersByKind(ProviderKind.llm).isNotEmpty) {
+      _settings.memoryAgentProviderId =
+          providersByKind(ProviderKind.llm).first.id;
+    }
     if (_settings.visionProviderId == null &&
         providersByKind(ProviderKind.visionAgent).isNotEmpty) {
       _settings.visionProviderId =
@@ -161,6 +173,14 @@ class SettingsRepository extends ChangeNotifier {
     if (_settings.llmProviderId != null &&
         !ids.contains(_settings.llmProviderId)) {
       _settings.llmProviderId = null;
+    }
+    if (_settings.motionAgentProviderId != null &&
+        !ids.contains(_settings.motionAgentProviderId)) {
+      _settings.motionAgentProviderId = null;
+    }
+    if (_settings.memoryAgentProviderId != null &&
+        !ids.contains(_settings.memoryAgentProviderId)) {
+      _settings.memoryAgentProviderId = null;
     }
     if (_settings.visionProviderId != null &&
         !ids.contains(_settings.visionProviderId)) {
@@ -333,6 +353,17 @@ class SettingsRepository extends ChangeNotifier {
       personaPrompt: row['persona_prompt'] as String?,
       enableSystemTts: _toBool(row['enable_system_tts']) ?? true,
       enableSystemStt: _toBool(row['enable_system_stt']) ?? true,
+      petMode: _toBool(row['pet_mode']) ?? false,
+      petFollowCursor: _toBool(row['pet_follow_cursor']) ?? true,
+      motionAgentEnabled: _toBool(row['motion_agent_enabled']) ?? false,
+      motionAgentProviderId: row['motion_agent_provider_id'] as String?,
+      motionBasicCount: row['motion_basic_count'] as int? ?? 9,
+      motionAgentCooldownSeconds:
+          row['motion_agent_cooldown_seconds'] as int? ?? 12,
+      memoryAgentEnabled: _toBool(row['memory_agent_enabled']) ?? false,
+      memoryAgentProviderId: row['memory_agent_provider_id'] as String?,
+      memoryAgentCooldownSeconds:
+          row['memory_agent_cooldown_seconds'] as int? ?? 20,
     );
   }
 
@@ -353,6 +384,15 @@ class SettingsRepository extends ChangeNotifier {
       'persona_prompt': settings.personaPrompt,
       'enable_system_tts': settings.enableSystemTts ? 1 : 0,
       'enable_system_stt': settings.enableSystemStt ? 1 : 0,
+      'pet_mode': settings.petMode ? 1 : 0,
+      'pet_follow_cursor': settings.petFollowCursor ? 1 : 0,
+      'motion_agent_enabled': settings.motionAgentEnabled ? 1 : 0,
+      'motion_agent_provider_id': settings.motionAgentProviderId,
+      'motion_basic_count': settings.motionBasicCount,
+      'motion_agent_cooldown_seconds': settings.motionAgentCooldownSeconds,
+      'memory_agent_enabled': settings.memoryAgentEnabled ? 1 : 0,
+      'memory_agent_provider_id': settings.memoryAgentProviderId,
+      'memory_agent_cooldown_seconds': settings.memoryAgentCooldownSeconds,
     };
   }
 

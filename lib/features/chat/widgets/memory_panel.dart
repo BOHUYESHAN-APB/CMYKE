@@ -139,13 +139,13 @@ class _MemoryTierTile extends StatelessWidget {
   String _tierHint(MemoryTier tier) {
     switch (tier) {
       case MemoryTier.context:
-        return '会话内上下文窗口';
+        return '会话上下文 / 摘要锚点';
       case MemoryTier.crossSession:
-        return '跨会话常驻提示';
+        return '核心记忆（稳定事实/偏好）';
       case MemoryTier.autonomous:
-        return '模型主动沉淀';
+        return '日记记忆（按时间检索）';
       case MemoryTier.external:
-        return '外部知识库 / 向量库';
+        return '知识库（文档/资料）';
     }
   }
 }

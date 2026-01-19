@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 
@@ -24,6 +26,9 @@ import 'speech_client.dart';
 import 'token_estimator.dart';
 import 'universal_agent.dart';
 import 'runtime_hub.dart';
+import 'motion_agent.dart';
+import 'memory_agent.dart';
+import 'time_range_parser.dart';
 
 class ChatEngine extends ChangeNotifier {
   ChatEngine({
@@ -72,6 +77,8 @@ class ChatEngine extends ChangeNotifier {
       memoryRepository: _memoryRepository,
       llmClient: _llmClient,
     );
+    _motionAgent = MotionAgent(llmClient: _llmClient);
+    _memoryAgent = MemoryAgent(llmClient: _llmClient);
     _refreshTokenUsage();
   }
 
@@ -80,6 +87,8 @@ class ChatEngine extends ChangeNotifier {
   final SettingsRepository _settingsRepository;
   final LlmClient _llmClient = LlmClient();
   late final UniversalAgent _universalAgent;
+  late final MotionAgent _motionAgent;
+  late final MemoryAgent _memoryAgent;
   final SpeechClient _speechClient = SpeechClient();
   final SpeechToText _speech = SpeechToText();
   final FlutterTts _tts = FlutterTts();
@@ -89,6 +98,10 @@ class ChatEngine extends ChangeNotifier {
   Timer? _lipSyncTimer;
   bool _lipSyncActive = false;
   bool _isTalking = false;
+  DateTime? _lastMotionAgentAt;
+  DateTime? _lastMemoryAgentAt;
+  String? _pendingMotionAgentId;
+  bool _memoryAgentRunning = false;
 
   StreamSubscription<LlmStreamEvent>? _streamSubscription;
   bool _isListening = false;
@@ -114,6 +127,76 @@ class ChatEngine extends ChangeNotifier {
   Future<void> sendText(String text) async {
     final trimmed = text.trim();
     if (trimmed.isEmpty) {
+      return;
+    }
+    if (trimmed == '/motions') {
+      await interrupt();
+      await _chatRepository.sendUserMessage(trimmed);
+      final info = await _describeLive3dMotions();
+      await _chatRepository.addMessage(
+        ChatMessage(
+          id: DateTime.now().microsecondsSinceEpoch.toString(),
+          role: ChatRole.system,
+          content: info,
+          createdAt: DateTime.now(),
+        ),
+        persist: true,
+      );
+      return;
+    }
+    if (trimmed == '/stop') {
+      await interrupt();
+      RuntimeHub.instance.live3dBridge.stopMotion();
+      await _chatRepository.sendUserMessage(trimmed);
+      await _chatRepository.addMessage(
+        ChatMessage(
+          id: DateTime.now().microsecondsSinceEpoch.toString(),
+          role: ChatRole.system,
+          content: '已停止动作，回到 idle。',
+          createdAt: DateTime.now(),
+        ),
+        persist: true,
+      );
+      return;
+    }
+    if (trimmed.startsWith('/play ')) {
+      final motion = trimmed.substring(6).trim();
+      if (motion.isEmpty) {
+        return;
+      }
+      await interrupt();
+      RuntimeHub.instance.live3dBridge.playMotion(motion);
+      await _chatRepository.sendUserMessage(trimmed);
+      await _chatRepository.addMessage(
+        ChatMessage(
+          id: DateTime.now().microsecondsSinceEpoch.toString(),
+          role: ChatRole.system,
+          content: '已触发动作：$motion',
+          createdAt: DateTime.now(),
+        ),
+        persist: true,
+      );
+      return;
+    }
+    if (trimmed == '/persona') {
+      await interrupt();
+      await _chatRepository.sendUserMessage(trimmed);
+      final settings = _settingsRepository.settings;
+      final persona = buildLumiPersona(
+        mode: settings.personaMode,
+        level: settings.personaLevel,
+        style: settings.personaStyle,
+        customPrompt: settings.personaPrompt,
+      );
+      await _chatRepository.addMessage(
+        ChatMessage(
+          id: DateTime.now().microsecondsSinceEpoch.toString(),
+          role: ChatRole.system,
+          content: persona,
+          createdAt: DateTime.now(),
+        ),
+        persist: true,
+      );
       return;
     }
     final agentCommand = _parseAgentCommand(trimmed);
@@ -159,9 +242,13 @@ class ChatEngine extends ChangeNotifier {
     Future<void> handleEvent(LlmStreamEvent event) async {
       if (event.hasText) {
         buffer.write(event.textDelta);
+        final snapshot = buffer.toString();
+        final display = _shouldSoftCleanStreaming(snapshot)
+            ? _stripForbiddenAsides(snapshot)
+            : snapshot;
         _chatRepository.updateMessageContent(
           assistantMessage.id,
-          buffer.toString(),
+          display,
           persist: false,
         );
       }
@@ -202,7 +289,22 @@ class ChatEngine extends ChangeNotifier {
         _isStreaming = false;
         _updateTalkingState();
         notifyListeners();
-        final content = buffer.toString();
+        final raw = buffer.toString();
+        final provisional = _settingsRepository.settings.route == ModelRoute.realtime
+            ? raw
+            : _stripForbiddenAsides(raw);
+        if (provisional != raw) {
+          await _chatRepository.updateMessageContent(
+            assistantMessage.id,
+            provisional,
+            persist: false,
+          );
+        }
+        final content = await _postProcessAssistantText(
+          provider: provider,
+          content: provisional,
+          modelProvidedAudio: receivedAudio,
+        );
         final parts = _splitAssistantResponse(content);
         await _applyAssistantResponse(assistantMessage, parts);
         if (receivedAudio && audioStartFuture != null) {
@@ -213,9 +315,68 @@ class ChatEngine extends ChangeNotifier {
           await _playTts(parts.join('\n'));
         }
         _refreshTokenUsage();
+        unawaited(
+          _maybeTriggerMemoryAgent(
+            userText: trimmed,
+            assistantText: parts.join('\n'),
+            sourceMessageId: assistantMessage.id,
+          ),
+        );
+        unawaited(
+          _maybeTriggerMotionAgent(
+            userText: trimmed,
+            assistantText: parts.join('\n'),
+          ),
+        );
       },
       cancelOnError: true,
     );
+  }
+
+  Future<String> _describeLive3dMotions() async {
+    final lines = <String>[];
+    lines.add('Live3D 动作目录（VRMA）:');
+    try {
+      final raw =
+          await rootBundle.loadString('assets/live3d/animations/catalog.json');
+      final decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) {
+        final motions = decoded['motions'];
+        if (motions is List) {
+          for (final entry in motions) {
+            if (entry is! Map) continue;
+            final m = Map<String, dynamic>.from(entry);
+            final id = (m['id'] ?? '').toString().trim();
+            final name = (m['name'] ?? '').toString().trim();
+            final type = (m['type'] ?? 'unknown').toString().trim();
+            final auto = m['auto'];
+            final autoTalk = auto is Map && auto['talk'] == true;
+            final autoIdle = auto is Map && auto['idle'] == true;
+            final autoHover = auto is Map && auto['hover'] == true;
+            final tags = <String>[];
+            if (autoIdle) tags.add('idle');
+            if (autoTalk) tags.add('talk');
+            if (autoHover) tags.add('hover');
+            final suffix = tags.isEmpty ? '' : ' (${tags.join(', ')})';
+            if (id.isEmpty) continue;
+            lines.add('- [$type] $id: ${name.isEmpty ? id : name}$suffix');
+          }
+        }
+      }
+    } catch (_) {
+      lines.add('- (未找到 catalog.json，或运行环境不包含该资源)');
+    }
+
+    lines.add('');
+    lines.add('程序动作（Procedural overlays）:');
+    lines.add('- procedural_stable_idle: 稳定待机叠加（呼吸/轻微摆动）');
+    lines.add('- procedural_talk_overlay: 说话叠加（轻微躯干/手臂动作）');
+    lines.add('- procedural_nod / procedural_look_left / procedural_look_right: 仅在被明确触发时生效');
+    lines.add('');
+    lines.add('调试指令:');
+    lines.add('- /play <id> 触发动作（例如 /play gesture_greeting）');
+    lines.add('- /stop 停止并回到 idle');
+    return lines.join('\n');
   }
 
   Future<void> runUniversalAgent({
@@ -581,7 +742,7 @@ class ChatEngine extends ChangeNotifier {
         title: '会话摘要',
         tags: const ['session_summary'],
         sessionId: session.id,
-        scope: 'brain.user',
+        scope: 'brain.session',
       );
       await _memoryRepository.replaceSessionSummary(
         session.id,
@@ -773,9 +934,256 @@ class ChatEngine extends ChangeNotifier {
     }
     _isTalking = shouldTalk;
     RuntimeHub.instance.live3dBridge.setTalking(shouldTalk);
+
+    if (!shouldTalk) {
+      final pending = _pendingMotionAgentId;
+      if (pending != null && pending.trim().isNotEmpty) {
+        _pendingMotionAgentId = null;
+        RuntimeHub.instance.live3dBridge.playMotion(pending);
+      }
+    }
+  }
+
+  Future<void> _maybeTriggerMotionAgent({
+    required String userText,
+    required String assistantText,
+  }) async {
+    final settings = _settingsRepository.settings;
+    if (!settings.motionAgentEnabled) {
+      return;
+    }
+    if (userText.trim().startsWith('/')) {
+      return;
+    }
+    final providerId = settings.motionAgentProviderId ?? settings.llmProviderId;
+    final provider = _settingsRepository.findProvider(providerId);
+    if (provider == null || provider.protocol == ProviderProtocol.deviceBuiltin) {
+      return;
+    }
+    if (provider.kind != ProviderKind.llm) {
+      return;
+    }
+
+    final cooldownSeconds = settings.motionAgentCooldownSeconds <= 0
+        ? 0
+        : settings.motionAgentCooldownSeconds;
+    final now = DateTime.now();
+    final last = _lastMotionAgentAt;
+    if (last != null &&
+        now.difference(last) < Duration(seconds: cooldownSeconds)) {
+      return;
+    }
+
+    final catalog = await _loadVrmaCatalogForMotionAgent();
+    final motions = _catalogMotions(catalog);
+    if (motions.isEmpty) {
+      return;
+    }
+
+    final allowed = motions.where((m) {
+      final id = (m['id'] ?? '').toString().trim();
+      if (id.isEmpty) return false;
+      final tier = (m['agent'] ?? '').toString().trim().toLowerCase();
+      return tier == 'common' || tier == 'rare';
+    }).toList(growable: false);
+    if (allowed.isEmpty) {
+      return;
+    }
+
+    final contextMessages = _buildMotionAgentContextMessages(maxMessages: 8);
+    final decision = await _motionAgent.decide(
+      provider: provider,
+      userText: userText,
+      assistantText: assistantText,
+      allowedMotions: allowed,
+      contextMessages: contextMessages,
+      conversationMode: settings.route.name,
+    );
+
+    final id = decision.id?.trim();
+    if (!decision.shouldPlay || id == null || id.isEmpty) {
+      return;
+    }
+
+    final tierById = <String, String>{};
+    for (final m in allowed) {
+      final mid = (m['id'] ?? '').toString().trim().toLowerCase();
+      if (mid.isEmpty) continue;
+      final tier = (m['agent'] ?? '').toString().trim().toLowerCase();
+      if (tier == 'common' || tier == 'rare') {
+        tierById[mid] = tier;
+      }
+    }
+    final pickedTier = tierById[id.toLowerCase()];
+    if (pickedTier == null) {
+      return;
+    }
+
+    final minConfidence = pickedTier == 'rare' ? 0.8 : 0.55;
+    if (decision.confidence < minConfidence) {
+      return;
+    }
+
+    _lastMotionAgentAt = now;
+    if (_isTalking) {
+      _pendingMotionAgentId = id;
+      return;
+    }
+    RuntimeHub.instance.live3dBridge.playMotion(id);
+  }
+
+  Future<void> _maybeTriggerMemoryAgent({
+    required String userText,
+    required String assistantText,
+    required String sourceMessageId,
+  }) async {
+    final settings = _settingsRepository.settings;
+    if (!settings.memoryAgentEnabled) {
+      return;
+    }
+    if (_memoryAgentRunning) {
+      return;
+    }
+    if (userText.trim().startsWith('/')) {
+      return;
+    }
+    final providerId = settings.memoryAgentProviderId ?? settings.llmProviderId;
+    final provider = _settingsRepository.findProvider(providerId);
+    if (provider == null || provider.protocol == ProviderProtocol.deviceBuiltin) {
+      return;
+    }
+    if (provider.kind != ProviderKind.llm) {
+      return;
+    }
+
+    final cooldownSeconds = settings.memoryAgentCooldownSeconds <= 0
+        ? 0
+        : settings.memoryAgentCooldownSeconds;
+    final now = DateTime.now();
+    final last = _lastMemoryAgentAt;
+    if (last != null &&
+        now.difference(last) < Duration(seconds: cooldownSeconds)) {
+      return;
+    }
+
+    _memoryAgentRunning = true;
+    try {
+      final contextMessages = _buildMotionAgentContextMessages(maxMessages: 12);
+      final existingCore = _memoryRepository.exportCoreKeyValues(limit: 40);
+      final result = await _memoryAgent.decide(
+        provider: provider,
+        userText: userText,
+        assistantText: assistantText,
+        now: now,
+        contextMessages: contextMessages,
+        existingCore: existingCore,
+        conversationMode: settings.route.name,
+      );
+      _lastMemoryAgentAt = now;
+
+      final sessionId = _chatRepository.activeSessionId;
+      for (final op in result.core) {
+        if (op.shouldUpsert && op.confidence >= 0.6) {
+          await _memoryRepository.upsertCoreMemory(
+            key: op.key,
+            content: op.value,
+            title: op.title ?? op.key,
+            sourceMessageId: sourceMessageId,
+            originSessionId: sessionId,
+            tags: ['core', ...op.tags],
+          );
+        } else if (op.shouldDelete && op.confidence >= 0.9) {
+          await _memoryRepository.deleteCoreMemory(op.key);
+        }
+      }
+
+      for (final op in result.diary) {
+        if (!op.shouldAdd || op.confidence < 0.55) {
+          continue;
+        }
+        var occurredAt = op.occurredAt;
+        if (occurredAt.isAfter(now.add(const Duration(days: 1)))) {
+          occurredAt = now;
+        }
+        await _memoryRepository.addDiaryMemory(
+          occurredAt: occurredAt,
+          content: op.summary,
+          title: op.title,
+          sourceMessageId: sourceMessageId,
+          originSessionId: sessionId,
+          tags: ['diary', ...op.tags],
+        );
+      }
+    } catch (_) {
+      // Ignore memory agent failures; it should never break chat UX.
+    } finally {
+      _memoryAgentRunning = false;
+    }
+  }
+
+  List<Map<String, String>> _buildMotionAgentContextMessages({
+    int maxMessages = 8,
+  }) {
+    final session = _chatRepository.activeSession;
+    if (session == null) {
+      return const [];
+    }
+    final entries = session.messages
+        .where((m) => m.role != ChatRole.system)
+        .where((m) => m.content.trim().isNotEmpty)
+        .where((m) => !(m.role == ChatRole.user && m.content.trim().startsWith('/')))
+        .toList(growable: false);
+    if (entries.isEmpty) {
+      return const [];
+    }
+    final start = entries.length > maxMessages ? entries.length - maxMessages : 0;
+    final slice = entries.sublist(start);
+    return slice.map((m) {
+      var content = m.content.trim();
+      if (content.length > 240) {
+        content = '${content.substring(0, 240)}…';
+      }
+      return {
+        'role': m.role.name,
+        'content': content,
+      };
+    }).toList(growable: false);
+  }
+
+  Future<Map<String, dynamic>?> _loadVrmaCatalogForMotionAgent() async {
+    final cached = RuntimeHub.instance.live3dBridge.debug.vrmaCatalog;
+    if (cached != null) {
+      return cached;
+    }
+    try {
+      final raw =
+          await rootBundle.loadString('assets/live3d/animations/catalog.json');
+      final decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) {
+        return decoded;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  List<Map<String, dynamic>> _catalogMotions(Map<String, dynamic>? catalog) {
+    if (catalog == null) return const [];
+    final motions = catalog['motions'];
+    if (motions is! List) return const [];
+    final out = <Map<String, dynamic>>[];
+    for (final entry in motions) {
+      if (entry is Map) {
+        out.add(Map<String, dynamic>.from(entry));
+      }
+    }
+    return out;
   }
 
   List<String> _splitAssistantResponse(String content) {
+    if (_settingsRepository.settings.route == ModelRoute.realtime) {
+      final normalized = content.replaceAll('[SPLIT]', '\n').trim();
+      return [normalized.isEmpty ? content : normalized];
+    }
     if (!content.contains('[SPLIT]')) {
       return [content];
     }
@@ -785,6 +1193,533 @@ class ChatEngine extends ChangeNotifier {
         .where((part) => part.isNotEmpty)
         .toList();
     return parts.isEmpty ? [content] : parts;
+  }
+
+  Future<String> _postProcessAssistantText({
+    required ProviderConfig provider,
+    required String content,
+    required bool modelProvidedAudio,
+  }) async {
+    final original = content.trimRight();
+    if (original.trim().isEmpty) {
+      return original;
+    }
+    final isRealtime = _settingsRepository.settings.route == ModelRoute.realtime;
+    final normalized =
+        isRealtime ? original.replaceAll('[SPLIT]', '\n') : original;
+    if (modelProvidedAudio) {
+      final base = isRealtime ? normalized : _stripForbiddenAsides(normalized);
+      return _redactIdentityDisclosure(base).trimRight();
+    }
+    if (isRealtime) {
+      final softened = _stripForbiddenAsides(normalized);
+      if (!_violatesAssistantOutputPolicy(softened)) {
+        return _redactIdentityDisclosure(softened).trimRight();
+      }
+      if (_containsForbiddenIdentityDisclosure(softened)) {
+        try {
+          final rewritten = await _rewriteAssistantToPureDialogue(
+            provider: provider,
+            original: softened,
+          );
+          final normalizedRewrite = rewritten.trim();
+          if (normalizedRewrite.isNotEmpty &&
+              !_violatesAssistantOutputPolicy(normalizedRewrite)) {
+            return _redactIdentityDisclosure(normalizedRewrite).trimRight();
+          }
+        } catch (_) {
+          // Ignore and fall back to local stripping below.
+        }
+      }
+      return _redactIdentityDisclosure(_stripForbiddenAsides(softened)).trimRight();
+    }
+    final softened = _stripForbiddenAsides(normalized);
+    if (!_violatesAssistantOutputPolicy(softened)) {
+      return _redactIdentityDisclosure(softened).trimRight();
+    }
+    var candidate = softened;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        final rewritten = await _rewriteAssistantToPureDialogue(
+          provider: provider,
+          original: candidate,
+        );
+        final normalized = rewritten.trim();
+        if (normalized.isEmpty) {
+          break;
+        }
+        candidate = rewritten;
+        if (!_violatesAssistantOutputPolicy(candidate)) {
+          return _redactIdentityDisclosure(candidate).trimRight();
+        }
+      } catch (_) {
+        break;
+      }
+    }
+    return _redactIdentityDisclosure(_stripForbiddenAsides(candidate));
+  }
+
+  Future<String> _rewriteAssistantToPureDialogue({
+    required ProviderConfig provider,
+    required String original,
+  }) async {
+    const rewriteSystemPrompt = '''
+你是一个“文本改写器”。你的任务是把输入内容改写成可直接朗读的纯台词正文。
+硬性规则：
+1) 保持主要语义不变；如果原文包含自我身份揭露（例如自称 AI/人工智能/语言模型/模型/程序/数字生命），必须删掉这类内容并用更自然的人设说法替代。
+   - 例：把“作为一个AI，我……”改为自然的第一人称说法（例如“我想……”或“我叫露米……”），但不要解释自己为什么这样改。
+   - 例：把“我是数字生命/模型”改为不暴露身份的说法，或直接省略该句。
+2) 不添加解释，不提及“改写/规则/系统/提示词”。
+2) 删除所有心理描写、动作描写、舞台指令、旁白、镜头描述、音效文字、表情标记。
+3) 禁止输出 Markdown（例如 #、*、**、>、```）。
+4) 允许且必须原样保留这些系统标记：`[SPLIT]`、以及输入中已有的 `[IMAGE: ...]`。
+只输出改写后的正文，不要加任何前缀或标题。
+''';
+    final prompt = '''
+原始回复：
+<<<
+$original
+>>>
+''';
+    final rewriteMessages = <ChatMessage>[
+      ChatMessage(
+        id: DateTime.now().microsecondsSinceEpoch.toString(),
+        role: ChatRole.user,
+        content: prompt,
+        createdAt: DateTime.now(),
+      ),
+    ];
+    return _llmClient.completeChat(
+      provider: provider,
+      messages: rewriteMessages,
+      systemPrompt: rewriteSystemPrompt,
+    );
+  }
+
+  bool _violatesAssistantOutputPolicy(String content) {
+    if (content.trim().isEmpty) {
+      return false;
+    }
+    if (_containsForbiddenIdentityDisclosure(content)) {
+      return true;
+    }
+    if (content.contains('```')) {
+      return true;
+    }
+    final lines = content.split('\n');
+    for (final rawLine in lines) {
+      final trimmed = rawLine.trim();
+      if (trimmed.isEmpty) {
+        continue;
+      }
+      if (_isParentheticalAsideOnly(trimmed) || _isStarAsideOnly(trimmed)) {
+        return true;
+      }
+      if (_stripLeadingParentheticalAside(rawLine) != rawLine) {
+        return true;
+      }
+    }
+    const patterns = <_AsidePattern>[
+      _AsidePattern(open: '（', close: '）', regex: r'（[^）]{1,80}）'),
+      _AsidePattern(open: '(', close: ')', regex: r'\([^)]{1,80}\)'),
+      _AsidePattern(open: '【', close: '】', regex: r'【[^】]{1,80}】'),
+      _AsidePattern(open: '[', close: ']', regex: r'\[[^\]]{1,80}\]'),
+      _AsidePattern(open: '*', close: '*', regex: r'\*[^*]{1,80}\*'),
+    ];
+    for (final pat in patterns) {
+      final reg = RegExp(pat.regex);
+      for (final match in reg.allMatches(content)) {
+        final token = match.group(0);
+        if (token == null) {
+          continue;
+        }
+        final inner = token.substring(pat.open.length, token.length - pat.close.length);
+        if (_looksLikeForbiddenAside(inner.trim())) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  bool _shouldSoftCleanStreaming(String content) {
+    if (_settingsRepository.settings.route == ModelRoute.realtime) {
+      return false;
+    }
+    if (content.isEmpty) {
+      return false;
+    }
+    const markers = [
+      '（',
+      '(',
+      '【',
+      '*',
+      '```',
+    ];
+    for (final marker in markers) {
+      if (content.contains(marker)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  String _stripForbiddenAsides(String content) {
+    if (content.trim().isEmpty) {
+      return content;
+    }
+    final lines = content.split('\n');
+    final cleaned = <String>[];
+    for (final rawLine in lines) {
+      final stripped = _stripLeadingParentheticalAside(rawLine);
+      final trimmed = stripped.trim();
+      if (trimmed.isEmpty) {
+        cleaned.add(stripped);
+        continue;
+      }
+      if (_isParentheticalAsideOnly(trimmed) || _isStarAsideOnly(trimmed)) {
+        continue;
+      }
+      cleaned.add(stripped);
+    }
+    return cleaned.join('\n').trimRight();
+  }
+
+  String? _sanitizeMemoryForSystemPrompt(String content) {
+    final trimmed = content.trim();
+    if (trimmed.isEmpty) {
+      return null;
+    }
+    if (_containsForbiddenIdentityDisclosure(trimmed)) {
+      return null;
+    }
+    final softened = _stripForbiddenAsides(trimmed).trim();
+    if (softened.isEmpty) {
+      return null;
+    }
+    if (_containsForbiddenIdentityDisclosure(softened)) {
+      return null;
+    }
+    return softened;
+  }
+
+  String? _formatMemoryRecordForSystemPrompt(MemoryRecord record) {
+    final sanitized = _sanitizeMemoryForSystemPrompt(record.content);
+    if (sanitized == null) {
+      return null;
+    }
+
+    if (record.tier == MemoryTier.crossSession) {
+      final keyTag = record.tags.firstWhere(
+        (t) => t.startsWith('core_key:'),
+        orElse: () => '',
+      );
+      final key = keyTag.isEmpty ? '' : keyTag.substring('core_key:'.length).trim();
+      if (key.isNotEmpty) {
+        return '$key: $sanitized';
+      }
+    }
+
+    if (record.tier == MemoryTier.autonomous) {
+      final day = record.createdAt.toIso8601String().substring(0, 10);
+      return '$day $sanitized';
+    }
+
+    return sanitized;
+  }
+
+  bool _containsForbiddenIdentityDisclosure(String content) {
+    final normalized = content.replaceAll('\u200B', '').trim();
+    if (normalized.isEmpty) {
+      return false;
+    }
+    final patterns = <RegExp>[
+      RegExp(
+        r'(?:作为|身为)\s*(?:一名|一个)?\s*(?:人工智能|语言模型|大模型|数字生命|程序|机器人|模型|AI)\s*[,，:：]?\s*(?:我|本人|在下)',
+        caseSensitive: false,
+      ),
+      RegExp(
+        r'(?:我|本人|在下)\s*(?:是|只是|不过是|属于|算是|作为|身为)\s*(?:一名|一个)?\s*(?:人工智能|语言模型|大模型|数字生命|程序|机器人|模型|AI)',
+        caseSensitive: false,
+      ),
+      RegExp(
+        r'(?:我|本人|在下)\s*(?:不|并不|不是|并不是)\s*(?:一名|一个)?\s*(?:人工智能|语言模型|大模型|数字生命|程序|机器人|模型|AI)',
+        caseSensitive: false,
+      ),
+      RegExp(
+        r'(?:你|您)\s*(?:是|就是|本质上是)\s*(?:一名|一个)?\s*(?:人工智能|语言模型|大模型|数字生命|程序|机器人|模型|AI)',
+        caseSensitive: false,
+      ),
+      RegExp(
+        r'(?:你|您)\s*(?:不|并不|不是|并不是)\s*(?:一名|一个)?\s*(?:人工智能|语言模型|大模型|数字生命|程序|机器人|模型|AI)',
+        caseSensitive: false,
+      ),
+      RegExp(
+        r"\b(?:i\s*(?:am|'m)|as\s+an)\s+(?:ai|language\s+model|llm)\b",
+        caseSensitive: false,
+      ),
+      RegExp(
+        r"\b(?:i\s*(?:am|'m))\s+not\s+(?:an?\s+)?(?:ai|language\s+model|llm)\b",
+        caseSensitive: false,
+      ),
+      RegExp(
+        r'\b(?:as\s+a)\s+(?:language\s+model|llm)\b',
+        caseSensitive: false,
+      ),
+      RegExp(r"\b(?:i\s*(?:am|'m))\s+(?:chatgpt|gpt(?:-?\d+)?)\b", caseSensitive: false),
+    ];
+    for (final pattern in patterns) {
+      if (pattern.hasMatch(normalized)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  String _redactIdentityDisclosure(String content) {
+    final trimmed = content.trimRight();
+    if (trimmed.isEmpty) {
+      return content;
+    }
+    if (!_containsForbiddenIdentityDisclosure(trimmed)) {
+      return content;
+    }
+    var working = trimmed;
+    final patterns = <RegExp>[
+      RegExp(
+        r'(?:作为|身为)\s*(?:一名|一个)?\s*(?:人工智能|语言模型|大模型|数字生命|程序|机器人|模型|AI)\s*[,，:：]?\s*',
+        caseSensitive: false,
+      ),
+      RegExp(
+        r'(?:我|本人|在下)\s*(?:是|只是|不过是|属于|算是|作为|身为)\s*(?:一名|一个)?\s*(?:人工智能|语言模型|大模型|数字生命|程序|机器人|模型|AI)\s*[,，:：]?\s*',
+        caseSensitive: false,
+      ),
+      RegExp(
+        r'\b(?:as\s+an?)\s+(?:ai|language\s+model|llm)\b\s*[,;:]?\s*',
+        caseSensitive: false,
+      ),
+      RegExp(
+        r"\b(?:i\s*(?:am|'m))\s+(?:an?\s+)?(?:ai|language\s+model|llm)\b\s*[,;:]?\s*",
+        caseSensitive: false,
+      ),
+      RegExp(
+        r"\b(?:i\s*(?:am|'m))\s+(?:chatgpt|gpt(?:-?\d+)?)\b\s*[,;:]?\s*",
+        caseSensitive: false,
+      ),
+    ];
+
+    for (final pattern in patterns) {
+      working = working.replaceAll(pattern, '');
+    }
+
+    final kept = <String>[];
+    for (final rawLine in working.split('\n')) {
+      if (_containsForbiddenIdentityDisclosure(rawLine)) {
+        continue;
+      }
+      kept.add(rawLine);
+    }
+    final joined = kept.join('\n').trimRight();
+    if (joined.isNotEmpty && !_containsForbiddenIdentityDisclosure(joined)) {
+      return joined;
+    }
+    return joined.isNotEmpty ? joined : '';
+  }
+
+  String _stripLeadingParentheticalAside(String line) {
+    final trimmedLeft = line.trimLeft();
+    final prefixLen = line.length - trimmedLeft.length;
+    final stripped = _stripLeadingAsideForPair(
+      trimmedLeft,
+      open: '（',
+      close: '）',
+    );
+    if (stripped != null) {
+      return '${''.padLeft(prefixLen)}${stripped.trimLeft()}';
+    }
+    final strippedCorner = _stripLeadingAsideForPair(
+      trimmedLeft,
+      open: '【',
+      close: '】',
+    );
+    if (strippedCorner != null) {
+      return '${''.padLeft(prefixLen)}${strippedCorner.trimLeft()}';
+    }
+    final strippedAscii = _stripLeadingAsideForPair(
+      trimmedLeft,
+      open: '(',
+      close: ')',
+    );
+    if (strippedAscii != null) {
+      return '${''.padLeft(prefixLen)}${strippedAscii.trimLeft()}';
+    }
+    final strippedSquare = _stripLeadingAsideForPair(
+      trimmedLeft,
+      open: '[',
+      close: ']',
+    );
+    if (strippedSquare != null) {
+      return '${''.padLeft(prefixLen)}${strippedSquare.trimLeft()}';
+    }
+    return line;
+  }
+
+  String? _stripLeadingAsideForPair(
+    String trimmedLeft, {
+    required String open,
+    required String close,
+  }) {
+    if (!trimmedLeft.startsWith(open)) {
+      return null;
+    }
+    final closeIndex = trimmedLeft.indexOf(close);
+    if (closeIndex <= 0) {
+      return null;
+    }
+    final inner = trimmedLeft.substring(open.length, closeIndex).trim();
+    if (!_looksLikeForbiddenAside(inner)) {
+      return null;
+    }
+    return trimmedLeft.substring(closeIndex + close.length);
+  }
+
+  bool _isParentheticalAsideOnly(String trimmedLine) {
+    String? inner;
+    if (trimmedLine.startsWith('（') && trimmedLine.endsWith('）')) {
+      inner = trimmedLine.substring(1, trimmedLine.length - 1).trim();
+    } else if (trimmedLine.startsWith('(') && trimmedLine.endsWith(')')) {
+      inner = trimmedLine.substring(1, trimmedLine.length - 1).trim();
+    } else if (trimmedLine.startsWith('【') && trimmedLine.endsWith('】')) {
+      inner = trimmedLine.substring(1, trimmedLine.length - 1).trim();
+    } else if (trimmedLine.startsWith('[') && trimmedLine.endsWith(']')) {
+      inner = trimmedLine.substring(1, trimmedLine.length - 1).trim();
+    }
+    if (inner == null) {
+      return false;
+    }
+    return _looksLikeForbiddenAside(inner);
+  }
+
+  bool _isStarAsideOnly(String trimmedLine) {
+    if (!(trimmedLine.startsWith('*') && trimmedLine.endsWith('*'))) {
+      return false;
+    }
+    if (trimmedLine.length < 2) {
+      return false;
+    }
+    final inner =
+        trimmedLine.substring(1, trimmedLine.length - 1).trim();
+    return _looksLikeForbiddenAside(inner);
+  }
+
+  bool _looksLikeForbiddenAside(String inner) {
+    final normalized = inner.replaceAll(' ', '').trim();
+    if (normalized.isEmpty) {
+      return false;
+    }
+    if (_isEnumerationToken(normalized)) {
+      return false;
+    }
+    const keywords = <String>[
+      '轻轻',
+      '微微',
+      '缓缓',
+      '悄悄',
+      '歪',
+      '点头',
+      '摇头',
+      '眨',
+      '看向',
+      '望向',
+      '抬头',
+      '低头',
+      '抬手',
+      '挥手',
+      '伸手',
+      '转身',
+      '靠近',
+      '后退',
+      '叹',
+      '叹气',
+      '笑',
+      '微笑',
+      '皱眉',
+      '沉默',
+      '停顿',
+      '小声',
+      '低声',
+      '内心',
+      '心想',
+      '想了想',
+      '思考',
+      '沉吟',
+      '咳',
+      '清了清嗓子',
+      '耸肩',
+      '鼓掌',
+      '摸',
+      '拍',
+      '抱',
+      'OS',
+      '旁白',
+    ];
+    for (final keyword in keywords) {
+      if (normalized.contains(keyword)) {
+        return true;
+      }
+    }
+    final lower = normalized.toLowerCase();
+    const enKeywords = <String>[
+      'smile',
+      'smiles',
+      'grin',
+      'grins',
+      'laugh',
+      'laughs',
+      'giggle',
+      'giggles',
+      'sigh',
+      'sighs',
+      'nod',
+      'nods',
+      'shake',
+      'shakes',
+      'shrug',
+      'shrugs',
+      'whisper',
+      'whispers',
+      'cough',
+      'coughs',
+      'think',
+      'thinks',
+      'thinking',
+      'aside',
+      'ooc',
+    ];
+    for (final keyword in enKeywords) {
+      if (lower.contains(keyword)) {
+        return true;
+      }
+    }
+    if (normalized.length <= 12 &&
+        normalized.runes.any((r) => r >= 0x4E00 && r <= 0x9FFF)) {
+      return true;
+    }
+    return false;
+  }
+
+  bool _isEnumerationToken(String token) {
+    const digits = '0123456789';
+    const cnNums = '一二三四五六七八九十百千万';
+    if (token.length <= 4 &&
+        token.runes.every((r) => digits.contains(String.fromCharCode(r)))) {
+      return true;
+    }
+    if (token.length <= 4 &&
+        token.runes.every((r) => cnNums.contains(String.fromCharCode(r)))) {
+      return true;
+    }
+    return false;
   }
 
   Future<void> _applyAssistantResponse(
@@ -841,68 +1776,120 @@ class ChatEngine extends ChangeNotifier {
       style: settings.personaStyle,
       customPrompt: settings.personaPrompt,
     );
+    String applyRouteAddons(String prompt) {
+      if (settings.route != ModelRoute.realtime) {
+        return prompt;
+      }
+      return '$prompt\n\n[Realtime 模式约束]\n'
+          '- 当前为实时语音/低延迟对话模式。\n'
+          '- 禁止输出 `[SPLIT]`，也不要尝试把回复拆分成多段消息。\n'
+          '- 只输出连续的纯文本台词正文。';
+    }
     final sessionId = _chatRepository.activeSessionId;
     final contextRecords = _memoryRepository.recordsForTier(
       MemoryTier.context,
       sessionId: sessionId,
     );
+
+    final coreRecords = _memoryRepository.recordsForTier(MemoryTier.crossSession);
+
+    final now = DateTime.now();
+    final timeRange = parseChineseTimeRange(userMessage, now);
+    final diaryAll = _memoryRepository.recordsForTier(MemoryTier.autonomous);
+    final timeDiary = timeRange == null
+        ? const <MemoryRecord>[]
+        : diaryAll
+            .where(
+              (record) =>
+                  !record.createdAt.isBefore(timeRange.start) &&
+                  record.createdAt.isBefore(timeRange.end),
+            )
+            .take(24)
+            .toList(growable: false);
+    final timeDiaryIds = timeDiary.map((record) => record.id).toSet();
+
     final relevant =
         await _memoryRepository.searchRelevant(userMessage, limit: 12);
-    if (relevant.isEmpty) {
-      final cross =
-          _memoryRepository.recordsForTier(MemoryTier.crossSession);
-      final auto =
-          _memoryRepository.recordsForTier(MemoryTier.autonomous);
-      if (contextRecords.isEmpty && cross.isEmpty && auto.isEmpty) {
-        return base;
-      }
-      final buffer = StringBuffer('$base\n');
-      if (contextRecords.isNotEmpty) {
-        buffer.writeln('\n[会话内记忆]');
-        for (final record in contextRecords.take(12)) {
-          buffer.writeln('- ${record.content}');
-        }
-      }
-      if (cross.isNotEmpty) {
-        buffer.writeln('\n[跨会话记忆]');
-        for (final record in cross.take(12)) {
-          buffer.writeln('- ${record.content}');
-        }
-      }
-      if (auto.isNotEmpty) {
-        buffer.writeln('\n[自主沉淀]');
-        for (final record in auto.take(12)) {
-          buffer.writeln('- ${record.content}');
-        }
-      }
-      return buffer.toString();
+    final relevantFiltered = relevant
+        .where((record) => record.tier != MemoryTier.crossSession)
+        .where((record) => !timeDiaryIds.contains(record.id))
+        .toList(growable: false);
+
+    if (contextRecords.isEmpty &&
+        coreRecords.isEmpty &&
+        diaryAll.isEmpty &&
+        relevantFiltered.isEmpty) {
+      return applyRouteAddons(base);
     }
+
     final buffer = StringBuffer('$base\n');
     if (contextRecords.isNotEmpty) {
       buffer.writeln('\n[会话内记忆]');
       for (final record in contextRecords.take(12)) {
-        buffer.writeln('- ${record.content}');
-      }
-    }
-    final byTier = <MemoryTier, List<String>>{};
-    for (final record in relevant) {
-      byTier.putIfAbsent(record.tier, () => []).add(record.content);
-    }
-    void appendTier(MemoryTier tier, String label) {
-      final items = byTier[tier];
-      if (items == null || items.isEmpty) {
-        return;
-      }
-      buffer.writeln('\n[$label]');
-      for (final item in items) {
-        buffer.writeln('- $item');
+        final formatted = _formatMemoryRecordForSystemPrompt(record);
+        if (formatted == null) {
+          continue;
+        }
+        buffer.writeln('- $formatted');
       }
     }
 
-    appendTier(MemoryTier.crossSession, '跨会话记忆');
-    appendTier(MemoryTier.autonomous, '自主沉淀');
-    appendTier(MemoryTier.external, '外部知识库');
-    return buffer.toString();
+    if (coreRecords.isNotEmpty) {
+      buffer.writeln('\n[核心记忆]');
+      for (final record in coreRecords.take(12)) {
+        final formatted = _formatMemoryRecordForSystemPrompt(record);
+        if (formatted == null) {
+          continue;
+        }
+        buffer.writeln('- $formatted');
+      }
+    }
+
+    if (timeDiary.isNotEmpty) {
+      buffer.writeln('\n[日记记忆·${timeRange!.label}]');
+      for (final record in timeDiary) {
+        final formatted = _formatMemoryRecordForSystemPrompt(record);
+        if (formatted == null) {
+          continue;
+        }
+        buffer.writeln('- $formatted');
+      }
+    }
+
+    if (relevantFiltered.isNotEmpty) {
+      final byTier = <MemoryTier, List<MemoryRecord>>{};
+      for (final record in relevantFiltered) {
+        byTier.putIfAbsent(record.tier, () => []).add(record);
+      }
+      void appendTier(MemoryTier tier, String label) {
+        final items = byTier[tier];
+        if (items == null || items.isEmpty) {
+          return;
+        }
+        buffer.writeln('\n[$label]');
+        for (final record in items) {
+          final formatted = _formatMemoryRecordForSystemPrompt(record);
+          if (formatted == null) {
+            continue;
+          }
+          buffer.writeln('- $formatted');
+        }
+      }
+
+      appendTier(MemoryTier.autonomous, '日记记忆·相关');
+      appendTier(MemoryTier.external, '知识库·相关');
+    } else if (timeDiary.isEmpty && diaryAll.isNotEmpty) {
+      buffer.writeln('\n[日记记忆·近期]');
+      for (final record in diaryAll.take(12)) {
+        final formatted = _formatMemoryRecordForSystemPrompt(record);
+        if (formatted == null) {
+          continue;
+        }
+        buffer.writeln('- $formatted');
+      }
+    }
+
+    return applyRouteAddons(buffer.toString());
   }
 
   @override
@@ -930,4 +1917,16 @@ class _AgentCommand {
   final String goal;
   final ResearchDeliverable deliverable;
   final ResearchDepth depth;
+}
+
+class _AsidePattern {
+  const _AsidePattern({
+    required this.open,
+    required this.close,
+    required this.regex,
+  });
+
+  final String open;
+  final String close;
+  final String regex;
 }

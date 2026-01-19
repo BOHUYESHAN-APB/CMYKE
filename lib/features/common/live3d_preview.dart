@@ -8,6 +8,7 @@ import 'package:webview_windows/webview_windows.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../../core/repositories/settings_repository.dart';
 import '../../core/services/runtime_hub.dart';
 
 /// Minimal Live3D preview using WebView:
@@ -18,10 +19,14 @@ class Live3DPreview extends StatefulWidget {
     super.key,
     this.height = 180,
     this.compact = false,
+    this.debug = false,
+    this.settingsRepository,
   });
 
   final double height;
   final bool compact;
+  final bool debug;
+  final SettingsRepository? settingsRepository;
 
   @override
   State<Live3DPreview> createState() => _Live3DPreviewState();
@@ -29,6 +34,7 @@ class Live3DPreview extends StatefulWidget {
 
 class _Live3DPreviewState extends State<Live3DPreview> {
   final _hub = RuntimeHub.instance;
+  final bool _isFlutterTest = Platform.environment.containsKey('FLUTTER_TEST');
   WebviewController? _winController;
   StreamSubscription<String?>? _modelSub;
   String? _status;
@@ -37,11 +43,41 @@ class _Live3DPreviewState extends State<Live3DPreview> {
   bool _winInitFailed = false;
   bool _viewerReady = false;
   String? _bundlePath;
+  List<String> _availableVrmaUrls = const [];
   String? _pendingModelPath;
   String? _lastRequestedPath;
   String? _lastLoadedPath;
   static HttpServer? _staticServer;
   static String? _staticBaseUrl;
+  static bool _startupGreetingPlayed = false;
+  Map<String, dynamic>? _vrmaCatalog;
+  bool _autoEnabledCursorFollow = false;
+  bool _petMode = false;
+
+  void _handleHoverEnter() {
+    if (!mounted) return;
+    if (_petMode) {
+      return;
+    }
+    final bridge = _hub.live3dBridge;
+    if (!bridge.cursorFollowEnabled) {
+      _autoEnabledCursorFollow = true;
+      bridge.setCursorFollow(true);
+    } else {
+      _autoEnabledCursorFollow = false;
+    }
+  }
+
+  void _handleHoverExit() {
+    if (!mounted) return;
+    if (_petMode) {
+      return;
+    }
+    if (_autoEnabledCursorFollow) {
+      _autoEnabledCursorFollow = false;
+      _hub.live3dBridge.setCursorFollow(false);
+    }
+  }
 
   void _setStatus(String msg) {
     if (!mounted) return;
@@ -55,9 +91,29 @@ class _Live3DPreviewState extends State<Live3DPreview> {
     debugPrint('[Live3D] $msg');
   }
 
+  void _maybePlayStartupGreeting() {
+    if (_startupGreetingPlayed) {
+      return;
+    }
+    _startupGreetingPlayed = true;
+    // Give the model a brief moment to settle on its idle loop before
+    // triggering the first gesture (prevents initial snapping).
+    Future.delayed(const Duration(milliseconds: 450), () {
+      if (!mounted) return;
+      _hub.live3dBridge.playMotion('gesture_greeting');
+    });
+  }
+
   @override
   void initState() {
     super.initState();
+    if (_isFlutterTest) {
+      _winInitFailed = true;
+      _setStatus('Live3D 在测试环境中禁用');
+      return;
+    }
+    _syncPetModeFlag(force: true);
+    widget.settingsRepository?.addListener(_handleSettingsChanged);
     _prepareBundle().then((_) {
       if (!mounted) return;
       if (Platform.isWindows) {
@@ -68,6 +124,29 @@ class _Live3DPreviewState extends State<Live3DPreview> {
     });
     _modelSub = _hub.live3dBridge.modelPaths.listen(_loadModel);
     _loadModel(_hub.live3dBridge.currentModelPath);
+  }
+
+  @override
+  void didUpdateWidget(covariant Live3DPreview oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.settingsRepository != widget.settingsRepository) {
+      oldWidget.settingsRepository?.removeListener(_handleSettingsChanged);
+      widget.settingsRepository?.addListener(_handleSettingsChanged);
+      _syncPetModeFlag(force: true);
+    }
+  }
+
+  void _handleSettingsChanged() {
+    _syncPetModeFlag();
+  }
+
+  void _syncPetModeFlag({bool force = false}) {
+    final next = widget.settingsRepository?.settings.petMode == true;
+    if (!force && next == _petMode) {
+      return;
+    }
+    _petMode = next;
+    _hub.live3dBridge.setPetMode(_petMode);
   }
 
   Future<void> _prepareBundle() async {
@@ -91,9 +170,33 @@ class _Live3DPreviewState extends State<Live3DPreview> {
           'assets/vrm_core/three-vrm.module.js',
       'assets/live3d/vendor/es-module-shims.js':
           'assets/vrm_core/es-module-shims.js',
-      'assets/live3d/animations/idle_loop.vrma':
-          'assets/vrm_core/animations/idle_loop.vrma',
     };
+
+    // Copy all .vrma clips so we can rely on authored animations instead of
+    // hand-written bone rotations for most motions.
+    try {
+      final manifest = await rootBundle.loadString('AssetManifest.json');
+      final decoded = jsonDecode(manifest);
+      if (decoded is Map<String, dynamic>) {
+        final vrmas = decoded.keys
+            .where(
+              (k) =>
+                  k.startsWith('assets/live3d/animations/') && k.endsWith('.vrma'),
+            )
+            .toList()
+          ..sort();
+        for (final asset in vrmas) {
+          final rel = asset.substring('assets/live3d/'.length);
+          assets[asset] = 'assets/vrm_core/$rel';
+        }
+      }
+    } catch (_) {
+      // Ignore and fall back to the hardcoded idle loop below.
+    }
+    assets.putIfAbsent(
+      'assets/live3d/animations/idle_loop.vrma',
+      () => 'assets/vrm_core/animations/idle_loop.vrma',
+    );
     for (final entry in assets.entries) {
       final data = await _loadAssetBytes(entry.key);
       if (data == null) {
@@ -105,9 +208,206 @@ class _Live3DPreviewState extends State<Live3DPreview> {
       await Directory(p.dirname(outPath)).create(recursive: true);
       await File(outPath).writeAsBytes(data, flush: true);
     }
+    _availableVrmaUrls = await _scanVrmaUrls(bundleDir.path);
+    _vrmaCatalog = await _loadVrmaCatalog(_availableVrmaUrls);
+    _hub.live3dBridge.debug.setVrmaCatalog(_vrmaCatalog);
     _bundlePath = bundleDir.path;
     _debug('Bundle prepared at $_bundlePath');
     await _ensureStaticServer(bundleDir.path);
+  }
+
+  List<String> _extractAutoMotionKeys() {
+    final catalog = _vrmaCatalog;
+    if (catalog == null) return const [];
+    final motions = catalog['motions'];
+    if (motions is! List) return const [];
+    final result = <String>[];
+    final seen = <String>{};
+    for (final entry in motions) {
+      if (entry is! Map) continue;
+      final m = Map<String, dynamic>.from(entry);
+      final auto = m['auto'];
+      if (auto is! Map) continue;
+      final hasAuto = auto['talk'] == true || auto['idle'] == true || auto['hover'] == true;
+      if (!hasAuto) continue;
+      final id = (m['id'] ?? '').toString().trim();
+      final url = (m['url'] ?? '').toString().trim();
+      final key = id.isNotEmpty ? id : url;
+      if (key.isEmpty) continue;
+      final normalized = key.toLowerCase();
+      if (!seen.add(normalized)) continue;
+      result.add(key);
+    }
+    return result;
+  }
+
+  Future<void> _syncAutoMotionPolicy() async {
+    final controller = _winController;
+    if (!mounted || !_viewerReady || controller == null) {
+      return;
+    }
+    final whitelist = _extractAutoMotionKeys();
+    final js =
+        'window.setAutoMotionWhitelist && window.setAutoMotionWhitelist(${jsonEncode(whitelist)});';
+    try {
+      await controller.executeScript(js);
+    } catch (_) {
+      // Ignore; viewer might not be ready yet.
+    }
+  }
+
+  Future<Map<String, dynamic>?> _loadVrmaCatalog(List<String> availableUrls) async {
+    Map<String, dynamic>? decoded;
+    try {
+      final raw = await rootBundle.loadString(
+        'assets/live3d/animations/catalog.json',
+      );
+      final data = jsonDecode(raw);
+      if (data is Map<String, dynamic>) {
+        decoded = data;
+      }
+    } catch (_) {
+      decoded = null;
+    }
+
+    final available = availableUrls.toSet();
+    final motions = <Map<String, dynamic>>[];
+    final seen = <String>{};
+
+    String canonicalizeUrl(String url) {
+      // Ensure the URL matches the runtime-scanned list which uses encoded path
+      // segments (e.g. spaces -> %20, unicode -> %E3...).
+      final trimmed = url.trim();
+      if (!trimmed.startsWith('/')) return trimmed;
+      String safeDecode(String segment) {
+        if (!segment.contains('%')) return segment;
+        try {
+          return Uri.decodeComponent(segment);
+        } catch (_) {
+          // Keep best-effort: invalid percent sequences should not crash the app.
+          return segment;
+        }
+      }
+      final parts = trimmed
+          .split('/')
+          .where((e) => e.isNotEmpty)
+          .map(safeDecode)
+          .map(Uri.encodeComponent)
+          .join('/');
+      return '/$parts';
+    }
+
+    void addMotion(Map<String, dynamic> motion) {
+      final url = motion['url'];
+      if (url is! String || url.isEmpty) return;
+      var resolvedUrl = url.trim();
+      if (resolvedUrl.isEmpty) return;
+      if (!available.contains(resolvedUrl)) {
+        final encoded = canonicalizeUrl(resolvedUrl);
+        if (!available.contains(encoded)) return;
+        resolvedUrl = encoded;
+      }
+      final id = motion['id'];
+      motion['url'] = resolvedUrl;
+      final key =
+          (id is String && id.trim().isNotEmpty) ? id.trim() : resolvedUrl;
+      if (seen.contains(key)) return;
+      seen.add(key);
+      motions.add(motion);
+    }
+
+    if (decoded != null) {
+      final list = decoded['motions'];
+      if (list is List) {
+        for (final entry in list) {
+          if (entry is Map) {
+            addMotion(Map<String, dynamic>.from(entry));
+          }
+        }
+      }
+    }
+
+    const idleUrl = '/assets/vrm_core/animations/idle_loop.vrma';
+    if (available.contains(idleUrl) &&
+        !motions.any((m) => m['url'] == idleUrl || m['id'] == 'idle_loop')) {
+      motions.insert(0, {
+        'id': 'idle_loop',
+        'name': 'Idle（呼吸循环）',
+        'type': 'idle',
+        'url': idleUrl,
+        'auto': {'idle': true},
+      });
+    }
+
+    if (motions.isEmpty && availableUrls.isNotEmpty) {
+      motions.addAll(
+        availableUrls.map(
+          (url) => {
+            'id': url == idleUrl ? 'idle_loop' : url,
+            'name': url.split('/').last,
+            'type': url == idleUrl ? 'idle' : 'unknown',
+            'url': url,
+            'auto': {'idle': url == idleUrl},
+          },
+        ),
+      );
+    }
+
+    if (motions.isEmpty) {
+      return null;
+    }
+
+    return {
+      'version': 1,
+      'motions': motions,
+    };
+  }
+
+  Future<List<String>> _scanVrmaUrls(String bundleRoot) async {
+    final root = Directory(bundleRoot);
+    final animRoot = Directory(p.join(bundleRoot, 'assets', 'vrm_core', 'animations'));
+    if (!await animRoot.exists()) {
+      return const [];
+    }
+    final urls = <String>[];
+    await for (final entity in animRoot.list(recursive: true, followLinks: false)) {
+      if (entity is! File) continue;
+      if (p.extension(entity.path).toLowerCase() != '.vrma') continue;
+      final rel = p.relative(entity.path, from: root.path);
+      final parts = rel.split(Platform.pathSeparator).where((e) => e.isNotEmpty);
+      final encoded = parts.map(Uri.encodeComponent).join('/');
+      urls.add('/$encoded');
+    }
+    urls.sort();
+    return urls;
+  }
+
+  Future<void> _syncVrmaLibrary() async {
+    final controller = _winController;
+    if (!mounted || !_viewerReady || controller == null) {
+      return;
+    }
+    if (_vrmaCatalog != null) {
+      final js =
+          'window.setVrmaCatalog && window.setVrmaCatalog(${jsonEncode(_vrmaCatalog)});';
+      try {
+        await controller.executeScript(js);
+      } catch (_) {
+        // Ignore; viewer might not be ready yet.
+      }
+      await _syncAutoMotionPolicy();
+      return;
+    }
+    if (_availableVrmaUrls.isEmpty) {
+      return;
+    }
+    final js =
+        'window.setAvailableVrmaAnimations && window.setAvailableVrmaAnimations(${jsonEncode(_availableVrmaUrls)});';
+    try {
+      await controller.executeScript(js);
+    } catch (_) {
+      // Ignore; viewer might not be ready yet.
+    }
   }
 
   Future<List<int>?> _loadAssetBytes(String asset) async {
@@ -191,17 +491,24 @@ class _Live3DPreviewState extends State<Live3DPreview> {
       controller.webMessage.listen((message) {
         if (!mounted) return;
         try {
-          final data = jsonDecode(message) as Map<String, dynamic>;
-          final type = data['type'] ?? 'msg';
-          final msg = data['msg'] ?? '';
+          final decoded = jsonDecode(message);
+          if (decoded is! Map) {
+            throw const FormatException('unexpected viewer payload');
+          }
+          final type = decoded['type']?.toString() ?? 'msg';
+          final msg = decoded['msg'];
+          _hub.live3dBridge.debug.ingestViewerMessage(type, msg);
+          final msgText = msg is String ? msg : jsonEncode(msg);
           if (type == 'info' && msg == 'viewer:ready') {
             _viewerReady = true;
             unawaited(_maybeLoadPending());
+            unawaited(_syncVrmaLibrary());
           }
           if (type == 'info' && msg == 'VRM loaded') {
             _lastLoadedPath = _lastRequestedPath;
+            _maybePlayStartupGreeting();
           }
-          _setStatus('viewer[$type]: $msg');
+          _setStatus('viewer[$type]: $msgText');
           return;
         } catch (_) {
           // Fallback: treat as plain text.
@@ -228,6 +535,7 @@ class _Live3DPreviewState extends State<Live3DPreview> {
   @override
   void dispose() {
     _modelSub?.cancel();
+    widget.settingsRepository?.removeListener(_handleSettingsChanged);
     _hub.live3dBridge.detachJsInvoker();
     super.dispose();
   }
@@ -351,30 +659,31 @@ class _Live3DPreviewState extends State<Live3DPreview> {
         );
       } else if (_winController == null) {
         viewer = const Center(child: CircularProgressIndicator(strokeWidth: 2));
-      } else {
-        viewer = Stack(
-          children: [
-            Positioned.fill(
-              child: Webview(
-                _winController!,
-                permissionRequested: (url, kind, isUserInitiated) =>
-                    WebviewPermissionDecision.deny,
-              ),
-            ),
-            Positioned(
-              right: 8,
-              top: 8,
-              child: IconButton(
-                tooltip: '打开 DevTools',
-                icon: const Icon(Icons.bug_report_outlined, size: 18),
-                onPressed: () => _winController?.openDevTools(),
-              ),
-            ),
-          ],
-        );
-      }
-    } else {
-      viewer = Center(
+       } else {
+         viewer = Stack(
+           children: [
+             Positioned.fill(
+               child: Webview(
+                 _winController!,
+                 permissionRequested: (url, kind, isUserInitiated) =>
+                     WebviewPermissionDecision.deny,
+               ),
+             ),
+             if (widget.debug)
+               Positioned(
+                 right: 8,
+                 top: 8,
+                 child: IconButton(
+                   tooltip: '打开 DevTools',
+                   icon: const Icon(Icons.bug_report_outlined, size: 18),
+                   onPressed: () => _winController?.openDevTools(),
+                 ),
+               ),
+           ],
+         );
+       }
+     } else {
+       viewer = Center(
         child: Text(
           '当前平台暂未启用 Live3D 渲染',
           style: Theme.of(context).textTheme.bodySmall,
@@ -382,7 +691,7 @@ class _Live3DPreviewState extends State<Live3DPreview> {
       );
     }
 
-    return Container(
+    final content = Container(
       height: widget.height,
       decoration: BoxDecoration(
         color: bg,
@@ -397,55 +706,67 @@ class _Live3DPreviewState extends State<Live3DPreview> {
               child: viewer,
             ),
           ),
-          Positioned(
-            left: 12,
-            bottom: 12,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.82),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    fileName ?? '未加载 VRM',
-                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
-                  ),
-                  if (_status != null)
+          if (widget.debug) ...[
+            Positioned(
+              left: 12,
+              bottom: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.82),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Text(
-                      _status!,
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                            color: const Color(0xFF6B6F7A),
+                      fileName ?? '未加载 VRM',
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
                           ),
                     ),
-                ],
+                    if (_status != null)
+                      Text(
+                        _status!,
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                              color: const Color(0xFF6B6F7A),
+                            ),
+                      ),
+                  ],
+                ),
               ),
             ),
-          ),
-          Positioned(
-            right: 12,
-            bottom: 10,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: const Color(0x1F1B9B7B),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Text(
-                fileName == null ? '未加载模型' : '已加载',
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: const Color(0xFF1B9B7B),
-                      fontWeight: FontWeight.w700,
-                    ),
+            Positioned(
+              right: 12,
+              bottom: 10,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0x1F1B9B7B),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  fileName == null ? '未加载模型' : '已加载',
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: const Color(0xFF1B9B7B),
+                        fontWeight: FontWeight.w700,
+                      ),
+                ),
               ),
             ),
-          ),
+          ],
         ],
       ),
+    );
+
+    if (!Platform.isWindows) {
+      return content;
+    }
+
+    return MouseRegion(
+      onEnter: (_) => _handleHoverEnter(),
+      onExit: (_) => _handleHoverExit(),
+      child: content,
     );
   }
 }

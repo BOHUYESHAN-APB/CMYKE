@@ -8,6 +8,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
 
+
 import 'package:cmyke/app.dart';
 
 const MethodChannel _pathProviderChannel =
@@ -34,7 +35,14 @@ void main() {
 
   testWidgets('CMYKE app loads the chat shell', (WidgetTester tester) async {
     await tester.pumpWidget(const CMYKEApp());
-    await tester.pumpAndSettle();
+    await tester.pump();
+
+    for (var i = 0; i < 50; i++) {
+      if (find.text('新对话').evaluate().isNotEmpty) {
+        break;
+      }
+      await tester.pump(const Duration(milliseconds: 100));
+    }
 
     expect(find.text('CMYKE'), findsWidgets);
     expect(find.text('新对话'), findsWidgets);

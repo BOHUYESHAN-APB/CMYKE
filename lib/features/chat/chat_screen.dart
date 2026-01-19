@@ -11,11 +11,11 @@ import '../../core/repositories/memory_repository.dart';
 import '../../core/repositories/settings_repository.dart';
 import '../../core/services/chat_export_service.dart';
 import '../../core/services/chat_engine.dart';
+import '../common/live3d_preview.dart';
 import '../memory/memory_tier_screen.dart';
 import '../settings/provider_config_screen.dart';
 import 'widgets/chat_composer.dart';
 import 'widgets/chat_header.dart';
-import 'widgets/avatar_stage.dart';
 import 'widgets/message_bubble.dart';
 import 'widgets/session_sidebar.dart';
 
@@ -316,28 +316,13 @@ class _ChatScreenState extends State<ChatScreen> {
     controller.dispose();
   }
 
-  Future<void> _openAvatarSheet() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: const Color(0xFFFDFCF9),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (context) {
-        return const Padding(
-          padding: EdgeInsets.all(16),
-          child: AvatarStage(compact: false, height: 260),
-        );
-      },
-    );
-  }
-
   void _openMemoryTier(MemoryTier tier) {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => MemoryTierScreen(
           tier: tier,
           memoryRepository: widget.memoryRepository,
+          settingsRepository: widget.settingsRepository,
           sessionId: widget.chatRepository.activeSessionId,
         ),
       ),
@@ -422,7 +407,6 @@ class _ChatScreenState extends State<ChatScreen> {
                               estimatedTokens: _chatEngine.estimatedTokens,
                               tokenLimit: _chatEngine.tokenLimit,
                               isCompressing: _chatEngine.isCompressing,
-                              onOpenAvatar: isWide ? null : _openAvatarSheet,
                             ),
                             if (widget.embeddingConfigMissing)
                               Padding(
@@ -491,7 +475,20 @@ class _ChatScreenState extends State<ChatScreen> {
                       if (isWide)
                         SizedBox(
                           width: rightPanelWidth,
-                          child: const AvatarStage(fill: true),
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: LayoutBuilder(
+                              builder: (context, constraints) {
+                                final height = constraints.maxHeight.isFinite
+                                    ? constraints.maxHeight
+                                    : 360.0;
+                                return Live3DPreview(
+                                  height: height,
+                                  settingsRepository: widget.settingsRepository,
+                                );
+                              },
+                            ),
+                          ),
                         ),
                     ],
                   ),

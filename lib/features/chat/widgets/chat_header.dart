@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -29,6 +31,17 @@ class ChatHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final brandStyle = Platform.environment.containsKey('FLUTTER_TEST')
+        ? const TextStyle(
+            fontSize: 24,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF1F2228),
+          )
+        : GoogleFonts.notoSerifSc(
+            fontSize: 24,
+            fontWeight: FontWeight.w600,
+            color: const Color(0xFF1F2228),
+          );
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
       child: Row(
@@ -42,11 +55,7 @@ class ChatHeader extends StatelessWidget {
           if (showMenuButton) const SizedBox(width: 4),
           Text(
             'CMYKE',
-            style: GoogleFonts.notoSerifSc(
-              fontSize: 24,
-              fontWeight: FontWeight.w600,
-              color: const Color(0xFF1F2228),
-            ),
+            style: brandStyle,
           ),
           const SizedBox(width: 16),
           Expanded(

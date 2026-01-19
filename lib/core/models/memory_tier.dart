@@ -9,13 +9,13 @@ extension MemoryTierLabel on MemoryTier {
   String get label {
     switch (this) {
       case MemoryTier.context:
-        return '对话内上下文';
+        return '会话上下文';
       case MemoryTier.crossSession:
-        return '跨会话记忆';
+        return '核心记忆';
       case MemoryTier.autonomous:
-        return '自主沉淀';
+        return '日记记忆';
       case MemoryTier.external:
-        return '专业数据库';
+        return '知识库';
     }
   }
 

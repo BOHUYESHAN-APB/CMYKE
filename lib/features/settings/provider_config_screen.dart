@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -8,7 +10,7 @@ import '../../core/models/provider_config.dart';
 import '../../core/models/stage_action.dart';
 import '../../core/repositories/settings_repository.dart';
 import '../../core/services/runtime_hub.dart';
-import '../common/live3d_preview.dart';
+import '../chat/widgets/avatar_stage.dart';
 
 class ProviderConfigScreen extends StatelessWidget {
   const ProviderConfigScreen({
@@ -110,7 +112,22 @@ class _ModeTab extends StatelessWidget {
         const SizedBox(height: 12),
         const _VrmCard(),
         const SizedBox(height: 12),
+        _PetModeCard(
+          settingsRepository: settingsRepository,
+          settings: settings,
+        ),
+        const SizedBox(height: 12),
         _Live3DTestCard(
+          settingsRepository: settingsRepository,
+          settings: settings,
+        ),
+        const SizedBox(height: 12),
+        _MemoryAgentCard(
+          settingsRepository: settingsRepository,
+          settings: settings,
+        ),
+        const SizedBox(height: 12),
+        _MotionAgentCard(
           settingsRepository: settingsRepository,
           settings: settings,
         ),
@@ -486,16 +503,23 @@ class _SectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final titleStyle = Platform.environment.containsKey('FLUTTER_TEST')
+        ? const TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF1F2228),
+          )
+        : GoogleFonts.notoSerifSc(
+            fontSize: 22,
+            fontWeight: FontWeight.w600,
+            color: const Color(0xFF1F2228),
+          );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           title,
-          style: GoogleFonts.notoSerifSc(
-            fontSize: 22,
-            fontWeight: FontWeight.w600,
-            color: const Color(0xFF1F2228),
-          ),
+          style: titleStyle,
         ),
         const SizedBox(height: 4),
         Text(
@@ -780,6 +804,70 @@ class _VrmCard extends StatelessWidget {
   }
 }
 
+class _PetModeCard extends StatelessWidget {
+  const _PetModeCard({
+    required this.settingsRepository,
+    required this.settings,
+  });
+
+  final SettingsRepository settingsRepository;
+  final AppSettings settings;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '桌宠模式（桌面）',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '启用后将进入“只显示模型”的模式，适合挂机陪伴。'
+              '目前为单窗口切换（非透明悬浮），后续可继续做置顶/透明/穿透。',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: const Color(0xFF5E636F),
+                    fontWeight: FontWeight.w600,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('启用桌宠模式'),
+              subtitle: const Text('进入仅模型界面，可随时从按钮返回聊天'),
+              value: settings.petMode,
+              onChanged: (value) {
+                settingsRepository.updateSettings(
+                  settings.copyWith(petMode: value),
+                );
+              },
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('视线跟随鼠标（窗口内）'),
+              subtitle: const Text('在模型区域移动鼠标，眼神会跟随位置'),
+              value: settings.petFollowCursor,
+              onChanged: settings.petMode
+                  ? (value) {
+                      settingsRepository.updateSettings(
+                        settings.copyWith(petFollowCursor: value),
+                      );
+                    }
+                  : null,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _Live3DTestCard extends StatefulWidget {
   const _Live3DTestCard({
     required this.settingsRepository,
@@ -901,9 +989,12 @@ class _Live3DTestCardState extends State<_Live3DTestCard> {
               ],
             ),
             const SizedBox(height: 12),
-            const SizedBox(
-              height: 200,
-              child: Live3DPreview(),
+            SizedBox(
+              height: 520,
+              child: AvatarStage(
+                fill: true,
+                settingsRepository: widget.settingsRepository,
+              ),
             ),
             const SizedBox(height: 12),
             TextField(
@@ -951,6 +1042,176 @@ class _Live3DTestCardState extends State<_Live3DTestCard> {
                     ),
               ),
             ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MotionAgentCard extends StatelessWidget {
+  const _MotionAgentCard({
+    required this.settingsRepository,
+    required this.settings,
+  });
+
+  final SettingsRepository settingsRepository;
+  final AppSettings settings;
+
+  @override
+  Widget build(BuildContext context) {
+    final providers = settingsRepository.providersByKind(ProviderKind.llm);
+    final cooldown = settings.motionAgentCooldownSeconds.clamp(0, 60);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '动作 Agent（高级动作）',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+            const SizedBox(height: 8),
+             Text(
+              '系统自动动作由动作 catalog 的 auto 标记控制；“动作 Agent”只会从标记了 agent 的动作里挑选，'
+              '并在合适时机触发（最多一次/轮）。标准/Omni：根据主助手回复决策；Realtime：根据实时对话文本决策。'
+              '动作分类在 assets/live3d/animations/catalog.json 里配置。建议给动作 Agent 单独配置一个小模型，减少主模型负担。',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: const Color(0xFF5E636F),
+                    fontWeight: FontWeight.w600,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('启用动作 Agent'),
+              subtitle: const Text('由小模型决定是否触发高级动作（最多一次/轮）'),
+              value: settings.motionAgentEnabled,
+              onChanged: (value) {
+                settingsRepository.updateSettings(
+                  settings.copyWith(motionAgentEnabled: value),
+                );
+              },
+            ),
+            _ProviderPicker(
+              label: '动作 Agent 模型（建议小模型）',
+              providers: providers,
+              selectedId: settings.motionAgentProviderId,
+              onChanged: (id) {
+                settingsRepository.updateSettings(
+                  settings.copyWith(motionAgentProviderId: id),
+                );
+              },
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '动作 Agent 冷却：${settings.motionAgentCooldownSeconds}s',
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+            Slider(
+              value: cooldown.toDouble(),
+              min: 0,
+              max: 60,
+              divisions: 60,
+              label: '${cooldown}s',
+              onChanged: (value) {
+                settingsRepository.updateSettings(
+                  settings.copyWith(
+                    motionAgentCooldownSeconds: value.round(),
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MemoryAgentCard extends StatelessWidget {
+  const _MemoryAgentCard({
+    required this.settingsRepository,
+    required this.settings,
+  });
+
+  final SettingsRepository settingsRepository;
+  final AppSettings settings;
+
+  @override
+  Widget build(BuildContext context) {
+    final providers = settingsRepository.providersByKind(ProviderKind.llm);
+    final cooldown = settings.memoryAgentCooldownSeconds.clamp(0, 300);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '记忆 Agent（核心记忆 / 日记记忆）',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '参考 MoeChat 的“核心记忆 + 日记记忆”思路：由一个小模型在每轮对话结束后抽取稳定事实写入“核心记忆”，'
+              '同时把可追溯的事件写入“日记记忆”（便于回答“昨天聊了什么/上周发生了什么”）。'
+              '建议给记忆 Agent 单独配置小模型，避免占用主模型上下文与预算。',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: const Color(0xFF5E636F),
+                    fontWeight: FontWeight.w600,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('启用记忆 Agent'),
+              subtitle: const Text('抽取并更新核心记忆/日记记忆（后台执行）'),
+              value: settings.memoryAgentEnabled,
+              onChanged: (value) {
+                settingsRepository.updateSettings(
+                  settings.copyWith(memoryAgentEnabled: value),
+                );
+              },
+            ),
+            _ProviderPicker(
+              label: '记忆 Agent 模型（建议小模型）',
+              providers: providers,
+              selectedId: settings.memoryAgentProviderId,
+              onChanged: (id) {
+                settingsRepository.updateSettings(
+                  settings.copyWith(memoryAgentProviderId: id),
+                );
+              },
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '记忆 Agent 冷却：${settings.memoryAgentCooldownSeconds}s',
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+            Slider(
+              value: cooldown.toDouble(),
+              min: 0,
+              max: 300,
+              divisions: 300,
+              label: '${cooldown}s',
+              onChanged: (value) {
+                settingsRepository.updateSettings(
+                  settings.copyWith(
+                    memoryAgentCooldownSeconds: value.round(),
+                  ),
+                );
+              },
+            ),
           ],
         ),
       ),

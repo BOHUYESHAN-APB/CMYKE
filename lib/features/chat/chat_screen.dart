@@ -525,7 +525,7 @@ class _EmbeddingWarning extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              '未配置 Embedding 模型，向量检索已停用。请前往模型与能力配置补全。',
+              '未配置 Embedding 模型，向量检索已停用（将使用关键词召回）。建议前往模型与能力配置补全。',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: const Color(0xFF7A4E00),
                     fontWeight: FontWeight.w600,

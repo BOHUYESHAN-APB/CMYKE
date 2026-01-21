@@ -28,6 +28,7 @@ class AppSettings {
   AppSettings({
     required this.route,
     this.llmProviderId,
+    this.embeddingProviderId,
     this.visionProviderId,
     this.ttsProviderId,
     this.sttProviderId,
@@ -53,6 +54,7 @@ class AppSettings {
 
   ModelRoute route;
   String? llmProviderId;
+  String? embeddingProviderId;
   String? visionProviderId;
   String? ttsProviderId;
   String? sttProviderId;
@@ -78,6 +80,7 @@ class AppSettings {
   AppSettings copyWith({
     ModelRoute? route,
     String? llmProviderId,
+    String? embeddingProviderId,
     String? visionProviderId,
     String? ttsProviderId,
     String? sttProviderId,
@@ -103,6 +106,7 @@ class AppSettings {
     return AppSettings(
       route: route ?? this.route,
       llmProviderId: llmProviderId ?? this.llmProviderId,
+      embeddingProviderId: embeddingProviderId ?? this.embeddingProviderId,
       visionProviderId: visionProviderId ?? this.visionProviderId,
       ttsProviderId: ttsProviderId ?? this.ttsProviderId,
       sttProviderId: sttProviderId ?? this.sttProviderId,
@@ -134,6 +138,7 @@ class AppSettings {
   Map<String, dynamic> toJson() => {
         'route': route.name,
         'llm_provider_id': llmProviderId,
+        'embedding_provider_id': embeddingProviderId,
         'vision_provider_id': visionProviderId,
         'tts_provider_id': ttsProviderId,
         'stt_provider_id': sttProviderId,
@@ -163,6 +168,7 @@ class AppSettings {
           orElse: () => ModelRoute.standard,
         ),
         llmProviderId: json['llm_provider_id'] as String?,
+        embeddingProviderId: json['embedding_provider_id'] as String?,
         visionProviderId: json['vision_provider_id'] as String?,
         ttsProviderId: json['tts_provider_id'] as String?,
         sttProviderId: json['stt_provider_id'] as String?,

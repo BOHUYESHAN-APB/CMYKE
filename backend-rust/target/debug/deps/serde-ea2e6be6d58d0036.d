@@ -1,0 +1,14 @@
+D:\-Users-\Documents\GitHub\CMYKE\backend-rust\target\debug\deps\serde-ea2e6be6d58d0036.d: C:\Users\BoHuYeShan\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\BoHuYeShan\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\BoHuYeShan\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\BoHuYeShan\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\BoHuYeShan\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs D:\-Users-\Documents\GitHub\CMYKE\backend-rust\target\debug\build\serde-291d5c27960f80df\out/private.rs
+
+D:\-Users-\Documents\GitHub\CMYKE\backend-rust\target\debug\deps\libserde-ea2e6be6d58d0036.rlib: C:\Users\BoHuYeShan\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\BoHuYeShan\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\BoHuYeShan\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\BoHuYeShan\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\BoHuYeShan\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs D:\-Users-\Documents\GitHub\CMYKE\backend-rust\target\debug\build\serde-291d5c27960f80df\out/private.rs
+
+D:\-Users-\Documents\GitHub\CMYKE\backend-rust\target\debug\deps\libserde-ea2e6be6d58d0036.rmeta: C:\Users\BoHuYeShan\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\BoHuYeShan\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\BoHuYeShan\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\BoHuYeShan\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\BoHuYeShan\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs D:\-Users-\Documents\GitHub\CMYKE\backend-rust\target\debug\build\serde-291d5c27960f80df\out/private.rs
+
+C:\Users\BoHuYeShan\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs:
+C:\Users\BoHuYeShan\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs:
+C:\Users\BoHuYeShan\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs:
+C:\Users\BoHuYeShan\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs:
+C:\Users\BoHuYeShan\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs:
+D:\-Users-\Documents\GitHub\CMYKE\backend-rust\target\debug\build\serde-291d5c27960f80df\out/private.rs:
+
+# env-dep:OUT_DIR=D:\\-Users-\\Documents\\GitHub\\CMYKE\\backend-rust\\target\\debug\\build\\serde-291d5c27960f80df\\out

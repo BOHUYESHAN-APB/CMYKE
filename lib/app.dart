@@ -171,7 +171,9 @@ class _CMYKEAppState extends State<CMYKEApp> {
 
   ProviderConfig? _resolveEmbeddingProvider() {
     try {
-      final provider = _activeLlmProvider();
+      final settings = _settingsRepository.settings;
+      final provider = _settingsRepository.findProvider(settings.embeddingProviderId) ??
+          _activeLlmProvider();
       if (provider == null) {
         return null;
       }
@@ -199,15 +201,7 @@ class _CMYKEAppState extends State<CMYKEApp> {
       if (settings.route != ModelRoute.standard) {
         return false;
       }
-      final provider = _activeLlmProvider();
-      if (provider == null) {
-        return true;
-      }
-      if (provider.protocol == ProviderProtocol.deviceBuiltin) {
-        return true;
-      }
-      final embeddingModel = provider.embeddingModel?.trim();
-      return embeddingModel == null || embeddingModel.isEmpty;
+      return _resolveEmbeddingProvider() == null;
     } catch (_) {
       return false;
     }

@@ -128,9 +128,23 @@ class SettingsRepository extends ChangeNotifier {
 
   void _ensureDefaults() {
     _sanitizeSelections();
-    if (_settings.llmProviderId == null &&
-        providersByKind(ProviderKind.llm).isNotEmpty) {
-      _settings.llmProviderId = providersByKind(ProviderKind.llm).first.id;
+    final llmProviders = providersByKind(ProviderKind.llm);
+    if (_settings.llmProviderId == null && llmProviders.isNotEmpty) {
+      _settings.llmProviderId = llmProviders.first.id;
+    }
+    if (_settings.embeddingProviderId == null && llmProviders.isNotEmpty) {
+      final llm = findProvider(_settings.llmProviderId);
+      if (llm != null && (llm.embeddingModel?.trim().isNotEmpty ?? false)) {
+        _settings.embeddingProviderId = llm.id;
+      } else {
+        final candidate = llmProviders.firstWhere(
+          (p) => p.embeddingModel?.trim().isNotEmpty == true,
+          orElse: () => llmProviders.first,
+        );
+        if (candidate.embeddingModel?.trim().isNotEmpty == true) {
+          _settings.embeddingProviderId = candidate.id;
+        }
+      }
     }
     if (_settings.motionAgentEnabled &&
         _settings.motionAgentProviderId == null &&
@@ -173,6 +187,10 @@ class SettingsRepository extends ChangeNotifier {
     if (_settings.llmProviderId != null &&
         !ids.contains(_settings.llmProviderId)) {
       _settings.llmProviderId = null;
+    }
+    if (_settings.embeddingProviderId != null &&
+        !ids.contains(_settings.embeddingProviderId)) {
+      _settings.embeddingProviderId = null;
     }
     if (_settings.motionAgentProviderId != null &&
         !ids.contains(_settings.motionAgentProviderId)) {
@@ -332,6 +350,7 @@ class SettingsRepository extends ChangeNotifier {
         orElse: () => ModelRoute.standard,
       ),
       llmProviderId: row['llm_provider_id'] as String?,
+      embeddingProviderId: row['embedding_provider_id'] as String?,
       visionProviderId: row['vision_provider_id'] as String?,
       ttsProviderId: row['tts_provider_id'] as String?,
       sttProviderId: row['stt_provider_id'] as String?,
@@ -372,6 +391,7 @@ class SettingsRepository extends ChangeNotifier {
       'id': 1,
       'route': settings.route.name,
       'llm_provider_id': settings.llmProviderId,
+      'embedding_provider_id': settings.embeddingProviderId,
       'vision_provider_id': settings.visionProviderId,
       'tts_provider_id': settings.ttsProviderId,
       'stt_provider_id': settings.sttProviderId,

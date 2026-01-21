@@ -14,6 +14,20 @@ import '../services/local_storage.dart';
 
 typedef EmbeddingProviderResolver = ProviderConfig? Function();
 
+enum MemorySearchMethod { embedding, keyword }
+
+class MemorySearchHit {
+  const MemorySearchHit({
+    required this.record,
+    required this.score,
+    required this.method,
+  });
+
+  final MemoryRecord record;
+  final double score;
+  final MemorySearchMethod method;
+}
+
 class MemoryRepository extends ChangeNotifier {
   MemoryRepository({
     required LocalDatabase database,
@@ -243,6 +257,7 @@ class MemoryRepository extends ChangeNotifier {
     String? sessionId,
     String? scope,
     bool embed = true,
+    List<double>? embedding,
   }) async {
     final db = await _database.database;
     final collection = collectionId == null
@@ -254,13 +269,13 @@ class MemoryRepository extends ChangeNotifier {
       sessionId: sessionId,
       scope: scope,
     );
-    List<double>? embedding;
-    if (embed) {
-      embedding = await _embedText(normalizedRecord.content);
+    var computedEmbedding = embedding;
+    if (embed && computedEmbedding == null) {
+      computedEmbedding = await _embedText(normalizedRecord.content);
     }
     _insertRecordSorted(collection, normalizedRecord);
-    if (embedding != null) {
-      _recordEmbeddings[normalizedRecord.id] = embedding;
+    if (computedEmbedding != null) {
+      _recordEmbeddings[normalizedRecord.id] = computedEmbedding;
     }
     notifyListeners();
     await db.insert(
@@ -268,8 +283,8 @@ class MemoryRepository extends ChangeNotifier {
       _recordToRow(
         normalizedRecord,
         collection.id,
-        embedding: embedding,
-        embeddingModel: embedding == null ? null : _embeddingModel(),
+        embedding: computedEmbedding,
+        embeddingModel: computedEmbedding == null ? null : _embeddingModel(),
       ),
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
@@ -447,6 +462,67 @@ class MemoryRepository extends ChangeNotifier {
     if (alreadyExists) {
       return;
     }
+
+    List<double>? embedding;
+    if (embed) {
+      embedding = await _embedText(normalizedContent);
+    }
+
+    if (includeAgentTag) {
+      const windowDays = 14;
+      const embeddingDuplicateThreshold = 0.92;
+      const tokenDuplicateThreshold = 0.86;
+
+      final recent = collection.records
+          .where((record) => record.scope == scope)
+          .where(
+            (record) => record.createdAt.isAfter(
+              occurredAt.subtract(const Duration(days: windowDays)),
+            ),
+          )
+          .take(48)
+          .toList(growable: false);
+
+      if (recent.isNotEmpty) {
+        if (embedding != null && embedding.isNotEmpty) {
+          for (final record in recent) {
+            final existing = _recordEmbeddings[record.id];
+            if (existing == null || existing.isEmpty) continue;
+            final similarity = _cosineSimilarity(embedding, existing);
+            if (similarity >= embeddingDuplicateThreshold) {
+              return;
+            }
+          }
+        } else {
+          final normalizedQuery = _normalizeForSearch(normalizedContent);
+          if (normalizedQuery.length >= 12) {
+            final queryTokens =
+                _extractQueryTokens(normalizedContent, normalizedQuery).toSet();
+            if (queryTokens.length >= 6) {
+              for (final record in recent) {
+                final candidate = _normalizeForSearch(record.content);
+                if (candidate.isEmpty) continue;
+                if (candidate == normalizedQuery) {
+                  return;
+                }
+                final candidateTokens =
+                    _extractQueryTokens(record.content, candidate).toSet();
+                if (candidateTokens.isEmpty) continue;
+                final unionSize = queryTokens.union(candidateTokens).length;
+                if (unionSize == 0) continue;
+                final intersectionSize =
+                    queryTokens.intersection(candidateTokens).length;
+                if (intersectionSize < 4) continue;
+                final similarity = intersectionSize / unionSize;
+                if (similarity >= tokenDuplicateThreshold) {
+                  return;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
     final normalizedTags = <String>{
       if (includeAgentTag) _agentTag,
       ...tags.where((t) => t.trim().isNotEmpty),
@@ -470,6 +546,7 @@ class MemoryRepository extends ChangeNotifier {
         scope: scope,
       ),
       embed: embed,
+      embedding: embedding,
     );
   }
 
@@ -574,21 +651,32 @@ class MemoryRepository extends ChangeNotifier {
     String query, {
     int limit = 10,
   }) async {
+    final hits = await searchRelevantScored(query, limit: limit);
+    return hits.map((hit) => hit.record).toList(growable: false);
+  }
+
+  Future<List<MemorySearchHit>> searchRelevantScored(
+    String query, {
+    int limit = 10,
+  }) async {
     final trimmed = query.trim();
     if (trimmed.isEmpty) {
-      return [];
+      return const [];
+    }
+    if (limit <= 0) {
+      return const [];
     }
     final candidates = _candidateRecords();
     if (candidates.isEmpty) {
-      return [];
+      return const [];
     }
     final provider = _resolveEmbeddingProvider?.call();
     if (provider == null) {
-      return [];
+      return _fallbackHitsByText(trimmed, candidates, limit);
     }
     final queryEmbedding = await _embedText(trimmed);
     if (queryEmbedding == null || queryEmbedding.isEmpty) {
-      return _fallbackRecords(candidates, limit);
+      return _fallbackHitsByText(trimmed, candidates, limit);
     }
     await _backfillEmbeddings(candidates);
     final scored = <_ScoredRecord>[];
@@ -603,10 +691,19 @@ class MemoryRepository extends ChangeNotifier {
       }
     }
     if (scored.isEmpty) {
-      return _fallbackRecords(candidates, limit);
+      return _fallbackHitsByText(trimmed, candidates, limit);
     }
     scored.sort((a, b) => b.score.compareTo(a.score));
-    return scored.take(limit).map((entry) => entry.record).toList();
+    return scored
+        .take(limit)
+        .map(
+          (entry) => MemorySearchHit(
+            record: entry.record,
+            score: entry.score,
+            method: MemorySearchMethod.embedding,
+          ),
+        )
+        .toList(growable: false);
   }
 
   List<MemoryCollection> _bootstrapCollections() {
@@ -941,12 +1038,119 @@ class MemoryRepository extends ChangeNotifier {
     return records;
   }
 
-  List<MemoryRecord> _fallbackRecords(
+  List<MemorySearchHit> _fallbackHits(
     List<MemoryRecord> candidates,
     int limit,
   ) {
     final trimmed = candidates.toList();
-    return trimmed.take(limit).toList();
+    return trimmed
+        .take(limit)
+        .map(
+          (record) => MemorySearchHit(
+            record: record,
+            score: 0.0,
+            method: MemorySearchMethod.keyword,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  List<MemorySearchHit> _fallbackHitsByText(
+    String query,
+    List<MemoryRecord> candidates,
+    int limit,
+  ) {
+    if (limit <= 0) {
+      return const [];
+    }
+    final normalizedQuery = _normalizeForSearch(query);
+    if (normalizedQuery.length < 2) {
+      return _fallbackHits(candidates, limit);
+    }
+
+    final tokens = _extractQueryTokens(query, normalizedQuery);
+    if (tokens.isEmpty) {
+      return _fallbackHits(candidates, limit);
+    }
+
+    final scored = <_ScoredRecord>[];
+    for (final record in candidates) {
+      final content = _normalizeForSearch(record.content);
+      if (content.isEmpty) {
+        continue;
+      }
+      var score = 0.0;
+      if (content.contains(normalizedQuery)) {
+        score += 6.0;
+      }
+      for (final token in tokens) {
+        if (content.contains(token)) {
+          score += 1.0 + (token.length.clamp(2, 8) - 2) * 0.35;
+        }
+      }
+      if (score > 0) {
+        scored.add(_ScoredRecord(record, score));
+      }
+    }
+
+    if (scored.isEmpty) {
+      return _fallbackHits(candidates, limit);
+    }
+    scored.sort((a, b) {
+      final byScore = b.score.compareTo(a.score);
+      if (byScore != 0) return byScore;
+      return b.record.createdAt.compareTo(a.record.createdAt);
+    });
+    return scored
+        .take(limit)
+        .map(
+          (entry) => MemorySearchHit(
+            record: entry.record,
+            score: entry.score,
+            method: MemorySearchMethod.keyword,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  String _normalizeForSearch(String text) {
+    return text
+        .replaceAll('\u200B', '')
+        .toLowerCase()
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  List<String> _extractQueryTokens(String rawQuery, String normalizedQuery) {
+    final tokens = <String>{};
+    final cleaned = normalizedQuery.replaceAll(
+      RegExp('[，,。．.！!？?；;：:、()（）\\[\\]{}"“”\'‘’<>《》]+'),
+      ' ',
+    );
+    for (final part in cleaned.split(' ')) {
+      final t = part.trim();
+      if (t.length >= 2 && t.length <= 32) {
+        tokens.add(t);
+      }
+      if (tokens.length >= 32) break;
+    }
+
+    final cjkRuns = RegExp(r'[\u4E00-\u9FFF]{2,}').allMatches(rawQuery);
+    for (final match in cjkRuns) {
+      final run = match.group(0);
+      if (run == null || run.length < 2) continue;
+      final cappedRun = run.length > 24 ? run.substring(0, 24) : run;
+      if (cappedRun.length <= 8) {
+        tokens.add(_normalizeForSearch(cappedRun));
+      }
+      for (var i = 0; i < cappedRun.length - 1; i++) {
+        tokens.add(_normalizeForSearch(cappedRun.substring(i, i + 2)));
+        if (tokens.length >= 48) break;
+      }
+      if (tokens.length >= 48) break;
+    }
+
+    return tokens.take(48).toList(growable: false);
   }
 
   double _cosineSimilarity(List<double> a, List<double> b) {

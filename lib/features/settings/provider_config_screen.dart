@@ -101,7 +101,7 @@ class _ModeTab extends StatelessWidget {
           items: const [
             '普通 LLM 模式：可直接工具调用，适合深度搜索/研究。',
             'Realtime 模式：由控制代理调用工具，保证低延迟对话。',
-            '需要向量检索时请填写 Embedding Model。',
+            '需要向量检索时：在 Provider 中填写 Embedding Model，并选择 Embedding Provider。',
           ],
         ),
         const SizedBox(height: 12),
@@ -145,6 +145,16 @@ class _ModeTab extends StatelessWidget {
             onChanged: (id) {
               settingsRepository.updateSettings(
                 settings.copyWith(llmProviderId: id),
+              );
+            },
+          ),
+          _ProviderPicker(
+            label: 'Embedding Provider（向量检索）',
+            providers: settingsRepository.providersByKind(ProviderKind.llm),
+            selectedId: settings.embeddingProviderId,
+            onChanged: (id) {
+              settingsRepository.updateSettings(
+                settings.copyWith(embeddingProviderId: id),
               );
             },
           ),

@@ -57,7 +57,7 @@ class LocalDatabase {
       return ffi.databaseFactoryFfi.openDatabase(
         dbPath,
         options: OpenDatabaseOptions(
-          version: 12,
+          version: 13,
           onConfigure: (db) async {
             await db.execute('PRAGMA foreign_keys = ON');
           },
@@ -68,7 +68,7 @@ class LocalDatabase {
     }
     return openDatabase(
       dbPath,
-      version: 12,
+      version: 13,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
       },
@@ -184,6 +184,7 @@ class LocalDatabase {
         id INTEGER PRIMARY KEY,
         route TEXT NOT NULL,
         llm_provider_id TEXT,
+        embedding_provider_id TEXT,
         vision_provider_id TEXT,
         tts_provider_id TEXT,
         stt_provider_id TEXT,
@@ -278,6 +279,11 @@ class LocalDatabase {
       );
       await db.execute(
         'ALTER TABLE app_settings ADD COLUMN memory_agent_cooldown_seconds INTEGER NOT NULL DEFAULT 20',
+      );
+    }
+    if (oldVersion < 13) {
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN embedding_provider_id TEXT',
       );
     }
   }

@@ -602,6 +602,21 @@ class ChatEngine extends ChangeNotifier {
     }
   }
 
+  ProviderConfig _resolveSummarizerProvider(ProviderConfig fallback) {
+    final settings = _settingsRepository.settings;
+    if (settings.memoryAgentEnabled) {
+      final id = settings.memoryAgentProviderId?.trim();
+      if (id != null && id.isNotEmpty) {
+        final candidate = _settingsRepository.findProvider(id);
+        if (candidate != null &&
+            candidate.protocol != ProviderProtocol.deviceBuiltin) {
+          return candidate;
+        }
+      }
+    }
+    return fallback;
+  }
+
   bool _shouldSpeakResponse({required bool modelProvidedAudio}) {
     if (modelProvidedAudio) {
       return false;
@@ -720,12 +735,16 @@ class ChatEngine extends ChangeNotifier {
     _isCompressing = true;
     notifyListeners();
     try {
+      final summarizer = _resolveSummarizerProvider(provider);
+      final summarizerLimit = _resolveContextLimit(summarizer);
+      final summaryBudget =
+          (min(limit, summarizerLimit ?? limit) * 0.7).round();
       final trimmedCandidates = _trimMessagesToTokenBudget(
         candidates,
-        (limit * 0.7).round(),
+        summaryBudget,
       );
       final summary = await _summarizeMessages(
-        provider,
+        summarizer,
         trimmedCandidates,
         previousSummary: anchor?.content,
       );
@@ -1403,31 +1422,6 @@ $original
     return softened;
   }
 
-  String? _formatMemoryRecordForSystemPrompt(MemoryRecord record) {
-    final sanitized = _sanitizeMemoryForSystemPrompt(record.content);
-    if (sanitized == null) {
-      return null;
-    }
-
-    if (record.tier == MemoryTier.crossSession) {
-      final keyTag = record.tags.firstWhere(
-        (t) => t.startsWith('core_key:'),
-        orElse: () => '',
-      );
-      final key = keyTag.isEmpty ? '' : keyTag.substring('core_key:'.length).trim();
-      if (key.isNotEmpty) {
-        return '$key: $sanitized';
-      }
-    }
-
-    if (record.tier == MemoryTier.autonomous) {
-      final day = record.createdAt.toIso8601String().substring(0, 10);
-      return '$day $sanitized';
-    }
-
-    return sanitized;
-  }
-
   bool _containsForbiddenIdentityDisclosure(String content) {
     final normalized = content.replaceAll('\u200B', '').trim();
     if (normalized.isEmpty) {
@@ -1791,7 +1785,7 @@ $original
       sessionId: sessionId,
     );
 
-    final coreRecords = _memoryRepository.recordsForTier(MemoryTier.crossSession);
+    final coreAll = _memoryRepository.recordsForTier(MemoryTier.crossSession);
 
     final now = DateTime.now();
     final timeRange = parseChineseTimeRange(userMessage, now);
@@ -1808,52 +1802,144 @@ $original
             .toList(growable: false);
     final timeDiaryIds = timeDiary.map((record) => record.id).toSet();
 
-    final relevant =
-        await _memoryRepository.searchRelevant(userMessage, limit: 12);
-    final relevantFiltered = relevant
-        .where((record) => record.tier != MemoryTier.crossSession)
-        .where((record) => !timeDiaryIds.contains(record.id))
+    final relevantAll = await _memoryRepository.searchRelevantScored(
+      userMessage,
+      limit: 24,
+    );
+    const diaryMinScore = 0.33;
+    const knowledgeMinScore = 0.42;
+
+    final relevantCore = relevantAll
+        .where((hit) => hit.record.tier == MemoryTier.crossSession)
+        .map((hit) => hit.record)
         .toList(growable: false);
 
+    final relevantFiltered = relevantAll
+        .where((hit) => hit.record.tier != MemoryTier.crossSession)
+        .where((hit) => !timeDiaryIds.contains(hit.record.id))
+        .where((hit) {
+          switch (hit.record.tier) {
+            case MemoryTier.autonomous:
+              return hit.method != MemorySearchMethod.embedding ||
+                  hit.score >= diaryMinScore;
+            case MemoryTier.external:
+              return hit.method != MemorySearchMethod.embedding ||
+                  hit.score >= knowledgeMinScore;
+            default:
+              return true;
+          }
+        })
+        .map((hit) => hit.record)
+        .toList(growable: false);
+
+    const coreLimit = 12;
+    final coreSelected = <MemoryRecord>[];
+    final seenCoreKeys = <String>{};
+
+    String coreUniqKey(MemoryRecord record) {
+      final keyTag = record.tags.firstWhere(
+        (t) => t.startsWith('core_key:'),
+        orElse: () => '',
+      );
+      final key =
+          keyTag.isEmpty ? '' : keyTag.substring('core_key:'.length).trim();
+      return key.isEmpty ? record.id : key;
+    }
+
+    void pushCore(MemoryRecord record) {
+      final key = coreUniqKey(record);
+      if (seenCoreKeys.contains(key)) {
+        return;
+      }
+      seenCoreKeys.add(key);
+      coreSelected.add(record);
+    }
+
+    for (final record in relevantCore) {
+      if (coreSelected.length >= coreLimit) break;
+      pushCore(record);
+    }
+    for (final record in coreAll) {
+      if (coreSelected.length >= coreLimit) break;
+      pushCore(record);
+    }
+
     if (contextRecords.isEmpty &&
-        coreRecords.isEmpty &&
+        coreSelected.isEmpty &&
         diaryAll.isEmpty &&
         relevantFiltered.isEmpty) {
       return applyRouteAddons(base);
     }
 
     final buffer = StringBuffer('$base\n');
-    if (contextRecords.isNotEmpty) {
-      buffer.writeln('\n[会话内记忆]');
-      for (final record in contextRecords.take(12)) {
-        final formatted = _formatMemoryRecordForSystemPrompt(record);
-        if (formatted == null) {
-          continue;
+
+    final seen = <String>{};
+    String dedupeKey(String content) {
+      return content
+          .replaceAll('\u200B', '')
+          .toLowerCase()
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+    }
+
+    String? formatUnique(MemoryRecord record) {
+      final sanitized = _sanitizeMemoryForSystemPrompt(record.content);
+      if (sanitized == null) {
+        return null;
+      }
+      final key = dedupeKey(sanitized);
+      if (seen.contains(key)) {
+        return null;
+      }
+      seen.add(key);
+
+      if (record.tier == MemoryTier.crossSession) {
+        final keyTag = record.tags.firstWhere(
+          (t) => t.startsWith('core_key:'),
+          orElse: () => '',
+        );
+        final coreKey = keyTag.isEmpty
+            ? ''
+            : keyTag.substring('core_key:'.length).trim();
+        if (coreKey.isNotEmpty) {
+          return '$coreKey: $sanitized';
         }
-        buffer.writeln('- $formatted');
+      }
+
+      if (record.tier == MemoryTier.autonomous) {
+        final day = record.createdAt.toIso8601String().substring(0, 10);
+        return '$day $sanitized';
+      }
+
+      return sanitized;
+    }
+
+    void appendSection(String label, Iterable<MemoryRecord> records) {
+      final lines = <String>[];
+      for (final record in records) {
+        final formatted = formatUnique(record);
+        if (formatted == null) continue;
+        lines.add(formatted);
+      }
+      if (lines.isEmpty) {
+        return;
+      }
+      buffer.writeln('\n[$label]');
+      for (final line in lines) {
+        buffer.writeln('- $line');
       }
     }
 
-    if (coreRecords.isNotEmpty) {
-      buffer.writeln('\n[核心记忆]');
-      for (final record in coreRecords.take(12)) {
-        final formatted = _formatMemoryRecordForSystemPrompt(record);
-        if (formatted == null) {
-          continue;
-        }
-        buffer.writeln('- $formatted');
-      }
+    if (contextRecords.isNotEmpty) {
+      appendSection('会话内记忆', contextRecords.take(12));
     }
 
     if (timeDiary.isNotEmpty) {
-      buffer.writeln('\n[日记记忆·${timeRange!.label}]');
-      for (final record in timeDiary) {
-        final formatted = _formatMemoryRecordForSystemPrompt(record);
-        if (formatted == null) {
-          continue;
-        }
-        buffer.writeln('- $formatted');
-      }
+      appendSection('日记记忆·${timeRange!.label}', timeDiary);
+    }
+
+    if (coreSelected.isNotEmpty) {
+      appendSection('核心记忆', coreSelected);
     }
 
     if (relevantFiltered.isNotEmpty) {
@@ -1861,32 +1947,16 @@ $original
       for (final record in relevantFiltered) {
         byTier.putIfAbsent(record.tier, () => []).add(record);
       }
-      void appendTier(MemoryTier tier, String label) {
-        final items = byTier[tier];
-        if (items == null || items.isEmpty) {
-          return;
-        }
-        buffer.writeln('\n[$label]');
-        for (final record in items) {
-          final formatted = _formatMemoryRecordForSystemPrompt(record);
-          if (formatted == null) {
-            continue;
-          }
-          buffer.writeln('- $formatted');
-        }
+      final diaryRelated = byTier[MemoryTier.autonomous];
+      if (diaryRelated != null && diaryRelated.isNotEmpty) {
+        appendSection('日记记忆·相关', diaryRelated);
       }
-
-      appendTier(MemoryTier.autonomous, '日记记忆·相关');
-      appendTier(MemoryTier.external, '知识库·相关');
+      final kbRelated = byTier[MemoryTier.external];
+      if (kbRelated != null && kbRelated.isNotEmpty) {
+        appendSection('知识库·相关', kbRelated);
+      }
     } else if (timeDiary.isEmpty && diaryAll.isNotEmpty) {
-      buffer.writeln('\n[日记记忆·近期]');
-      for (final record in diaryAll.take(12)) {
-        final formatted = _formatMemoryRecordForSystemPrompt(record);
-        if (formatted == null) {
-          continue;
-        }
-        buffer.writeln('- $formatted');
-      }
+      appendSection('日记记忆·近期', diaryAll.take(12));
     }
 
     return applyRouteAddons(buffer.toString());

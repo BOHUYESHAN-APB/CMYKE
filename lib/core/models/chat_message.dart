@@ -1,8 +1,4 @@
-enum ChatRole {
-  system,
-  user,
-  assistant,
-}
+enum ChatRole { system, user, assistant }
 
 class ChatMessage {
   ChatMessage({
@@ -18,19 +14,19 @@ class ChatMessage {
   final DateTime createdAt;
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'role': role.name,
-        'content': content,
-        'created_at': createdAt.toIso8601String(),
-      };
+    'id': id,
+    'role': role.name,
+    'content': content,
+    'created_at': createdAt.toIso8601String(),
+  };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
-        id: json['id'] as String,
-        role: ChatRole.values.firstWhere(
-          (role) => role.name == json['role'],
-          orElse: () => ChatRole.assistant,
-        ),
-        content: json['content'] as String,
-        createdAt: DateTime.parse(json['created_at'] as String),
-      );
+    id: json['id'] as String,
+    role: ChatRole.values.firstWhere(
+      (role) => role.name == json['role'],
+      orElse: () => ChatRole.assistant,
+    ),
+    content: json['content'] as String,
+    createdAt: DateTime.parse(json['created_at'] as String),
+  );
 }

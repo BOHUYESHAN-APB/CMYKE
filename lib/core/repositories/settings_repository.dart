@@ -12,8 +12,8 @@ class SettingsRepository extends ChangeNotifier {
   SettingsRepository({
     required LocalDatabase database,
     LocalStorage? legacyStorage,
-  })  : _database = database,
-        _legacyStorage = legacyStorage ?? LocalStorage();
+  }) : _database = database,
+       _legacyStorage = legacyStorage ?? LocalStorage();
 
   final LocalDatabase _database;
   final LocalStorage _legacyStorage;
@@ -108,11 +108,7 @@ class SettingsRepository extends ChangeNotifier {
   Future<void> removeProvider(String providerId) async {
     final db = await _database.database;
     _providers.removeWhere((provider) => provider.id == providerId);
-    await db.delete(
-      _providersTable,
-      where: 'id = ?',
-      whereArgs: [providerId],
-    );
+    await db.delete(_providersTable, where: 'id = ?', whereArgs: [providerId]);
     _sanitizeSelections();
     await _persistSettings(db);
     notifyListeners();
@@ -149,19 +145,22 @@ class SettingsRepository extends ChangeNotifier {
     if (_settings.motionAgentEnabled &&
         _settings.motionAgentProviderId == null &&
         providersByKind(ProviderKind.llm).isNotEmpty) {
-      _settings.motionAgentProviderId =
-          providersByKind(ProviderKind.llm).first.id;
+      _settings.motionAgentProviderId = providersByKind(
+        ProviderKind.llm,
+      ).first.id;
     }
     if (_settings.memoryAgentEnabled &&
         _settings.memoryAgentProviderId == null &&
         providersByKind(ProviderKind.llm).isNotEmpty) {
-      _settings.memoryAgentProviderId =
-          providersByKind(ProviderKind.llm).first.id;
+      _settings.memoryAgentProviderId = providersByKind(
+        ProviderKind.llm,
+      ).first.id;
     }
     if (_settings.visionProviderId == null &&
         providersByKind(ProviderKind.visionAgent).isNotEmpty) {
-      _settings.visionProviderId =
-          providersByKind(ProviderKind.visionAgent).first.id;
+      _settings.visionProviderId = providersByKind(
+        ProviderKind.visionAgent,
+      ).first.id;
     }
     if (_settings.ttsProviderId == null &&
         providersByKind(ProviderKind.tts).isNotEmpty) {
@@ -173,8 +172,9 @@ class SettingsRepository extends ChangeNotifier {
     }
     if (_settings.realtimeProviderId == null &&
         providersByKind(ProviderKind.realtime).isNotEmpty) {
-      _settings.realtimeProviderId =
-          providersByKind(ProviderKind.realtime).first.id;
+      _settings.realtimeProviderId = providersByKind(
+        ProviderKind.realtime,
+      ).first.id;
     }
     if (_settings.omniProviderId == null &&
         providersByKind(ProviderKind.omni).isNotEmpty) {
@@ -247,8 +247,7 @@ class SettingsRepository extends ChangeNotifier {
     if (providerData != null && providerData.isNotEmpty) {
       final batch = db.batch();
       for (final entry in providerData) {
-        final provider =
-            ProviderConfig.fromJson(entry as Map<String, dynamic>);
+        final provider = ProviderConfig.fromJson(entry as Map<String, dynamic>);
         batch.insert(
           _providersTable,
           _providerToRow(provider),
@@ -264,11 +263,13 @@ class SettingsRepository extends ChangeNotifier {
     final capabilities = (capabilitiesRaw == null || capabilitiesRaw.isEmpty)
         ? <ProviderCapability>[]
         : (jsonDecode(capabilitiesRaw) as List<dynamic>)
-            .map((entry) => ProviderCapability.values.firstWhere(
+              .map(
+                (entry) => ProviderCapability.values.firstWhere(
                   (cap) => cap.name == entry,
                   orElse: () => ProviderCapability.tools,
-                ))
-            .toList();
+                ),
+              )
+              .toList();
     return ProviderConfig(
       id: row['id'] as String,
       name: row['name'] as String,
@@ -297,8 +298,7 @@ class SettingsRepository extends ChangeNotifier {
       temperature: (row['temperature'] as num?)?.toDouble(),
       topP: (row['top_p'] as num?)?.toDouble(),
       maxTokens: (row['max_tokens'] as num?)?.toInt(),
-      contextWindowTokens:
-          (row['context_window_tokens'] as num?)?.toInt(),
+      contextWindowTokens: (row['context_window_tokens'] as num?)?.toInt(),
       frequencyPenalty: (row['frequency_penalty'] as num?)?.toDouble(),
       presencePenalty: (row['presence_penalty'] as num?)?.toDouble(),
       seed: (row['seed'] as num?)?.toInt(),

@@ -19,13 +19,13 @@ class MemoryCollection {
   final bool locked;
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'tier': tier.key,
-        'name': name,
-        'created_at': createdAt.toIso8601String(),
-        'records': records.map((record) => record.toJson()).toList(),
-        'locked': locked,
-      };
+    'id': id,
+    'tier': tier.key,
+    'name': name,
+    'created_at': createdAt.toIso8601String(),
+    'records': records.map((record) => record.toJson()).toList(),
+    'locked': locked,
+  };
 
   factory MemoryCollection.fromJson(Map<String, dynamic> json) =>
       MemoryCollection(
@@ -37,7 +37,9 @@ class MemoryCollection {
         name: json['name'] as String,
         createdAt: DateTime.parse(json['created_at'] as String),
         records: (json['records'] as List<dynamic>? ?? [])
-            .map((entry) => MemoryRecord.fromJson(entry as Map<String, dynamic>))
+            .map(
+              (entry) => MemoryRecord.fromJson(entry as Map<String, dynamic>),
+            )
             .toList(),
         locked: json['locked'] as bool? ?? false,
       );

@@ -7,12 +7,9 @@ import 'tool_router.dart';
 /// and Live3D bridge). This is a light-weight locator for future wiring.
 class RuntimeHub {
   RuntimeHub._internal()
-      : bus = RuntimeEventBus(),
-        toolRouter = const ToolRouter() {
-    controlAgent = ControlAgent(
-      bus: bus,
-      toolRouter: toolRouter,
-    );
+    : bus = RuntimeEventBus(),
+      toolRouter = const ToolRouter() {
+    controlAgent = ControlAgent(bus: bus, toolRouter: toolRouter);
     live3dBridge = Live3DBridge(bus);
   }
 

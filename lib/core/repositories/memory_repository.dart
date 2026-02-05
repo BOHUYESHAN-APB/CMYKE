@@ -34,10 +34,10 @@ class MemoryRepository extends ChangeNotifier {
     LocalStorage? legacyStorage,
     EmbeddingProviderResolver? resolveEmbeddingProvider,
     LlmClient? llmClient,
-  })  : _database = database,
-        _legacyStorage = legacyStorage ?? LocalStorage(),
-        _resolveEmbeddingProvider = resolveEmbeddingProvider,
-        _llmClient = llmClient ?? LlmClient();
+  }) : _database = database,
+       _legacyStorage = legacyStorage ?? LocalStorage(),
+       _resolveEmbeddingProvider = resolveEmbeddingProvider,
+       _llmClient = llmClient ?? LlmClient();
 
   final LocalDatabase _database;
   final LocalStorage _legacyStorage;
@@ -55,16 +55,8 @@ class MemoryRepository extends ChangeNotifier {
 
   List<MemoryCollection> get collections => List.unmodifiable(_collections);
 
-  int countByTier(
-    MemoryTier tier, {
-    String? sessionId,
-    String? scope,
-  }) {
-    return recordsForTier(
-      tier,
-      sessionId: sessionId,
-      scope: scope,
-    ).length;
+  int countByTier(MemoryTier tier, {String? sessionId, String? scope}) {
+    return recordsForTier(tier, sessionId: sessionId, scope: scope).length;
   }
 
   List<MemoryRecord> recordsForTier(
@@ -142,8 +134,7 @@ class MemoryRepository extends ChangeNotifier {
     }
     collection.records.removeWhere(
       (item) =>
-          item.sessionId == trimmed &&
-          item.tags.contains(_sessionSummaryTag),
+          item.sessionId == trimmed && item.tags.contains(_sessionSummaryTag),
     );
 
     final embedding = await _embedText(normalizedRecord.content);
@@ -158,11 +149,7 @@ class MemoryRepository extends ChangeNotifier {
     final db = await _database.database;
     final batch = db.batch();
     for (final item in toRemove) {
-      batch.delete(
-        _recordsTable,
-        where: 'id = ?',
-        whereArgs: [item.id],
-      );
+      batch.delete(_recordsTable, where: 'id = ?', whereArgs: [item.id]);
     }
     batch.insert(
       _recordsTable,
@@ -198,18 +185,24 @@ class MemoryRepository extends ChangeNotifier {
 
   Future<void> load() async {
     final db = await _database.database;
-    var collectionRows =
-        await db.query(_collectionsTable, orderBy: 'created_at ASC');
+    var collectionRows = await db.query(
+      _collectionsTable,
+      orderBy: 'created_at ASC',
+    );
     if (collectionRows.isEmpty) {
       await _importLegacy(db);
-      collectionRows =
-          await db.query(_collectionsTable, orderBy: 'created_at ASC');
+      collectionRows = await db.query(
+        _collectionsTable,
+        orderBy: 'created_at ASC',
+      );
     }
     if (collectionRows.isEmpty) {
       final bootstrap = _bootstrapCollections();
       await _insertCollections(db, bootstrap);
-      collectionRows =
-          await db.query(_collectionsTable, orderBy: 'created_at ASC');
+      collectionRows = await db.query(
+        _collectionsTable,
+        orderBy: 'created_at ASC',
+      );
     }
 
     final recordRows = await db.query(
@@ -298,8 +291,9 @@ class MemoryRepository extends ChangeNotifier {
     bool embed = true,
   }) async {
     final db = await _database.database;
-    final collection =
-        _collections.firstWhere((item) => item.id == collectionId);
+    final collection = _collections.firstWhere(
+      (item) => item.id == collectionId,
+    );
     final index = collection.records.indexWhere((item) => item.id == record.id);
     if (index == -1) {
       return;
@@ -496,8 +490,10 @@ class MemoryRepository extends ChangeNotifier {
         } else {
           final normalizedQuery = _normalizeForSearch(normalizedContent);
           if (normalizedQuery.length >= 12) {
-            final queryTokens =
-                _extractQueryTokens(normalizedContent, normalizedQuery).toSet();
+            final queryTokens = _extractQueryTokens(
+              normalizedContent,
+              normalizedQuery,
+            ).toSet();
             if (queryTokens.length >= 6) {
               for (final record in recent) {
                 final candidate = _normalizeForSearch(record.content);
@@ -505,13 +501,16 @@ class MemoryRepository extends ChangeNotifier {
                 if (candidate == normalizedQuery) {
                   return;
                 }
-                final candidateTokens =
-                    _extractQueryTokens(record.content, candidate).toSet();
+                final candidateTokens = _extractQueryTokens(
+                  record.content,
+                  candidate,
+                ).toSet();
                 if (candidateTokens.isEmpty) continue;
                 final unionSize = queryTokens.union(candidateTokens).length;
                 if (unionSize == 0) continue;
-                final intersectionSize =
-                    queryTokens.intersection(candidateTokens).length;
+                final intersectionSize = queryTokens
+                    .intersection(candidateTokens)
+                    .length;
                 if (intersectionSize < 4) continue;
                 final similarity = intersectionSize / unionSize;
                 if (similarity >= tokenDuplicateThreshold) {
@@ -555,16 +554,13 @@ class MemoryRepository extends ChangeNotifier {
     required String recordId,
   }) async {
     final db = await _database.database;
-    final collection =
-        _collections.firstWhere((item) => item.id == collectionId);
+    final collection = _collections.firstWhere(
+      (item) => item.id == collectionId,
+    );
     collection.records.removeWhere((record) => record.id == recordId);
     _recordEmbeddings.remove(recordId);
     notifyListeners();
-    await db.delete(
-      _recordsTable,
-      where: 'id = ?',
-      whereArgs: [recordId],
-    );
+    await db.delete(_recordsTable, where: 'id = ?', whereArgs: [recordId]);
   }
 
   Future<MemoryCollection> addExternalCollection(String name) async {
@@ -587,8 +583,9 @@ class MemoryRepository extends ChangeNotifier {
 
   Future<void> renameCollection(String collectionId, String name) async {
     final db = await _database.database;
-    final collection =
-        _collections.firstWhere((item) => item.id == collectionId);
+    final collection = _collections.firstWhere(
+      (item) => item.id == collectionId,
+    );
     if (collection.locked) {
       return;
     }
@@ -604,8 +601,9 @@ class MemoryRepository extends ChangeNotifier {
 
   Future<void> removeCollection(String collectionId) async {
     final db = await _database.database;
-    final collection =
-        _collections.firstWhere((item) => item.id == collectionId);
+    final collection = _collections.firstWhere(
+      (item) => item.id == collectionId,
+    );
     if (collection.locked || collection.tier != MemoryTier.external) {
       return;
     }
@@ -627,17 +625,16 @@ class MemoryRepository extends ChangeNotifier {
       return;
     }
     final collection = defaultCollection(MemoryTier.context);
-    final toRemove =
-        collection.records.where((record) => record.sessionId == trimmed);
+    final toRemove = collection.records.where(
+      (record) => record.sessionId == trimmed,
+    );
     if (toRemove.isEmpty) {
       return;
     }
     for (final record in toRemove) {
       _recordEmbeddings.remove(record.id);
     }
-    collection.records.removeWhere(
-      (record) => record.sessionId == trimmed,
-    );
+    collection.records.removeWhere((record) => record.sessionId == trimmed);
     notifyListeners();
     final db = await _database.database;
     await db.delete(
@@ -815,8 +812,9 @@ class MemoryRepository extends ChangeNotifier {
       collections = _bootstrapCollections();
       for (final entry in data) {
         final record = MemoryRecord.fromJson(entry as Map<String, dynamic>);
-        final collection =
-            collections.firstWhere((item) => item.tier == record.tier);
+        final collection = collections.firstWhere(
+          (item) => item.tier == record.tier,
+        );
         collection.records.add(record);
       }
     } else {
@@ -877,10 +875,7 @@ class MemoryRepository extends ChangeNotifier {
       _recordEmbeddings[missing[i].id] = embedding;
       batch.update(
         _recordsTable,
-        {
-          'embedding': _encodeEmbedding(embedding),
-          'embedding_model': model,
-        },
+        {'embedding': _encodeEmbedding(embedding), 'embedding_model': model},
         where: 'id = ?',
         whereArgs: [missing[i].id],
       );
@@ -898,10 +893,7 @@ class MemoryRepository extends ChangeNotifier {
       return null;
     }
     try {
-      return await _llmClient.embedText(
-        provider: provider,
-        input: trimmed,
-      );
+      return await _llmClient.embedText(provider: provider, input: trimmed);
     } catch (_) {
       return null;
     }
@@ -913,10 +905,7 @@ class MemoryRepository extends ChangeNotifier {
       return null;
     }
     try {
-      return await _llmClient.embedTexts(
-        provider: provider,
-        inputs: texts,
-      );
+      return await _llmClient.embedTexts(provider: provider, inputs: texts);
     } catch (_) {
       return null;
     }
@@ -941,15 +930,13 @@ class MemoryRepository extends ChangeNotifier {
         ? _defaultScopeForTier(record.tier)
         : normalizedScope;
     final sessionId = record.sessionId?.trim();
-    final normalizedSessionId =
-        record.tier == MemoryTier.context ? sessionId : null;
+    final normalizedSessionId = record.tier == MemoryTier.context
+        ? sessionId
+        : null;
     if (scope == record.scope && normalizedSessionId == record.sessionId) {
       return record;
     }
-    return record.copyWith(
-      scope: scope,
-      sessionId: normalizedSessionId,
-    );
+    return record.copyWith(scope: scope, sessionId: normalizedSessionId);
   }
 
   MemoryRecord _normalizeRecord(
@@ -960,7 +947,8 @@ class MemoryRepository extends ChangeNotifier {
   }) {
     final explicitScope = _normalizeScope(scope);
     final recordScope = _normalizeScope(record.scope);
-    final normalizedScope = explicitScope ??
+    final normalizedScope =
+        explicitScope ??
         ((recordScope == null || recordScope == 'brain.user')
             ? _defaultScopeForTier(tier)
             : recordScope);
@@ -1026,15 +1014,9 @@ class MemoryRepository extends ChangeNotifier {
 
   List<MemoryRecord> _candidateRecords() {
     final records = <MemoryRecord>[];
-    records.addAll(
-      recordsForTier(MemoryTier.crossSession),
-    );
-    records.addAll(
-      recordsForTier(MemoryTier.autonomous),
-    );
-    records.addAll(
-      recordsForTier(MemoryTier.external),
-    );
+    records.addAll(recordsForTier(MemoryTier.crossSession));
+    records.addAll(recordsForTier(MemoryTier.autonomous));
+    records.addAll(recordsForTier(MemoryTier.external));
     return records;
   }
 
@@ -1215,12 +1197,12 @@ class MemoryRepository extends ChangeNotifier {
   }
 
   Map<String, Object?> _collectionToRow(MemoryCollection collection) => {
-        'id': collection.id,
-        'tier': collection.tier.key,
-        'name': collection.name,
-        'created_at': collection.createdAt.toIso8601String(),
-        'locked': collection.locked ? 1 : 0,
-      };
+    'id': collection.id,
+    'tier': collection.tier.key,
+    'name': collection.name,
+    'created_at': collection.createdAt.toIso8601String(),
+    'locked': collection.locked ? 1 : 0,
+  };
 
   List<double>? _decodeEmbedding(String? raw) {
     if (raw == null || raw.isEmpty) {

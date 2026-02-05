@@ -1,0 +1,14 @@
+MiSans font files were copied from:
+
+  C:\Users\BoHuYeShan\Downloads\MiSans_Global_ALL.zip
+
+Official download / license reference:
+
+  https://hyperos.mi.com/font/download
+
+The license text shown on the official download page was extracted and saved as:
+
+  assets/fonts/misans/LICENSE.txt
+
+Before distributing builds that bundle these fonts, please review the official
+page and ensure the bundled license/attribution is complete and up to date.

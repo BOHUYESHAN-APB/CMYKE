@@ -11,6 +11,7 @@ import '../../core/repositories/memory_repository.dart';
 import '../../core/repositories/settings_repository.dart';
 import '../../core/services/chat_export_service.dart';
 import '../../core/services/chat_engine.dart';
+import '../../ui/theme/cmyke_chrome.dart';
 import '../common/live3d_preview.dart';
 import '../memory/memory_tier_screen.dart';
 import '../settings/provider_config_screen.dart';
@@ -130,9 +131,9 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!mounted) {
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _saveMessageToMemory(
@@ -332,9 +333,8 @@ class _ChatScreenState extends State<ChatScreen> {
   void _openSettings() {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => ProviderConfigScreen(
-          settingsRepository: widget.settingsRepository,
-        ),
+        builder: (_) =>
+            ProviderConfigScreen(settingsRepository: widget.settingsRepository),
       ),
     );
   }
@@ -352,8 +352,9 @@ class _ChatScreenState extends State<ChatScreen> {
         return LayoutBuilder(
           builder: (context, constraints) {
             final isWide = constraints.maxWidth >= 1000;
-            final rightPanelWidth =
-                constraints.maxWidth >= 1200 ? 420.0 : 340.0;
+            final rightPanelWidth = constraints.maxWidth >= 1200
+                ? 420.0
+                : 340.0;
             return Scaffold(
               drawer: isWide
                   ? null
@@ -370,129 +371,165 @@ class _ChatScreenState extends State<ChatScreen> {
                         onSelect: () => Navigator.of(context).pop(),
                       ),
                     ),
-              body: Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Color(0xFFF7F3ED), Color(0xFFF1F4F6)],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                ),
-                child: SafeArea(
-                  child: Row(
+              body: Builder(
+                builder: (context) {
+                  final chrome = context.chrome;
+                  final accentGlow = chrome.accent.withValues(
+                    alpha: Theme.of(context).brightness == Brightness.dark
+                        ? 0.12
+                        : 0.08,
+                  );
+                  return Stack(
                     children: [
-                      if (isWide)
-                        SizedBox(
-                          width: 280,
-                          child: SessionSidebar(
-                            chatRepository: widget.chatRepository,
-                            memoryRepository: widget.memoryRepository,
-                            onAddMemory: _openManualMemoryDialog,
-                            onOpenTier: _openMemoryTier,
-                            onOpenSettings: _openSettings,
-                            onRemoveSession: _removeSession,
-                            onCreateSession: () => _createSessionForRoute(),
+                      Positioned.fill(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [chrome.background0, chrome.background1],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
                           ),
                         ),
-                      Expanded(
-                        child: Column(
-                          children: [
-                            ChatHeader(
-                              sessionTitle:
-                                  session?.title ?? 'New chat',
-                              onExportSession: () => _exportActiveSession(),
-                              onExportAll: () => _exportAllSessions(),
-                              onCreateSession: () => _createSessionForRoute(),
-                              showMenuButton: !isWide,
-                              estimatedTokens: _chatEngine.estimatedTokens,
-                              tokenLimit: _chatEngine.tokenLimit,
-                              isCompressing: _chatEngine.isCompressing,
-                            ),
-                            if (widget.embeddingConfigMissing)
-                              Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 24,
-                                  vertical: 8,
-                                ),
-                                child: _EmbeddingWarning(
-                                  onOpenSettings: _openSettings,
-                                ),
+                      ),
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: RadialGradient(
+                                center: const Alignment(-0.7, -0.8),
+                                radius: 1.1,
+                                colors: [accentGlow, Colors.transparent],
                               ),
-                            const SizedBox(height: 8),
-                            if (_chatEngine.partialTranscript.isNotEmpty)
-                              Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 24,
-                                  vertical: 6,
-                                ),
-                                child: Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: Text(
-                                    '🎙️ ${_chatEngine.partialTranscript}',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .labelLarge
-                                        ?.copyWith(
-                                          color: const Color(0xFF1B9B7B),
-                                        ),
-                                  ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      SafeArea(
+                        child: Row(
+                          children: [
+                            if (isWide)
+                              SizedBox(
+                                width: 280,
+                                child: SessionSidebar(
+                                  chatRepository: widget.chatRepository,
+                                  memoryRepository: widget.memoryRepository,
+                                  onAddMemory: _openManualMemoryDialog,
+                                  onOpenTier: _openMemoryTier,
+                                  onOpenSettings: _openSettings,
+                                  onRemoveSession: _removeSession,
+                                  onCreateSession: () =>
+                                      _createSessionForRoute(),
                                 ),
                               ),
                             Expanded(
-                              child: session == null
-                                  ? const Center(
-                                      child: Text('暂无会话'),
-                                    )
-                                  : ListView.builder(
-                                      controller: _scrollController,
+                              child: Column(
+                                children: [
+                                  ChatHeader(
+                                    sessionTitle: session?.title ?? 'New chat',
+                                    onExportSession: () =>
+                                        _exportActiveSession(),
+                                    onExportAll: () => _exportAllSessions(),
+                                    onCreateSession: () =>
+                                        _createSessionForRoute(),
+                                    showMenuButton: !isWide,
+                                    estimatedTokens:
+                                        _chatEngine.estimatedTokens,
+                                    tokenLimit: _chatEngine.tokenLimit,
+                                    isCompressing: _chatEngine.isCompressing,
+                                  ),
+                                  if (widget.embeddingConfigMissing)
+                                    Padding(
                                       padding: const EdgeInsets.symmetric(
                                         horizontal: 24,
-                                        vertical: 12,
+                                        vertical: 8,
                                       ),
-                                      itemCount: session.messages.length,
-                                      itemBuilder: (context, index) {
-                                        final message = session.messages[index];
-                                        return MessageBubble(
-                                          message: message,
-                                          onSaveToMemory: _saveMessageToMemory,
-                                        );
-                                      },
+                                      child: _EmbeddingWarning(
+                                        onOpenSettings: _openSettings,
+                                      ),
                                     ),
+                                  const SizedBox(height: 8),
+                                  if (_chatEngine.partialTranscript.isNotEmpty)
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 24,
+                                        vertical: 6,
+                                      ),
+                                      child: Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: Text(
+                                          '🎙️ ${_chatEngine.partialTranscript}',
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .labelLarge
+                                              ?.copyWith(
+                                                color: chrome.accent,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                        ),
+                                      ),
+                                    ),
+                                  Expanded(
+                                    child: session == null
+                                        ? const Center(child: Text('暂无会话'))
+                                        : ListView.builder(
+                                            controller: _scrollController,
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 24,
+                                              vertical: 12,
+                                            ),
+                                            itemCount: session.messages.length,
+                                            itemBuilder: (context, index) {
+                                              final message =
+                                                  session.messages[index];
+                                              return MessageBubble(
+                                                message: message,
+                                                onSaveToMemory:
+                                                    _saveMessageToMemory,
+                                              );
+                                            },
+                                          ),
+                                  ),
+                                  ChatComposer(
+                                    controller: _composerController,
+                                    onSend: _handleSend,
+                                    onToggleListening:
+                                        _chatEngine.toggleListening,
+                                    isListening: _chatEngine.isListening,
+                                    isStreaming: _chatEngine.isStreaming,
+                                    partialTranscript:
+                                        _chatEngine.partialTranscript,
+                                    onOpenAgent: _openUniversalAgentDialog,
+                                  ),
+                                ],
+                              ),
                             ),
-                            ChatComposer(
-                              controller: _composerController,
-                              onSend: _handleSend,
-                              onToggleListening: _chatEngine.toggleListening,
-                              isListening: _chatEngine.isListening,
-                              isStreaming: _chatEngine.isStreaming,
-                              partialTranscript:
-                                  _chatEngine.partialTranscript,
-                              onOpenAgent: _openUniversalAgentDialog,
-                            ),
+                            if (isWide)
+                              SizedBox(
+                                width: rightPanelWidth,
+                                child: Padding(
+                                  padding: const EdgeInsets.all(16),
+                                  child: LayoutBuilder(
+                                    builder: (context, constraints) {
+                                      final height =
+                                          constraints.maxHeight.isFinite
+                                          ? constraints.maxHeight
+                                          : 360.0;
+                                      return Live3DPreview(
+                                        height: height,
+                                        settingsRepository:
+                                            widget.settingsRepository,
+                                      );
+                                    },
+                                  ),
+                                ),
+                              ),
                           ],
                         ),
                       ),
-                      if (isWide)
-                        SizedBox(
-                          width: rightPanelWidth,
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: LayoutBuilder(
-                              builder: (context, constraints) {
-                                final height = constraints.maxHeight.isFinite
-                                    ? constraints.maxHeight
-                                    : 360.0;
-                                return Live3DPreview(
-                                  height: height,
-                                  settingsRepository: widget.settingsRepository,
-                                );
-                              },
-                            ),
-                          ),
-                        ),
                     ],
-                  ),
-                ),
+                  );
+                },
               ),
             );
           },
@@ -509,34 +546,40 @@ class _EmbeddingWarning extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final chrome = context.chrome;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark
+        ? const Color(0xFF2A2316).withValues(alpha: 0.72)
+        : const Color(0xFFFFF4E5);
+    final border = isDark ? const Color(0xFF5A4520) : const Color(0xFFF2D1A6);
+    final warningIcon = isDark
+        ? const Color(0xFFFFC266)
+        : const Color(0xFFB96B00);
+    final warningText = isDark
+        ? const Color(0xFFFFD9A6)
+        : const Color(0xFF7A4E00);
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFF4E5),
+        color: bg,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFF2D1A6)),
+        border: Border.all(color: border),
       ),
       child: Row(
         children: [
-          const Icon(
-            Icons.warning_amber_rounded,
-            color: Color(0xFFB96B00),
-          ),
+          Icon(Icons.warning_amber_rounded, color: warningIcon),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
               '未配置 Embedding 模型，向量检索已停用（将使用关键词召回）。建议前往模型与能力配置补全。',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: const Color(0xFF7A4E00),
-                    fontWeight: FontWeight.w600,
-                  ),
+                color: warningText,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
           const SizedBox(width: 8),
-          TextButton(
-            onPressed: onOpenSettings,
-            child: const Text('去配置'),
-          ),
+          TextButton(onPressed: onOpenSettings, child: const Text('去配置')),
         ],
       ),
     );

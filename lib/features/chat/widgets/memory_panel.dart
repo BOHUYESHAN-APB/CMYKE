@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/models/memory_tier.dart';
 import '../../../core/repositories/memory_repository.dart';
+import '../../../ui/theme/cmyke_chrome.dart';
 
 class MemoryPanel extends StatelessWidget {
   const MemoryPanel({
@@ -30,9 +31,9 @@ class MemoryPanel extends StatelessWidget {
             children: [
               Text(
                 '记忆层级',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
               ),
               const Spacer(),
               TextButton.icon(
@@ -68,11 +69,7 @@ class MemoryPanel extends StatelessWidget {
 }
 
 class _MemoryTierTile extends StatelessWidget {
-  const _MemoryTierTile({
-    required this.tier,
-    required this.count,
-    this.onTap,
-  });
+  const _MemoryTierTile({required this.tier, required this.count, this.onTap});
 
   final MemoryTier tier;
   final int count;
@@ -80,6 +77,7 @@ class _MemoryTierTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final chrome = context.chrome;
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 6),
       child: InkWell(
@@ -90,47 +88,46 @@ class _MemoryTierTile extends StatelessWidget {
           child: Row(
             children: [
               CircleAvatar(
-              radius: 16,
-              backgroundColor:
-                  const Color(0xFF1B9B7B).withValues(alpha: 0.12),
-              foregroundColor: const Color(0xFF1B9B7B),
-              child: Text(
-                tier.label.substring(0, 1),
-                style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    tier.label,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _tierHint(tier),
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: const Color(0xFF6B6F7A),
-                        ),
-                  ),
-                ],
-              ),
-            ),
-            Text(
-              '$count',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                radius: 16,
+                backgroundColor: chrome.accent.withValues(alpha: 0.12),
+                foregroundColor: chrome.accent,
+                child: Text(
+                  tier.label.substring(0, 1),
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
                     fontWeight: FontWeight.w700,
-                    color: const Color(0xFF1B9B7B),
                   ),
-            ),
-          ],
-        ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      tier.label,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _tierHint(tier),
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: chrome.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Text(
+                '$count',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  color: chrome.accent,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

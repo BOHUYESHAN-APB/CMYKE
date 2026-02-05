@@ -1,7 +1,6 @@
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../core/models/app_settings.dart';
@@ -10,13 +9,11 @@ import '../../core/models/provider_config.dart';
 import '../../core/models/stage_action.dart';
 import '../../core/repositories/settings_repository.dart';
 import '../../core/services/runtime_hub.dart';
+import '../../ui/theme/cmyke_chrome.dart';
 import '../chat/widgets/avatar_stage.dart';
 
 class ProviderConfigScreen extends StatelessWidget {
-  const ProviderConfigScreen({
-    super.key,
-    required this.settingsRepository,
-  });
+  const ProviderConfigScreen({super.key, required this.settingsRepository});
 
   final SettingsRepository settingsRepository;
 
@@ -41,8 +38,9 @@ class ProviderConfigScreen extends StatelessWidget {
             ),
             body: LayoutBuilder(
               builder: (context, constraints) {
-                final maxWidth =
-                    constraints.maxWidth >= 1040 ? 980.0 : constraints.maxWidth;
+                final maxWidth = constraints.maxWidth >= 1040
+                    ? 980.0
+                    : constraints.maxWidth;
                 return Align(
                   alignment: Alignment.topCenter,
                   child: ConstrainedBox(
@@ -69,10 +67,7 @@ class ProviderConfigScreen extends StatelessWidget {
 }
 
 class _ModeTab extends StatelessWidget {
-  const _ModeTab({
-    required this.settingsRepository,
-    required this.settings,
-  });
+  const _ModeTab({required this.settingsRepository, required this.settings});
 
   final SettingsRepository settingsRepository;
   final AppSettings settings;
@@ -82,17 +77,12 @@ class _ModeTab extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
-        _SectionHeader(
-          title: '运行模式',
-          subtitle: '选择普通 LLM、实时语音模型或 Omni 模型',
-        ),
+        _SectionHeader(title: '运行模式', subtitle: '选择普通 LLM、实时语音模型或 Omni 模型'),
         const SizedBox(height: 12),
         _RouteSelector(
           route: settings.route,
           onChanged: (route) {
-            settingsRepository.updateSettings(
-              settings.copyWith(route: route),
-            );
+            settingsRepository.updateSettings(settings.copyWith(route: route));
           },
         ),
         const SizedBox(height: 12),
@@ -160,8 +150,9 @@ class _ModeTab extends StatelessWidget {
           ),
           _ProviderPicker(
             label: '视觉 Agent',
-            providers:
-                settingsRepository.providersByKind(ProviderKind.visionAgent),
+            providers: settingsRepository.providersByKind(
+              ProviderKind.visionAgent,
+            ),
             selectedId: settings.visionProviderId,
             onChanged: (id) {
               settingsRepository.updateSettings(
@@ -215,15 +206,13 @@ class _ModeTab extends StatelessWidget {
           const SizedBox(height: 24),
         ],
         if (settings.route == ModelRoute.realtime) ...[
-          _SectionHeader(
-            title: '实时语音模型',
-            subtitle: '带实时语音输出与打断能力',
-          ),
+          _SectionHeader(title: '实时语音模型', subtitle: '带实时语音输出与打断能力'),
           const SizedBox(height: 12),
           _ProviderPicker(
             label: 'Realtime 模型',
-            providers:
-                settingsRepository.providersByKind(ProviderKind.realtime),
+            providers: settingsRepository.providersByKind(
+              ProviderKind.realtime,
+            ),
             selectedId: settings.realtimeProviderId,
             onChanged: (id) {
               settingsRepository.updateSettings(
@@ -234,10 +223,7 @@ class _ModeTab extends StatelessWidget {
           const SizedBox(height: 24),
         ],
         if (settings.route == ModelRoute.omni) ...[
-          _SectionHeader(
-            title: 'Omni 模型',
-            subtitle: '文本 + 语音 + 视觉一体化',
-          ),
+          _SectionHeader(title: 'Omni 模型', subtitle: '文本 + 语音 + 视觉一体化'),
           const SizedBox(height: 12),
           _ProviderPicker(
             label: 'Omni 模型',
@@ -266,10 +252,7 @@ class _CatalogTab extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
-        _SectionHeader(
-          title: '模型与能力清单',
-          subtitle: '管理所有 Provider 与高级参数',
-        ),
+        _SectionHeader(title: '模型与能力清单', subtitle: '管理所有 Provider 与高级参数'),
         const SizedBox(height: 12),
         _ProviderCatalog(settingsRepository: settingsRepository),
       ],
@@ -285,10 +268,7 @@ class _AppInfoTab extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(20),
       children: const [
-        _SectionHeader(
-          title: '软件与反馈',
-          subtitle: '版本信息、代码仓库与反馈渠道',
-        ),
+        _SectionHeader(title: '软件与反馈', subtitle: '版本信息、代码仓库与反馈渠道'),
         SizedBox(height: 12),
         _AppInfoSection(),
       ],
@@ -297,10 +277,7 @@ class _AppInfoTab extends StatelessWidget {
 }
 
 class _RouteSelector extends StatelessWidget {
-  const _RouteSelector({
-    required this.route,
-    required this.onChanged,
-  });
+  const _RouteSelector({required this.route, required this.onChanged});
 
   final ModelRoute route;
   final ValueChanged<ModelRoute> onChanged;
@@ -368,9 +345,7 @@ class _ProviderPicker extends StatelessWidget {
 }
 
 class _ProviderCatalog extends StatelessWidget {
-  const _ProviderCatalog({
-    required this.settingsRepository,
-  });
+  const _ProviderCatalog({required this.settingsRepository});
 
   final SettingsRepository settingsRepository;
 
@@ -439,8 +414,8 @@ class _ProviderSection extends StatelessWidget {
                 Text(
                   title,
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
                 const Spacer(),
                 TextButton.icon(
@@ -460,9 +435,9 @@ class _ProviderSection extends StatelessWidget {
             if (providers.isEmpty)
               Text(
                 '暂无配置',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: const Color(0xFF6B6F7A),
-                    ),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: const Color(0xFF6B6F7A)),
               ),
             ...providers.map(
               (provider) => ListTile(
@@ -503,41 +478,37 @@ class _ProviderSection extends StatelessWidget {
 }
 
 class _SectionHeader extends StatelessWidget {
-  const _SectionHeader({
-    required this.title,
-    required this.subtitle,
-  });
+  const _SectionHeader({required this.title, required this.subtitle});
 
   final String title;
   final String subtitle;
 
   @override
   Widget build(BuildContext context) {
+    final chrome = context.chrome;
     final titleStyle = Platform.environment.containsKey('FLUTTER_TEST')
         ? const TextStyle(
             fontSize: 22,
             fontWeight: FontWeight.w600,
             color: Color(0xFF1F2228),
           )
-        : GoogleFonts.notoSerifSc(
+        : Theme.of(context).textTheme.headlineSmall?.copyWith(
             fontSize: 22,
-            fontWeight: FontWeight.w600,
-            color: const Color(0xFF1F2228),
+            fontWeight: FontWeight.w800,
+            letterSpacing: -0.4,
+            color: chrome.textPrimary,
           );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          title,
-          style: titleStyle,
-        ),
+        Text(title, style: titleStyle),
         const SizedBox(height: 4),
         Text(
           subtitle,
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: const Color(0xFF6B6F7A),
-                fontWeight: FontWeight.w600,
-              ),
+            color: chrome.textSecondary,
+            fontWeight: FontWeight.w600,
+          ),
         ),
       ],
     );
@@ -545,10 +516,7 @@ class _SectionHeader extends StatelessWidget {
 }
 
 class _HintCard extends StatelessWidget {
-  const _HintCard({
-    required this.title,
-    required this.items,
-  });
+  const _HintCard({required this.title, required this.items});
 
   final String title;
   final List<String> items;
@@ -563,9 +531,9 @@ class _HintCard extends StatelessWidget {
           children: [
             Text(
               title,
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
             ...items.map(
@@ -579,9 +547,9 @@ class _HintCard extends StatelessWidget {
                       child: Text(
                         item,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: const Color(0xFF5E636F),
-                              fontWeight: FontWeight.w600,
-                            ),
+                          color: const Color(0xFF5E636F),
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ],
@@ -660,17 +628,17 @@ class _PersonaCardState extends State<_PersonaCard> {
           children: [
             Text(
               '人设设置',
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
             Text(
               '人设内容会注入系统提示词，影响普通 LLM 与实时对话模式。',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: const Color(0xFF5E636F),
-                    fontWeight: FontWeight.w600,
-                  ),
+                color: const Color(0xFF5E636F),
+                fontWeight: FontWeight.w600,
+              ),
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<PersonaMode>(
@@ -777,35 +745,35 @@ class _VrmCard extends StatelessWidget {
           children: [
             Text(
               'Live3D / VRM 模型',
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
             Text(
               '推荐使用 VRoid Studio 导出的 VRM 1.0 模型（含标准表情/嘴型/动作）。'
               '渲染 SDK 计划对接 three-vrm (Web) / UniVRM (Unity)。',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: const Color(0xFF5E636F),
-                    fontWeight: FontWeight.w600,
-                  ),
+                color: const Color(0xFF5E636F),
+                fontWeight: FontWeight.w600,
+              ),
             ),
             const SizedBox(height: 8),
             Text(
               '授权与来源：请仅加载自己制作或已获授权的 VRM 文件，保留原有许可提示。'
               '当前版本暂未内置模型，后续将支持文件选择与映射配置。',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: const Color(0xFF5E636F),
-                    fontWeight: FontWeight.w600,
-                  ),
+                color: const Color(0xFF5E636F),
+                fontWeight: FontWeight.w600,
+              ),
             ),
             const SizedBox(height: 8),
             SelectableText(
               'VRM 导出指引: $_vrmDoc',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: const Color(0xFF2E5AAC),
-                    fontWeight: FontWeight.w700,
-                  ),
+                color: const Color(0xFF2E5AAC),
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ],
         ),
@@ -833,18 +801,18 @@ class _PetModeCard extends StatelessWidget {
           children: [
             Text(
               '桌宠模式（桌面）',
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
             Text(
               '启用后将进入“只显示模型”的模式，适合挂机陪伴。'
               '目前为单窗口切换（非透明悬浮），后续可继续做置顶/透明/穿透。',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: const Color(0xFF5E636F),
-                    fontWeight: FontWeight.w600,
-                  ),
+                color: const Color(0xFF5E636F),
+                fontWeight: FontWeight.w600,
+              ),
             ),
             const SizedBox(height: 8),
             SwitchListTile(
@@ -942,14 +910,16 @@ class _Live3DTestCardState extends State<_Live3DTestCard> {
   }
 
   Future<void> _emitExpression(ExpressionEmotion emotion) async {
-    await RuntimeHub.instance.controlAgent
-        .emitExpression(ExpressionEvent(emotion: emotion, intensity: 0.8));
+    await RuntimeHub.instance.controlAgent.emitExpression(
+      ExpressionEvent(emotion: emotion, intensity: 0.8),
+    );
     setState(() => _status = '已发送表情：${emotion.name}');
   }
 
   Future<void> _emitMotion(StageMotion motion) async {
-    await RuntimeHub.instance.controlAgent
-        .emitStageAction(StageAction(motion: motion, intensity: 0.8));
+    await RuntimeHub.instance.controlAgent.emitStageAction(
+      StageAction(motion: motion, intensity: 0.8),
+    );
     setState(() => _status = '已发送动作：${motion.name}');
   }
 
@@ -973,17 +943,17 @@ class _Live3DTestCardState extends State<_Live3DTestCard> {
               children: [
                 Text(
                   'Live3D 快速测试',
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(width: 8),
                 Text(
                   '（占位，需绑定 three-vrm/UniVRM 渲染端）',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: const Color(0xFF6B6F7A),
-                        fontWeight: FontWeight.w600,
-                      ),
+                    color: const Color(0xFF6B6F7A),
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ],
             ),
@@ -1047,9 +1017,9 @@ class _Live3DTestCardState extends State<_Live3DTestCard> {
               Text(
                 _status!,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: const Color(0xFF2E5AAC),
-                      fontWeight: FontWeight.w700,
-                    ),
+                  color: const Color(0xFF2E5AAC),
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ],
           ],
@@ -1080,19 +1050,19 @@ class _MotionAgentCard extends StatelessWidget {
           children: [
             Text(
               '动作 Agent（高级动作）',
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
-             Text(
+            Text(
               '系统自动动作由动作 catalog 的 auto 标记控制；“动作 Agent”只会从标记了 agent 的动作里挑选，'
               '并在合适时机触发（最多一次/轮）。标准/Omni：根据主助手回复决策；Realtime：根据实时对话文本决策。'
               '动作分类在 assets/live3d/animations/catalog.json 里配置。建议给动作 Agent 单独配置一个小模型，减少主模型负担。',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: const Color(0xFF5E636F),
-                    fontWeight: FontWeight.w600,
-                  ),
+                color: const Color(0xFF5E636F),
+                fontWeight: FontWeight.w600,
+              ),
             ),
             const SizedBox(height: 8),
             SwitchListTile(
@@ -1119,9 +1089,9 @@ class _MotionAgentCard extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               '动作 Agent 冷却：${settings.motionAgentCooldownSeconds}s',
-              style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
             ),
             Slider(
               value: cooldown.toDouble(),
@@ -1131,9 +1101,7 @@ class _MotionAgentCard extends StatelessWidget {
               label: '${cooldown}s',
               onChanged: (value) {
                 settingsRepository.updateSettings(
-                  settings.copyWith(
-                    motionAgentCooldownSeconds: value.round(),
-                  ),
+                  settings.copyWith(motionAgentCooldownSeconds: value.round()),
                 );
               },
             ),
@@ -1165,9 +1133,9 @@ class _MemoryAgentCard extends StatelessWidget {
           children: [
             Text(
               '记忆 Agent（核心记忆 / 日记记忆）',
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
             Text(
@@ -1175,9 +1143,9 @@ class _MemoryAgentCard extends StatelessWidget {
               '同时把可追溯的事件写入“日记记忆”（便于回答“昨天聊了什么/上周发生了什么”）。'
               '建议给记忆 Agent 单独配置小模型，避免占用主模型上下文与预算。',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: const Color(0xFF5E636F),
-                    fontWeight: FontWeight.w600,
-                  ),
+                color: const Color(0xFF5E636F),
+                fontWeight: FontWeight.w600,
+              ),
             ),
             const SizedBox(height: 8),
             SwitchListTile(
@@ -1204,9 +1172,9 @@ class _MemoryAgentCard extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               '记忆 Agent 冷却：${settings.memoryAgentCooldownSeconds}s',
-              style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
             ),
             Slider(
               value: cooldown.toDouble(),
@@ -1216,9 +1184,7 @@ class _MemoryAgentCard extends StatelessWidget {
               label: '${cooldown}s',
               onChanged: (value) {
                 settingsRepository.updateSettings(
-                  settings.copyWith(
-                    memoryAgentCooldownSeconds: value.round(),
-                  ),
+                  settings.copyWith(memoryAgentCooldownSeconds: value.round()),
                 );
               },
             ),
@@ -1233,8 +1199,11 @@ class _AppInfoSection extends StatelessWidget {
   const _AppInfoSection();
 
   static const String _repoUrl = 'https://github.com/BOHUYESHAN-APB/CMYKE';
-  static const String _feedback = 'https://github.com/BOHUYESHAN-APB/CMYKE/issues';
+  static const String _feedback =
+      'https://github.com/BOHUYESHAN-APB/CMYKE/issues';
   static const String _license = 'Apache-2.0 (planned)';
+  static const String _fonts = 'MiSans / HarmonyOS Sans SC';
+  static const String _fontSource = 'https://hyperos.mi.com/font/download';
 
   @override
   Widget build(BuildContext context) {
@@ -1251,24 +1220,24 @@ class _AppInfoSection extends StatelessWidget {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _InfoRow(
-                  label: '版本号',
-                  value: version,
-                ),
+                _InfoRow(label: '版本号', value: version),
                 const SizedBox(height: 12),
-                _InfoRow(
-                  label: '代码仓库',
-                  value: _repoUrl,
-                ),
+                _InfoRow(label: '代码仓库', value: _repoUrl),
                 const SizedBox(height: 12),
-                _InfoRow(
-                  label: '反馈渠道',
-                  value: _feedback,
-                ),
+                _InfoRow(label: '反馈渠道', value: _feedback),
                 const SizedBox(height: 12),
-                const _InfoRow(
-                  label: '许可协议',
-                  value: _license,
+                const _InfoRow(label: '许可协议', value: _license),
+                const SizedBox(height: 12),
+                const _InfoRow(label: '字体', value: _fonts),
+                const SizedBox(height: 8),
+                const _InfoRow(label: '字体来源', value: _fontSource),
+                const SizedBox(height: 12),
+                Text(
+                  '本软件特别注明：界面排版使用了 MiSans 字体。',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: context.chrome.textSecondary,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ],
             );
@@ -1287,6 +1256,7 @@ class _InfoRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final chrome = context.chrome;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1295,17 +1265,17 @@ class _InfoRow extends StatelessWidget {
           child: Text(
             label,
             style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  color: const Color(0xFF6B6F7A),
-                  fontWeight: FontWeight.w600,
-                ),
+              color: chrome.textSecondary,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
         Expanded(
           child: SelectableText(
             value,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
           ),
         ),
       ],
@@ -1319,27 +1289,28 @@ Future<void> _openProviderDialog(
   required ProviderKind kind,
   ProviderConfig? provider,
 }) async {
-  final nameController =
-      TextEditingController(text: provider?.name ?? '');
-  final baseUrlController =
-      TextEditingController(text: provider?.baseUrl ?? '');
-  final modelController =
-      TextEditingController(text: provider?.model ?? '');
-  final embeddingModelController =
-      TextEditingController(text: provider?.embeddingModel ?? '');
-  final notesController =
-      TextEditingController(text: provider?.notes ?? '');
+  final nameController = TextEditingController(text: provider?.name ?? '');
+  final baseUrlController = TextEditingController(
+    text: provider?.baseUrl ?? '',
+  );
+  final modelController = TextEditingController(text: provider?.model ?? '');
+  final embeddingModelController = TextEditingController(
+    text: provider?.embeddingModel ?? '',
+  );
+  final notesController = TextEditingController(text: provider?.notes ?? '');
   final selectedCapabilities = <ProviderCapability>{
     ...(provider?.capabilities ?? _defaultCapabilities(kind)),
   };
-  final apiKeyController =
-      TextEditingController(text: provider?.apiKey ?? '');
-  final audioVoiceController =
-      TextEditingController(text: provider?.audioVoice ?? '');
-  final audioFormatController =
-      TextEditingController(text: provider?.audioFormat ?? '');
-  final inputAudioFormatController =
-      TextEditingController(text: provider?.inputAudioFormat ?? '');
+  final apiKeyController = TextEditingController(text: provider?.apiKey ?? '');
+  final audioVoiceController = TextEditingController(
+    text: provider?.audioVoice ?? '',
+  );
+  final audioFormatController = TextEditingController(
+    text: provider?.audioFormat ?? '',
+  );
+  final inputAudioFormatController = TextEditingController(
+    text: provider?.inputAudioFormat ?? '',
+  );
   final inputSampleRateController = TextEditingController(
     text: provider?.inputSampleRate?.toString() ?? '',
   );
@@ -1371,19 +1342,22 @@ Future<void> _openProviderDialog(
     text: provider?.seed?.toString() ?? '',
   );
   bool enableEmbedding = provider?.embeddingModel?.isNotEmpty ?? false;
-  final embeddingBaseUrlController =
-      TextEditingController(text: provider?.embeddingBaseUrl ?? '');
-  final embeddingApiKeyController =
-      TextEditingController(text: provider?.embeddingApiKey ?? '');
-  final wsUrlController =
-      TextEditingController(text: provider?.wsUrl ?? '');
-  final showAudioSettings = kind == ProviderKind.omni ||
+  final embeddingBaseUrlController = TextEditingController(
+    text: provider?.embeddingBaseUrl ?? '',
+  );
+  final embeddingApiKeyController = TextEditingController(
+    text: provider?.embeddingApiKey ?? '',
+  );
+  final wsUrlController = TextEditingController(text: provider?.wsUrl ?? '');
+  final showAudioSettings =
+      kind == ProviderKind.omni ||
       kind == ProviderKind.tts ||
       kind == ProviderKind.realtime ||
       kind == ProviderKind.stt;
   final showRealtimeSettings =
       kind == ProviderKind.realtime || kind == ProviderKind.omni;
-  final showModelTuning = kind == ProviderKind.llm ||
+  final showModelTuning =
+      kind == ProviderKind.llm ||
       kind == ProviderKind.realtime ||
       kind == ProviderKind.omni ||
       kind == ProviderKind.visionAgent;
@@ -1398,10 +1372,10 @@ Future<void> _openProviderDialog(
         builder: (context, setState) {
           final supportsAudioIn =
               selectedCapabilities.contains(ProviderCapability.audioIn) ||
-                  kind == ProviderKind.stt;
+              kind == ProviderKind.stt;
           final supportsAudioOut =
               selectedCapabilities.contains(ProviderCapability.audioOut) ||
-                  kind == ProviderKind.tts;
+              kind == ProviderKind.tts;
           return AlertDialog(
             title: Text(provider == null ? '新增配置' : '编辑配置'),
             content: SingleChildScrollView(
@@ -1514,7 +1488,8 @@ Future<void> _openProviderDialog(
                         onTap: () {
                           setState(() {
                             protocol = ProviderProtocol.openaiCompatible;
-                            baseUrlController.text = 'https://api.openai.com/v1';
+                            baseUrlController.text =
+                                'https://api.openai.com/v1';
                           });
                         },
                       ),
@@ -1528,34 +1503,34 @@ Future<void> _openProviderDialog(
                             if (kind == ProviderKind.tts) {
                               audioVoiceController.text =
                                   audioVoiceController.text.isEmpty
-                                      ? 'FunAudioLLM/CosyVoice2-0.5B:anna'
-                                      : audioVoiceController.text;
+                                  ? 'FunAudioLLM/CosyVoice2-0.5B:anna'
+                                  : audioVoiceController.text;
                               audioFormatController.text =
                                   audioFormatController.text.isEmpty
-                                      ? 'wav'
-                                      : audioFormatController.text;
+                                  ? 'wav'
+                                  : audioFormatController.text;
                               outputSampleRateController.text =
                                   outputSampleRateController.text.isEmpty
-                                      ? '32000'
-                                      : outputSampleRateController.text;
+                                  ? '32000'
+                                  : outputSampleRateController.text;
                               audioChannelsController.text =
                                   audioChannelsController.text.isEmpty
-                                      ? '1'
-                                      : audioChannelsController.text;
+                                  ? '1'
+                                  : audioChannelsController.text;
                             }
                             if (kind == ProviderKind.stt) {
                               inputAudioFormatController.text =
                                   inputAudioFormatController.text.isEmpty
-                                      ? 'wav'
-                                      : inputAudioFormatController.text;
+                                  ? 'wav'
+                                  : inputAudioFormatController.text;
                               inputSampleRateController.text =
                                   inputSampleRateController.text.isEmpty
-                                      ? '16000'
-                                      : inputSampleRateController.text;
+                                  ? '16000'
+                                  : inputSampleRateController.text;
                               audioChannelsController.text =
                                   audioChannelsController.text.isEmpty
-                                      ? '1'
-                                      : audioChannelsController.text;
+                                  ? '1'
+                                  : audioChannelsController.text;
                             }
                           });
                         },
@@ -1570,12 +1545,12 @@ Future<void> _openProviderDialog(
                             if (kind == ProviderKind.omni) {
                               audioVoiceController.text =
                                   audioVoiceController.text.isEmpty
-                                      ? 'Cherry'
-                                      : audioVoiceController.text;
+                                  ? 'Cherry'
+                                  : audioVoiceController.text;
                               audioFormatController.text =
                                   audioFormatController.text.isEmpty
-                                      ? 'wav'
-                                      : audioFormatController.text;
+                                  ? 'wav'
+                                  : audioFormatController.text;
                             }
                           });
                         },
@@ -1585,7 +1560,8 @@ Future<void> _openProviderDialog(
                         onTap: () {
                           setState(() {
                             protocol = ProviderProtocol.openaiCompatible;
-                            baseUrlController.text = 'https://api.stepfun.com/v1';
+                            baseUrlController.text =
+                                'https://api.stepfun.com/v1';
                           });
                         },
                       ),
@@ -1594,8 +1570,7 @@ Future<void> _openProviderDialog(
                         onTap: () {
                           setState(() {
                             protocol = ProviderProtocol.openaiCompatible;
-                            baseUrlController.text =
-                                'http://localhost:1234/v1';
+                            baseUrlController.text = 'http://localhost:1234/v1';
                           });
                         },
                       ),
@@ -1820,8 +1795,9 @@ Future<void> _openProviderDialog(
                     spacing: 8,
                     runSpacing: 8,
                     children: ProviderCapability.values.map((capability) {
-                      final selected =
-                          selectedCapabilities.contains(capability);
+                      final selected = selectedCapabilities.contains(
+                        capability,
+                      );
                       return FilterChip(
                         label: Text(_capabilityLabel(capability)),
                         selected: selected,
@@ -1861,21 +1837,25 @@ Future<void> _openProviderDialog(
                     return;
                   }
                   final config = ProviderConfig(
-                    id: provider?.id ??
+                    id:
+                        provider?.id ??
                         DateTime.now().microsecondsSinceEpoch.toString(),
                     name: name,
                     kind: kind,
                     baseUrl: baseUrlController.text.trim(),
                     model: modelController.text.trim(),
-                    embeddingModel: !enableEmbedding ||
+                    embeddingModel:
+                        !enableEmbedding ||
                             embeddingModelController.text.trim().isEmpty
                         ? null
                         : embeddingModelController.text.trim(),
-                    embeddingBaseUrl: !enableEmbedding ||
+                    embeddingBaseUrl:
+                        !enableEmbedding ||
                             embeddingBaseUrlController.text.trim().isEmpty
                         ? null
                         : embeddingBaseUrlController.text.trim(),
-                    embeddingApiKey: !enableEmbedding ||
+                    embeddingApiKey:
+                        !enableEmbedding ||
                             embeddingApiKeyController.text.trim().isEmpty
                         ? null
                         : embeddingApiKeyController.text.trim(),
@@ -1893,25 +1873,29 @@ Future<void> _openProviderDialog(
                         : audioFormatController.text.trim(),
                     inputAudioFormat:
                         inputAudioFormatController.text.trim().isEmpty
-                            ? null
-                            : inputAudioFormatController.text.trim(),
-                    inputSampleRate:
-                        _parseInt(inputSampleRateController.text),
-                    outputSampleRate:
-                        _parseInt(outputSampleRateController.text),
+                        ? null
+                        : inputAudioFormatController.text.trim(),
+                    inputSampleRate: _parseInt(inputSampleRateController.text),
+                    outputSampleRate: _parseInt(
+                      outputSampleRateController.text,
+                    ),
                     audioChannels: _parseInt(audioChannelsController.text),
                     temperature: _parseDouble(temperatureController.text),
                     topP: _parseDouble(topPController.text),
                     maxTokens: _parseInt(maxTokensController.text),
-                    contextWindowTokens:
-                        _parseInt(contextWindowTokensController.text),
-                    presencePenalty:
-                        _parseDouble(presencePenaltyController.text),
-                    frequencyPenalty:
-                        _parseDouble(frequencyPenaltyController.text),
+                    contextWindowTokens: _parseInt(
+                      contextWindowTokensController.text,
+                    ),
+                    presencePenalty: _parseDouble(
+                      presencePenaltyController.text,
+                    ),
+                    frequencyPenalty: _parseDouble(
+                      frequencyPenaltyController.text,
+                    ),
                     seed: _parseInt(seedController.text),
-                    enableThinking:
-                        kind == ProviderKind.omni ? enableThinking : null,
+                    enableThinking: kind == ProviderKind.omni
+                        ? enableThinking
+                        : null,
                     notes: notesController.text.trim().isEmpty
                         ? null
                         : notesController.text.trim(),
@@ -2044,19 +2028,13 @@ Set<ProviderCapability> _defaultCapabilities(ProviderKind kind) {
 }
 
 class _PresetChip extends StatelessWidget {
-  const _PresetChip({
-    required this.label,
-    required this.onTap,
-  });
+  const _PresetChip({required this.label, required this.onTap});
 
   final String label;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return ActionChip(
-      label: Text(label),
-      onPressed: onTap,
-    );
+    return ActionChip(label: Text(label), onPressed: onTap);
   }
 }

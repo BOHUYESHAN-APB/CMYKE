@@ -4,6 +4,8 @@ import '../../../core/models/chat_session.dart';
 import '../../../core/models/memory_tier.dart';
 import '../../../core/repositories/chat_repository.dart';
 import '../../../core/repositories/memory_repository.dart';
+import '../../../ui/theme/cmyke_chrome.dart';
+import '../../../ui/widgets/frosted_surface.dart';
 import 'memory_panel.dart';
 
 class SessionSidebar extends StatelessWidget {
@@ -53,30 +55,33 @@ class SessionSidebar extends StatelessWidget {
           child: Text(
             title,
             style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  color: const Color(0xFF6B6F7A),
-                ),
+              fontWeight: FontWeight.w700,
+              color: const Color(0xFF6B6F7A),
+            ),
           ),
         ),
       );
       for (final session in items) {
-        sessionTiles.add(_SessionTile(
-          session: session,
-          isActive: session.id == chatRepository.activeSessionId,
-          dense: dense,
-          subtitle: '${_modeLabel(session.mode)} · 消息 ${session.messages.length}',
-          onTap: () {
-            chatRepository.setActive(session.id);
-            onSelect?.call();
-          },
-          onDelete: () {
-            if (onRemoveSession != null) {
-              onRemoveSession!(session.id);
-            } else {
-              chatRepository.removeSession(session.id);
-            }
-          },
-        ));
+        sessionTiles.add(
+          _SessionTile(
+            session: session,
+            isActive: session.id == chatRepository.activeSessionId,
+            dense: dense,
+            subtitle:
+                '${_modeLabel(session.mode)} · 消息 ${session.messages.length}',
+            onTap: () {
+              chatRepository.setActive(session.id);
+              onSelect?.call();
+            },
+            onDelete: () {
+              if (onRemoveSession != null) {
+                onRemoveSession!(session.id);
+              } else {
+                chatRepository.removeSession(session.id);
+              }
+            },
+          ),
+        );
       }
     }
 
@@ -90,20 +95,20 @@ class SessionSidebar extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
           child: Text(
             '暂无会话',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: const Color(0xFF6B6F7A),
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: const Color(0xFF6B6F7A)),
           ),
         ),
       );
     }
-    return Container(
-      decoration: const BoxDecoration(
-        color: Color(0xFFFDFCF9),
-        border: Border(
-          right: BorderSide(color: Color(0xFFE4DDD2)),
-        ),
-      ),
+    final chrome = context.chrome;
+    return FrostedSurface(
+      borderRadius: BorderRadius.zero,
+      blurSigma: chrome.blurSigma * 0.9,
+      shadows: const [],
+      highlight: false,
+      border: Border(right: BorderSide(color: chrome.separatorStrong)),
       child: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -116,8 +121,8 @@ class SessionSidebar extends StatelessWidget {
                   Text(
                     '会话',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                   const SizedBox(height: 12),
                   SizedBox(
@@ -137,14 +142,15 @@ class SessionSidebar extends StatelessWidget {
                 ],
               ),
             ),
-            const Divider(height: 1),
+            Divider(height: 1, color: chrome.separator),
             Expanded(
               child: ListView(
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 children: sessionTiles,
               ),
             ),
-            if (memoryRepository != null) const Divider(height: 1),
+            if (memoryRepository != null)
+              Divider(height: 1, color: chrome.separator),
             if (memoryRepository != null)
               SizedBox(
                 height: dense ? 210 : 250,
@@ -156,7 +162,8 @@ class SessionSidebar extends StatelessWidget {
                   dense: true,
                 ),
               ),
-            if (onOpenSettings != null) const Divider(height: 1),
+            if (onOpenSettings != null)
+              Divider(height: 1, color: chrome.separator),
             if (onOpenSettings != null)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
@@ -195,6 +202,10 @@ class _SessionTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final chrome = context.chrome;
+    final selectedColor = chrome.accent.withValues(
+      alpha: Theme.of(context).brightness == Brightness.dark ? 0.16 : 0.10,
+    );
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
       title: Text(
@@ -202,14 +213,14 @@ class _SessionTile extends StatelessWidget {
         maxLines: dense ? 1 : 2,
         overflow: TextOverflow.ellipsis,
         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
-            ),
+          fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
+        ),
       ),
       subtitle: Text(
         subtitle,
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: const Color(0xFF6B6F7A),
-            ),
+        style: Theme.of(
+          context,
+        ).textTheme.labelSmall?.copyWith(color: const Color(0xFF6B6F7A)),
       ),
       trailing: IconButton(
         tooltip: '删除会话',
@@ -217,10 +228,8 @@ class _SessionTile extends StatelessWidget {
         onPressed: onDelete,
       ),
       selected: isActive,
-      selectedTileColor: const Color(0xFFE7F4EF),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-      ),
+      selectedTileColor: selectedColor,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       onTap: onTap,
     );
   }

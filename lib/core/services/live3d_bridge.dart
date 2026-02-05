@@ -74,7 +74,9 @@ class Live3DDebugState extends ChangeNotifier {
   }) {
     if (key.isEmpty) return;
     final changed =
-        _currentMotionKey != key || _currentMotionKind != kind || _currentMotionRaw != raw;
+        _currentMotionKey != key ||
+        _currentMotionKind != kind ||
+        _currentMotionRaw != raw;
     if (!changed) return;
     _currentMotionKey = key;
     _currentMotionKind = kind;
@@ -92,7 +94,7 @@ class Live3DDebugState extends ChangeNotifier {
 /// platform view or WebView; this class is a placeholder for future binding.
 class Live3DBridge {
   Live3DBridge(RuntimeEventBus bus, {VrmConfig config = const VrmConfig()})
-      : _config = config {
+    : _config = config {
     _expressionSub = bus.expressions.listen(onExpression);
     _stageSub = bus.stageActions.listen(onStageAction);
     _lipSub = bus.lipSyncFrames.listen(onLipSync);
@@ -107,6 +109,7 @@ class Live3DBridge {
   bool _talking = false;
   bool _cursorFollowEnabled = false;
   bool _petMode = false;
+  double _petZoom = 1.0;
   late final StreamSubscription<ExpressionEvent> _expressionSub;
   late final StreamSubscription<StageAction> _stageSub;
   late final StreamSubscription<LipSyncFrame> _lipSub;
@@ -115,6 +118,7 @@ class Live3DBridge {
   bool get isTalking => _talking;
   bool get cursorFollowEnabled => _cursorFollowEnabled;
   bool get petMode => _petMode;
+  double get petZoom => _petZoom;
 
   /// Swap VRM mapping at runtime (e.g., user loads a different model).
   void updateConfig(VrmConfig config) {
@@ -128,6 +132,7 @@ class Live3DBridge {
     setTalking(_talking);
     setCursorFollow(_cursorFollowEnabled);
     setPetMode(_petMode);
+    setPetZoom(_petZoom);
   }
 
   void detachJsInvoker() {
@@ -145,7 +150,9 @@ class Live3DBridge {
   void onExpression(ExpressionEvent event) {
     final clip = _config.expressionClips[event.emotion];
     if (clip == null) return;
-    _runJs('window.setExpression(${jsonEncode(clip)}, ${event.intensity ?? 1.0});');
+    _runJs(
+      'window.setExpression(${jsonEncode(clip)}, ${event.intensity ?? 1.0});',
+    );
   }
 
   void onStageAction(StageAction action) {
@@ -189,6 +196,14 @@ class Live3DBridge {
     _petMode = enabled;
     _runJs(
       'window.setPetMode && window.setPetMode(${enabled ? 'true' : 'false'});',
+    );
+  }
+
+  void setPetZoom(double zoom) {
+    final next = zoom.clamp(0.6, 2.2);
+    _petZoom = next;
+    _runJs(
+      'window.setPetZoom && window.setPetZoom(${next.toStringAsFixed(3)});',
     );
   }
 

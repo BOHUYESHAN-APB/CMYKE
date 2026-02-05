@@ -1,5 +1,9 @@
 class TimeRange {
-  const TimeRange({required this.start, required this.end, required this.label});
+  const TimeRange({
+    required this.start,
+    required this.end,
+    required this.label,
+  });
 
   final DateTime start;
   final DateTime end;
@@ -21,7 +25,11 @@ TimeRange? parseChineseTimeRange(String text, DateTime now) {
 
   TimeRange range(DateTime start, DateTime end, String label) {
     if (end.isBefore(start)) {
-      return TimeRange(start: start, end: start.add(const Duration(days: 1)), label: label);
+      return TimeRange(
+        start: start,
+        end: start.add(const Duration(days: 1)),
+        label: label,
+      );
     }
     return TimeRange(start: start, end: end, label: label);
   }
@@ -65,8 +73,9 @@ TimeRange? parseChineseTimeRange(String text, DateTime now) {
   }
 
   // Relative: 最近/近/过去 + N + unit
-  final m = RegExp(r'(最近|近|过去)\s*([0-9]{1,3}|[一二三四五六七八九十百]+)\s*(天|日|周|小时)')
-      .firstMatch(t);
+  final m = RegExp(
+    r'(最近|近|过去)\s*([0-9]{1,3}|[一二三四五六七八九十百]+)\s*(天|日|周|小时)',
+  ).firstMatch(t);
   if (m != null) {
     final nRaw = m.group(2) ?? '';
     final unit = m.group(3) ?? '天';
@@ -122,10 +131,7 @@ int? _parseCnOrDigits(String raw) {
     '八': 8,
     '九': 9,
   };
-  const units = {
-    '十': 10,
-    '百': 100,
-  };
+  const units = {'十': 10, '百': 100};
   var total = 0;
   var current = 0;
   for (final ch in trimmed.split('')) {
@@ -145,4 +151,3 @@ int? _parseCnOrDigits(String raw) {
   total += current;
   return total == 0 ? null : total;
 }
-

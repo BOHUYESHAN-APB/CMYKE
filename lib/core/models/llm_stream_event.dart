@@ -1,11 +1,7 @@
 import 'dart:typed_data';
 
 class LlmStreamEvent {
-  const LlmStreamEvent({
-    this.textDelta,
-    this.audioChunk,
-    this.audioFormat,
-  });
+  const LlmStreamEvent({this.textDelta, this.audioChunk, this.audioFormat});
 
   final String? textDelta;
   final Uint8List? audioChunk;

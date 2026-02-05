@@ -3,10 +3,12 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  flutter_acrylic
   flutter_tts
   just_audio_windows
   speech_to_text_windows
   sqlite3_flutter_libs
+  tray_manager
   webview_windows
 )
 

@@ -22,8 +22,9 @@ class ChatExportService {
       'exported_at': DateTime.now().toIso8601String(),
       'session': session.toJson(),
       if (scopedCollections != null)
-        'memory_collections':
-            scopedCollections.map((collection) => collection.toJson()).toList(),
+        'memory_collections': scopedCollections
+            .map((collection) => collection.toJson())
+            .toList(),
     };
     final jsonPath = await _writeFile(
       filename: '$baseName.json',
@@ -43,14 +44,14 @@ class ChatExportService {
     List<ChatSession> sessions, {
     List<MemoryCollection>? memoryCollections,
   }) async {
-    final baseName =
-        'cmyke_sessions_${DateTime.now().millisecondsSinceEpoch}';
+    final baseName = 'cmyke_sessions_${DateTime.now().millisecondsSinceEpoch}';
     final payload = {
       'exported_at': DateTime.now().toIso8601String(),
       'sessions': sessions.map((session) => session.toJson()).toList(),
       if (memoryCollections != null)
-        'memory_collections':
-            memoryCollections.map((collection) => collection.toJson()).toList(),
+        'memory_collections': memoryCollections
+            .map((collection) => collection.toJson())
+            .toList(),
     };
     final jsonPath = await _writeFile(
       filename: '$baseName.json',

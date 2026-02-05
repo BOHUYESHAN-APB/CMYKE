@@ -12,11 +12,9 @@ import '../services/local_database.dart';
 import '../services/local_storage.dart';
 
 class ChatRepository extends ChangeNotifier {
-  ChatRepository({
-    required LocalDatabase database,
-    LocalStorage? legacyStorage,
-  })  : _database = database,
-        _legacyStorage = legacyStorage ?? LocalStorage();
+  ChatRepository({required LocalDatabase database, LocalStorage? legacyStorage})
+    : _database = database,
+      _legacyStorage = legacyStorage ?? LocalStorage();
 
   final LocalDatabase _database;
   final LocalStorage _legacyStorage;
@@ -31,9 +29,9 @@ class ChatRepository extends ChangeNotifier {
   String? get activeSessionId => _activeSessionId;
 
   ChatSession? get activeSession => _sessions.firstWhere(
-        (session) => session.id == _activeSessionId,
-        orElse: () => _sessions.isEmpty ? _createDefaultSession() : _sessions[0],
-      );
+    (session) => session.id == _activeSessionId,
+    orElse: () => _sessions.isEmpty ? _createDefaultSession() : _sessions[0],
+  );
 
   Future<void> load() async {
     final db = await _database.database;
@@ -43,10 +41,7 @@ class ChatRepository extends ChangeNotifier {
     );
     if (sessionRows.isEmpty) {
       await _importLegacy(db);
-      sessionRows = await db.query(
-        _sessionsTable,
-        orderBy: 'updated_at DESC',
-      );
+      sessionRows = await db.query(_sessionsTable, orderBy: 'updated_at DESC');
     }
     if (sessionRows.isEmpty) {
       final session = _createDefaultSession();
@@ -67,7 +62,9 @@ class ChatRepository extends ChangeNotifier {
     final messagesBySession = <String, List<ChatMessage>>{};
     for (final row in messageRows) {
       final sessionId = row['session_id'] as String;
-      messagesBySession.putIfAbsent(sessionId, () => []).add(
+      messagesBySession
+          .putIfAbsent(sessionId, () => [])
+          .add(
             ChatMessage(
               id: row['id'] as String,
               role: ChatRole.values.firstWhere(
@@ -123,11 +120,7 @@ class ChatRepository extends ChangeNotifier {
   Future<void> removeSession(String sessionId) async {
     final db = await _database.database;
     _sessions.removeWhere((session) => session.id == sessionId);
-    await db.delete(
-      _sessionsTable,
-      where: 'id = ?',
-      whereArgs: [sessionId],
-    );
+    await db.delete(_sessionsTable, where: 'id = ?', whereArgs: [sessionId]);
     if (_sessions.isEmpty) {
       final session = _createDefaultSession();
       _sessions.add(session);
@@ -153,8 +146,10 @@ class ChatRepository extends ChangeNotifier {
     await addMessage(message);
   }
 
-  Future<void> addAssistantMessage(String content,
-      {bool persist = true}) async {
+  Future<void> addAssistantMessage(
+    String content, {
+    bool persist = true,
+  }) async {
     final message = ChatMessage(
       id: _newId(),
       role: ChatRole.assistant,
@@ -201,8 +196,9 @@ class ChatRepository extends ChangeNotifier {
     if (session == null) {
       return;
     }
-    final index =
-        session.messages.indexWhere((message) => message.id == messageId);
+    final index = session.messages.indexWhere(
+      (message) => message.id == messageId,
+    );
     if (index == -1) {
       return;
     }
@@ -335,20 +331,20 @@ class ChatRepository extends ChangeNotifier {
   }
 
   Map<String, Object?> _sessionToRow(ChatSession session) => {
-        'id': session.id,
-        'title': session.title,
-        'created_at': session.createdAt.toIso8601String(),
-        'updated_at': session.updatedAt.toIso8601String(),
-        'mode': session.mode.name,
-      };
+    'id': session.id,
+    'title': session.title,
+    'created_at': session.createdAt.toIso8601String(),
+    'updated_at': session.updatedAt.toIso8601String(),
+    'mode': session.mode.name,
+  };
 
   Map<String, Object?> _messageToRow(ChatMessage message, String sessionId) => {
-        'id': message.id,
-        'session_id': sessionId,
-        'role': message.role.name,
-        'content': message.content,
-        'created_at': message.createdAt.toIso8601String(),
-      };
+    'id': message.id,
+    'session_id': sessionId,
+    'role': message.role.name,
+    'content': message.content,
+    'created_at': message.createdAt.toIso8601String(),
+  };
 
   Future<void> _importLegacy(Database db) async {
     final data = await _legacyStorage.readJsonList(_storageFile);

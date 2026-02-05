@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/services/runtime_hub.dart';
 import '../../../core/repositories/settings_repository.dart';
+import '../../../ui/theme/cmyke_chrome.dart';
 import '../../common/live3d_preview.dart';
 
 class AvatarStage extends StatelessWidget {
@@ -43,8 +44,8 @@ class AvatarStage extends StatelessWidget {
                     Text(
                       'Live3D Stage',
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                     const Spacer(),
                     AnimatedBuilder(
@@ -52,7 +53,9 @@ class AvatarStage extends StatelessWidget {
                       builder: (context, _) {
                         final kind = debug.currentMotionKind;
                         final label = kind == null || kind.isEmpty
-                            ? (debug.currentMotionKey == null ? 'Live3D' : 'Playing')
+                            ? (debug.currentMotionKey == null
+                                  ? 'Live3D'
+                                  : 'Playing')
                             : kind.toUpperCase();
                         return _ModeChip(label: label);
                       },
@@ -97,8 +100,8 @@ class AvatarStage extends StatelessWidget {
                   Text(
                     'Live3D Stage',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                   const Spacer(),
                   _ModeChip(label: 'Live3D 准备中'),
@@ -142,7 +145,9 @@ class _MotionDebuggerState extends State<_MotionDebugger> {
   bool _isAutoMotion(Map<String, dynamic> motion) {
     final auto = motion['auto'];
     if (auto is! Map) return false;
-    return auto['talk'] == true || auto['idle'] == true || auto['hover'] == true;
+    return auto['talk'] == true ||
+        auto['idle'] == true ||
+        auto['hover'] == true;
   }
 
   String _agentTierOf(Map<String, dynamic> motion) {
@@ -211,17 +216,21 @@ class _MotionDebuggerState extends State<_MotionDebugger> {
     return AnimatedBuilder(
       animation: debug,
       builder: (context, _) {
+        final chrome = context.chrome;
         final motions = _extractMotions(debug.vrmaCatalog);
         final total = motions.length;
         final autoCount = motions.where(_isAutoMotion).length;
-        final agentCommonCount =
-            motions.where((m) => _agentTierOf(m) == 'common').length;
-        final agentRareCount =
-            motions.where((m) => _agentTierOf(m) == 'rare').length;
+        final agentCommonCount = motions
+            .where((m) => _agentTierOf(m) == 'common')
+            .length;
+        final agentRareCount = motions
+            .where((m) => _agentTierOf(m) == 'rare')
+            .length;
         final agentCount = agentCommonCount + agentRareCount;
         final currentKey = debug.currentMotionKey;
         final currentIndex = _resolveIndex(currentKey, motions);
-        final currentEntry = (currentIndex != null &&
+        final currentEntry =
+            (currentIndex != null &&
                 currentIndex > 0 &&
                 currentIndex <= motions.length)
             ? motions[currentIndex - 1]
@@ -238,38 +247,38 @@ class _MotionDebuggerState extends State<_MotionDebugger> {
         final filtered = query.isEmpty
             ? motions
             : motions
-                .asMap()
-                .entries
-                .where((entry) {
-                  final fullIndex = entry.key + 1;
-                  final m = entry.value;
-                  if (indexQuery != null) {
-                    return fullIndex == indexQuery;
-                  }
-                  final id = (m['id'] ?? '').toString().toLowerCase();
-                  final name = (m['name'] ?? '').toString().toLowerCase();
-                  final type = (m['type'] ?? '').toString().toLowerCase();
-                  final url = (m['url'] ?? '').toString().toLowerCase();
-                  final agent = _agentTierOf(m).toLowerCase();
-                  final auto = _autoFlagsLabel(m).toLowerCase();
-                  return id.contains(query) ||
-                      name.contains(query) ||
-                      type.contains(query) ||
-                      url.contains(query) ||
-                      agent.contains(query) ||
-                      auto.contains(query);
-                })
-                .map((e) => e.value)
-                .toList(growable: false);
+                  .asMap()
+                  .entries
+                  .where((entry) {
+                    final fullIndex = entry.key + 1;
+                    final m = entry.value;
+                    if (indexQuery != null) {
+                      return fullIndex == indexQuery;
+                    }
+                    final id = (m['id'] ?? '').toString().toLowerCase();
+                    final name = (m['name'] ?? '').toString().toLowerCase();
+                    final type = (m['type'] ?? '').toString().toLowerCase();
+                    final url = (m['url'] ?? '').toString().toLowerCase();
+                    final agent = _agentTierOf(m).toLowerCase();
+                    final auto = _autoFlagsLabel(m).toLowerCase();
+                    return id.contains(query) ||
+                        name.contains(query) ||
+                        type.contains(query) ||
+                        url.contains(query) ||
+                        agent.contains(query) ||
+                        auto.contains(query);
+                  })
+                  .map((e) => e.value)
+                  .toList(growable: false);
 
         final recent = debug.motionHistory.take(10).toList(growable: false);
 
         return Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: const Color(0xFFFDFCF9),
+            color: chrome.surfaceElevated,
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: const Color(0xFFE4DDD2)),
+            border: Border.all(color: chrome.separatorStrong),
           ),
           child: Scrollbar(
             controller: _scrollController,
@@ -284,12 +293,8 @@ class _MotionDebuggerState extends State<_MotionDebugger> {
                         children: [
                           Text(
                             'Motion Debug',
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleSmall
-                                ?.copyWith(
-                                  fontWeight: FontWeight.w700,
-                                ),
+                            style: Theme.of(context).textTheme.titleSmall
+                                ?.copyWith(fontWeight: FontWeight.w700),
                           ),
                           const SizedBox(width: 8),
                           if (debug.currentMotionKind != null)
@@ -303,16 +308,14 @@ class _MotionDebuggerState extends State<_MotionDebugger> {
                               vertical: 4,
                             ),
                             decoration: BoxDecoration(
-                              color: const Color(0x1F1B9B7B),
+                              color: chrome.accent.withValues(alpha: 0.14),
                               borderRadius: BorderRadius.circular(999),
                             ),
                             child: Text(
                               '$total',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .labelSmall
+                              style: Theme.of(context).textTheme.labelSmall
                                   ?.copyWith(
-                                    color: const Color(0xFF1B9B7B),
+                                    color: chrome.accent,
                                     fontWeight: FontWeight.w700,
                                   ),
                             ),
@@ -325,16 +328,14 @@ class _MotionDebuggerState extends State<_MotionDebugger> {
                                 vertical: 4,
                               ),
                               decoration: BoxDecoration(
-                                color: const Color(0x1F1B9B7B),
+                                color: chrome.accent.withValues(alpha: 0.14),
                                 borderRadius: BorderRadius.circular(999),
                               ),
                               child: Text(
                                 'Auto: $autoCount',
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .labelSmall
+                                style: Theme.of(context).textTheme.labelSmall
                                     ?.copyWith(
-                                      color: const Color(0xFF1B9B7B),
+                                      color: chrome.accent,
                                       fontWeight: FontWeight.w700,
                                     ),
                               ),
@@ -354,9 +355,7 @@ class _MotionDebuggerState extends State<_MotionDebugger> {
                                 agentRareCount > 0
                                     ? 'Agent: $agentCount (rare $agentRareCount)'
                                     : 'Agent: $agentCount',
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .labelSmall
+                                style: Theme.of(context).textTheme.labelSmall
                                     ?.copyWith(
                                       color: const Color(0xFF2E5AAC),
                                       fontWeight: FontWeight.w700,
@@ -372,9 +371,9 @@ class _MotionDebuggerState extends State<_MotionDebugger> {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              fontWeight: FontWeight.w700,
-                              color: const Color(0xFF1F2228),
-                            ),
+                          fontWeight: FontWeight.w700,
+                          color: const Color(0xFF1F2228),
+                        ),
                       ),
                       if (debug.currentMotionRaw != null)
                         Padding(
@@ -383,21 +382,15 @@ class _MotionDebuggerState extends State<_MotionDebugger> {
                             debug.currentMotionRaw!,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context)
-                                .textTheme
-                                .labelSmall
-                                ?.copyWith(
-                                  color: const Color(0xFF6B6F7A),
-                                ),
+                            style: Theme.of(context).textTheme.labelSmall
+                                ?.copyWith(color: const Color(0xFF6B6F7A)),
                           ),
                         ),
                       if (recent.isNotEmpty) ...[
                         const SizedBox(height: 10),
                         Text(
                           'Recent',
-                          style: Theme.of(context)
-                              .textTheme
-                              .labelSmall
+                          style: Theme.of(context).textTheme.labelSmall
                               ?.copyWith(
                                 color: const Color(0xFF6B6F7A),
                                 fontWeight: FontWeight.w700,
@@ -412,29 +405,31 @@ class _MotionDebuggerState extends State<_MotionDebugger> {
                               .whereType<_MotionHistoryItem>()
                               .take(8)
                               .map((item) {
-                            final index = _resolveIndex(item.key, motions);
-                            final entry = (index != null &&
-                                    index > 0 &&
-                                    index <= motions.length)
-                                ? motions[index - 1]
-                                : null;
-                            final label = _formatHistoryLabel(
-                              item: item,
-                              index: index,
-                              entry: entry,
-                            );
-                            return ActionChip(
-                              label: Text(
-                                label,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              onPressed: item.trigger.isEmpty
-                                  ? null
-                                  : () => RuntimeHub.instance.live3dBridge
-                                      .playMotion(item.trigger),
-                            );
-                          }).toList(growable: false),
+                                final index = _resolveIndex(item.key, motions);
+                                final entry =
+                                    (index != null &&
+                                        index > 0 &&
+                                        index <= motions.length)
+                                    ? motions[index - 1]
+                                    : null;
+                                final label = _formatHistoryLabel(
+                                  item: item,
+                                  index: index,
+                                  entry: entry,
+                                );
+                                return ActionChip(
+                                  label: Text(
+                                    label,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  onPressed: item.trigger.isEmpty
+                                      ? null
+                                      : () => RuntimeHub.instance.live3dBridge
+                                            .playMotion(item.trigger),
+                                );
+                              })
+                              .toList(growable: false),
                         ),
                       ],
                       const SizedBox(height: 10),
@@ -461,75 +456,67 @@ class _MotionDebuggerState extends State<_MotionDebugger> {
                 ),
                 if (total > 0)
                   SliverList(
-                    delegate: SliverChildBuilderDelegate(
-                      (context, index) {
-                        final motion = filtered[index];
-                        final fullIndex = motions.indexOf(motion) + 1;
-                        final isPlaying = currentIndex == fullIndex;
-                        final policyColor = _policyColor(motion);
-                        final id = motion['id']?.toString() ?? '';
-                        final name = motion['name']?.toString() ?? id;
-                        final url = motion['url']?.toString() ?? '';
-                        final trigger = id.isNotEmpty ? id : url;
+                    delegate: SliverChildBuilderDelegate((context, index) {
+                      final motion = filtered[index];
+                      final fullIndex = motions.indexOf(motion) + 1;
+                      final isPlaying = currentIndex == fullIndex;
+                      final policyColor = _policyColor(motion);
+                      final id = motion['id']?.toString() ?? '';
+                      final name = motion['name']?.toString() ?? id;
+                      final url = motion['url']?.toString() ?? '';
+                      final trigger = id.isNotEmpty ? id : url;
 
-                        return Column(
-                          children: [
-                            ListTile(
-                              dense: true,
-                              visualDensity: VisualDensity.compact,
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 4,
-                                vertical: 0,
-                              ),
-                              tileColor:
-                                  isPlaying ? const Color(0x1F1B9B7B) : null,
-                              leading: Text(
-                                '#${fullIndex.toString().padLeft(2, '0')}',
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .labelSmall
-                                    ?.copyWith(
-                                      fontWeight: FontWeight.w800,
-                                      color: policyColor,
-                                    ),
-                              ),
-                              title: Text(
-                                name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .labelMedium
-                                    ?.copyWith(fontWeight: FontWeight.w700),
-                              ),
-                              subtitle: Text(
-                                _formatMotionMeta(motion),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .labelSmall
-                                    ?.copyWith(color: const Color(0xFF6B6F7A)),
-                              ),
-                              trailing: IconButton(
-                                tooltip: '播放',
-                                icon: const Icon(
-                                  Icons.play_arrow_rounded,
-                                  size: 18,
-                                ),
-                                onPressed: trigger.isEmpty
-                                    ? null
-                                    : () => RuntimeHub.instance.live3dBridge
-                                        .playMotion(trigger),
-                              ),
+                      return Column(
+                        children: [
+                          ListTile(
+                            dense: true,
+                            visualDensity: VisualDensity.compact,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 4,
+                              vertical: 0,
                             ),
-                            if (index != filtered.length - 1)
-                              const Divider(height: 1),
-                          ],
-                        );
-                      },
-                      childCount: filtered.length,
-                    ),
+                            tileColor: isPlaying
+                                ? const Color(0x1F1B9B7B)
+                                : null,
+                            leading: Text(
+                              '#${fullIndex.toString().padLeft(2, '0')}',
+                              style: Theme.of(context).textTheme.labelSmall
+                                  ?.copyWith(
+                                    fontWeight: FontWeight.w800,
+                                    color: policyColor,
+                                  ),
+                            ),
+                            title: Text(
+                              name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.labelMedium
+                                  ?.copyWith(fontWeight: FontWeight.w700),
+                            ),
+                            subtitle: Text(
+                              _formatMotionMeta(motion),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.labelSmall
+                                  ?.copyWith(color: const Color(0xFF6B6F7A)),
+                            ),
+                            trailing: IconButton(
+                              tooltip: '播放',
+                              icon: const Icon(
+                                Icons.play_arrow_rounded,
+                                size: 18,
+                              ),
+                              onPressed: trigger.isEmpty
+                                  ? null
+                                  : () => RuntimeHub.instance.live3dBridge
+                                        .playMotion(trigger),
+                            ),
+                          ),
+                          if (index != filtered.length - 1)
+                            const Divider(height: 1),
+                        ],
+                      );
+                    }, childCount: filtered.length),
                   ),
               ],
             ),
@@ -684,9 +671,9 @@ class _ModeChip extends StatelessWidget {
       child: Text(
         label,
         style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: const Color(0xFF1B9B7B),
-              fontWeight: FontWeight.w600,
-            ),
+          color: const Color(0xFF1B9B7B),
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }

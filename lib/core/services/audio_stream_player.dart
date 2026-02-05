@@ -6,8 +6,8 @@ import 'package:just_audio/just_audio.dart';
 class AudioStreamPlayer {
   AudioStreamPlayer() {
     _stateSubscription = _player.playerStateStream.listen((state) {
-      final playing = state.playing &&
-          state.processingState != ProcessingState.completed;
+      final playing =
+          state.playing && state.processingState != ProcessingState.completed;
       if (playing != _isPlaying) {
         _isPlaying = playing;
         _playingController.add(_isPlaying);

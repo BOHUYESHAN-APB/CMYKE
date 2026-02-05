@@ -10,6 +10,9 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../core/repositories/settings_repository.dart';
 import '../../core/services/runtime_hub.dart';
+import '../../ui/theme/cmyke_chrome.dart';
+import '../../ui/widgets/frosted_surface.dart';
+import '../../ui/windows/win_window.dart';
 
 /// Minimal Live3D preview using WebView:
 /// - Windows: webview_windows (Edge WebView2)
@@ -20,12 +23,16 @@ class Live3DPreview extends StatefulWidget {
     this.height = 180,
     this.compact = false,
     this.debug = false,
+    this.transparentBackground = false,
+    this.petMode = false,
     this.settingsRepository,
   });
 
   final double height;
   final bool compact;
   final bool debug;
+  final bool transparentBackground;
+  final bool petMode;
   final SettingsRepository? settingsRepository;
 
   @override
@@ -178,13 +185,15 @@ class _Live3DPreviewState extends State<Live3DPreview> {
       final manifest = await rootBundle.loadString('AssetManifest.json');
       final decoded = jsonDecode(manifest);
       if (decoded is Map<String, dynamic>) {
-        final vrmas = decoded.keys
-            .where(
-              (k) =>
-                  k.startsWith('assets/live3d/animations/') && k.endsWith('.vrma'),
-            )
-            .toList()
-          ..sort();
+        final vrmas =
+            decoded.keys
+                .where(
+                  (k) =>
+                      k.startsWith('assets/live3d/animations/') &&
+                      k.endsWith('.vrma'),
+                )
+                .toList()
+              ..sort();
         for (final asset in vrmas) {
           final rel = asset.substring('assets/live3d/'.length);
           assets[asset] = 'assets/vrm_core/$rel';
@@ -228,7 +237,8 @@ class _Live3DPreviewState extends State<Live3DPreview> {
       final m = Map<String, dynamic>.from(entry);
       final auto = m['auto'];
       if (auto is! Map) continue;
-      final hasAuto = auto['talk'] == true || auto['idle'] == true || auto['hover'] == true;
+      final hasAuto =
+          auto['talk'] == true || auto['idle'] == true || auto['hover'] == true;
       if (!hasAuto) continue;
       final id = (m['id'] ?? '').toString().trim();
       final url = (m['url'] ?? '').toString().trim();
@@ -256,7 +266,9 @@ class _Live3DPreviewState extends State<Live3DPreview> {
     }
   }
 
-  Future<Map<String, dynamic>?> _loadVrmaCatalog(List<String> availableUrls) async {
+  Future<Map<String, dynamic>?> _loadVrmaCatalog(
+    List<String> availableUrls,
+  ) async {
     Map<String, dynamic>? decoded;
     try {
       final raw = await rootBundle.loadString(
@@ -288,6 +300,7 @@ class _Live3DPreviewState extends State<Live3DPreview> {
           return segment;
         }
       }
+
       final parts = trimmed
           .split('/')
           .where((e) => e.isNotEmpty)
@@ -309,8 +322,9 @@ class _Live3DPreviewState extends State<Live3DPreview> {
       }
       final id = motion['id'];
       motion['url'] = resolvedUrl;
-      final key =
-          (id is String && id.trim().isNotEmpty) ? id.trim() : resolvedUrl;
+      final key = (id is String && id.trim().isNotEmpty)
+          ? id.trim()
+          : resolvedUrl;
       if (seen.contains(key)) return;
       seen.add(key);
       motions.add(motion);
@@ -357,24 +371,28 @@ class _Live3DPreviewState extends State<Live3DPreview> {
       return null;
     }
 
-    return {
-      'version': 1,
-      'motions': motions,
-    };
+    return {'version': 1, 'motions': motions};
   }
 
   Future<List<String>> _scanVrmaUrls(String bundleRoot) async {
     final root = Directory(bundleRoot);
-    final animRoot = Directory(p.join(bundleRoot, 'assets', 'vrm_core', 'animations'));
+    final animRoot = Directory(
+      p.join(bundleRoot, 'assets', 'vrm_core', 'animations'),
+    );
     if (!await animRoot.exists()) {
       return const [];
     }
     final urls = <String>[];
-    await for (final entity in animRoot.list(recursive: true, followLinks: false)) {
+    await for (final entity in animRoot.list(
+      recursive: true,
+      followLinks: false,
+    )) {
       if (entity is! File) continue;
       if (p.extension(entity.path).toLowerCase() != '.vrma') continue;
       final rel = p.relative(entity.path, from: root.path);
-      final parts = rel.split(Platform.pathSeparator).where((e) => e.isNotEmpty);
+      final parts = rel
+          .split(Platform.pathSeparator)
+          .where((e) => e.isNotEmpty);
       final encoded = parts.map(Uri.encodeComponent).join('/');
       urls.add('/$encoded');
     }
@@ -416,7 +434,12 @@ class _Live3DPreviewState extends State<Live3DPreview> {
       return bytes.buffer.asUint8List();
     } catch (_) {
       // Fallback to reading from project dir when asset bundle is missing (e.g., stale build).
-      final file = File(p.join(Directory.current.path, asset.replaceAll('/', Platform.pathSeparator)));
+      final file = File(
+        p.join(
+          Directory.current.path,
+          asset.replaceAll('/', Platform.pathSeparator),
+        ),
+      );
       if (await file.exists()) {
         return await file.readAsBytes();
       }
@@ -497,6 +520,13 @@ class _Live3DPreviewState extends State<Live3DPreview> {
           }
           final type = decoded['type']?.toString() ?? 'msg';
           final msg = decoded['msg'];
+          if (type == 'pet' &&
+              msg == 'drag' &&
+              Platform.isWindows &&
+              widget.petMode) {
+            unawaited(WinWindow.startDragging());
+            return;
+          }
           _hub.live3dBridge.debug.ingestViewerMessage(type, msg);
           final msgText = msg is String ? msg : jsonEncode(msg);
           if (type == 'info' && msg == 'viewer:ready') {
@@ -515,7 +545,21 @@ class _Live3DPreviewState extends State<Live3DPreview> {
         }
         _setStatus('viewer: $message');
       });
-      await controller.loadUrl('${baseUrl}viewer.html');
+      if (widget.transparentBackground || widget.petMode) {
+        final params = <String, String>{};
+        if (widget.transparentBackground) {
+          params['transparent'] = '1';
+        }
+        if (widget.petMode) {
+          params['pet'] = '1';
+        }
+        final query = params.entries
+            .map((e) => '${e.key}=${Uri.encodeComponent(e.value)}')
+            .join('&');
+        await controller.loadUrl('${baseUrl}viewer.html?$query');
+      } else {
+        await controller.loadUrl('${baseUrl}viewer.html');
+      }
       _hub.live3dBridge.attachJsInvoker(
         (script) => controller.executeScript(script),
       );
@@ -641,9 +685,14 @@ class _Live3DPreviewState extends State<Live3DPreview> {
 
   @override
   Widget build(BuildContext context) {
-    final bg = widget.compact ? const Color(0xFFF6F2EA) : const Color(0xFFF2EEE6);
-    final border =
-        widget.compact ? const Color(0xFFE8DFD3) : const Color(0xFFE4DDD2);
+    final chrome = context.chrome;
+    final radius = widget.transparentBackground ? 0.0 : 16.0;
+    final bg = widget.transparentBackground
+        ? Colors.transparent
+        : (widget.compact ? chrome.surface : chrome.surfaceElevated);
+    final border = widget.transparentBackground
+        ? Colors.transparent
+        : chrome.separatorStrong;
     final fileName = (_path == null || _path!.isEmpty)
         ? null
         : _path!.split(RegExp(r'[\\/]')).last;
@@ -659,31 +708,31 @@ class _Live3DPreviewState extends State<Live3DPreview> {
         );
       } else if (_winController == null) {
         viewer = const Center(child: CircularProgressIndicator(strokeWidth: 2));
-       } else {
-         viewer = Stack(
-           children: [
-             Positioned.fill(
-               child: Webview(
-                 _winController!,
-                 permissionRequested: (url, kind, isUserInitiated) =>
-                     WebviewPermissionDecision.deny,
-               ),
-             ),
-             if (widget.debug)
-               Positioned(
-                 right: 8,
-                 top: 8,
-                 child: IconButton(
-                   tooltip: '打开 DevTools',
-                   icon: const Icon(Icons.bug_report_outlined, size: 18),
-                   onPressed: () => _winController?.openDevTools(),
-                 ),
-               ),
-           ],
-         );
-       }
-     } else {
-       viewer = Center(
+      } else {
+        viewer = Stack(
+          children: [
+            Positioned.fill(
+              child: Webview(
+                _winController!,
+                permissionRequested: (url, kind, isUserInitiated) =>
+                    WebviewPermissionDecision.deny,
+              ),
+            ),
+            if (widget.debug)
+              Positioned(
+                right: 8,
+                top: 8,
+                child: IconButton(
+                  tooltip: '打开 DevTools',
+                  icon: const Icon(Icons.bug_report_outlined, size: 18),
+                  onPressed: () => _winController?.openDevTools(),
+                ),
+              ),
+          ],
+        );
+      }
+    } else {
+      viewer = Center(
         child: Text(
           '当前平台暂未启用 Live3D 渲染',
           style: Theme.of(context).textTheme.bodySmall,
@@ -695,14 +744,14 @@ class _Live3DPreviewState extends State<Live3DPreview> {
       height: widget.height,
       decoration: BoxDecoration(
         color: bg,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: border),
+        borderRadius: BorderRadius.circular(radius),
+        border: widget.transparentBackground ? null : Border.all(color: border),
       ),
       child: Stack(
         children: [
           Positioned.fill(
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: BorderRadius.circular(radius),
               child: viewer,
             ),
           ),
@@ -710,11 +759,14 @@ class _Live3DPreviewState extends State<Live3DPreview> {
             Positioned(
               left: 12,
               bottom: 12,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.82),
-                  borderRadius: BorderRadius.circular(12),
+              child: FrostedSurface(
+                blurSigma: chrome.blurSigma * 0.6,
+                shadows: const [],
+                highlight: false,
+                borderRadius: BorderRadius.circular(12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -722,15 +774,15 @@ class _Live3DPreviewState extends State<Live3DPreview> {
                     Text(
                       fileName ?? '未加载 VRM',
                       style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                     if (_status != null)
                       Text(
                         _status!,
                         style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                              color: const Color(0xFF6B6F7A),
-                            ),
+                          color: chrome.textSecondary,
+                        ),
                       ),
                   ],
                 ),
@@ -739,18 +791,21 @@ class _Live3DPreviewState extends State<Live3DPreview> {
             Positioned(
               right: 12,
               bottom: 10,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: const Color(0x1F1B9B7B),
-                  borderRadius: BorderRadius.circular(999),
+              child: FrostedSurface(
+                borderRadius: BorderRadius.circular(999),
+                blurSigma: chrome.blurSigma * 0.55,
+                shadows: const [],
+                highlight: false,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
                 ),
                 child: Text(
                   fileName == null ? '未加载模型' : '已加载',
                   style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: const Color(0xFF1B9B7B),
-                        fontWeight: FontWeight.w700,
-                      ),
+                    color: chrome.accent,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ),

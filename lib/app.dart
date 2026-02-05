@@ -1,7 +1,6 @@
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import 'core/models/app_settings.dart';
 import 'core/models/provider_config.dart';
@@ -13,6 +12,8 @@ import 'core/services/local_storage.dart';
 import 'core/services/runtime_hub.dart';
 import 'features/chat/chat_screen.dart';
 import 'features/pet/pet_screen.dart';
+import 'ui/theme/cmyke_theme.dart';
+import 'ui/windows/pet_desktop_controller.dart';
 
 class CMYKEApp extends StatefulWidget {
   const CMYKEApp({super.key});
@@ -50,6 +51,7 @@ class _CMYKEAppState extends State<CMYKEApp> {
       resolveEmbeddingProvider: _resolveEmbeddingProvider,
     );
     _settingsRepository.addListener(_handleSettingsChanged);
+    PetDesktopController.instance.attach(_settingsRepository);
     _bootstrap();
   }
 
@@ -69,8 +71,8 @@ class _CMYKEAppState extends State<CMYKEApp> {
         _memoryRepository.load(),
         _settingsRepository.load(),
       ]);
-      final savedModelPath =
-          _settingsRepository.settings.live3dModelPath?.trim();
+      final savedModelPath = _settingsRepository.settings.live3dModelPath
+          ?.trim();
       if (savedModelPath != null && savedModelPath.isNotEmpty) {
         await RuntimeHub.instance.live3dBridge.loadModel(savedModelPath);
       }
@@ -92,6 +94,7 @@ class _CMYKEAppState extends State<CMYKEApp> {
     _chatRepository.dispose();
     _memoryRepository.dispose();
     _settingsRepository.removeListener(_handleSettingsChanged);
+    PetDesktopController.instance.detach(_settingsRepository);
     _settingsRepository.dispose();
     _database.close();
     super.dispose();
@@ -99,50 +102,12 @@ class _CMYKEAppState extends State<CMYKEApp> {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = ColorScheme.fromSeed(
-      seedColor: const Color(0xFF1B9B7B),
-      brightness: Brightness.light,
-      surface: const Color(0xFFFDFCF9),
-    );
-    final baseTextTheme = Platform.environment.containsKey('FLUTTER_TEST')
-        ? ThemeData(brightness: Brightness.light).textTheme
-        : GoogleFonts.notoSansScTextTheme();
-
     return MaterialApp(
       title: 'CMYKE',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: colorScheme,
-        scaffoldBackgroundColor: const Color(0xFFF6F2EA),
-        textTheme: baseTextTheme.apply(
-          bodyColor: const Color(0xFF1F2228),
-          displayColor: const Color(0xFF1F2228),
-        ),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          foregroundColor: Color(0xFF1F2228),
-        ),
-        inputDecorationTheme: InputDecorationTheme(
-          filled: true,
-          fillColor: const Color(0xFFF2EEE6),
-          hintStyle: const TextStyle(color: Color(0xFF6B6F7A)),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(18),
-            borderSide: BorderSide.none,
-          ),
-        ),
-        cardTheme: CardThemeData(
-          color: const Color(0xFFFDFCF9),
-          elevation: 0,
-          margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(22),
-            side: const BorderSide(color: Color(0xFFE4DDD2)),
-          ),
-        ),
-      ),
+      theme: CmykeTheme.light(),
+      darkTheme: CmykeTheme.dark(),
+      themeMode: ThemeMode.system,
       home: _buildHome(),
     );
   }
@@ -172,7 +137,8 @@ class _CMYKEAppState extends State<CMYKEApp> {
   ProviderConfig? _resolveEmbeddingProvider() {
     try {
       final settings = _settingsRepository.settings;
-      final provider = _settingsRepository.findProvider(settings.embeddingProviderId) ??
+      final provider =
+          _settingsRepository.findProvider(settings.embeddingProviderId) ??
           _activeLlmProvider();
       if (provider == null) {
         return null;
@@ -222,11 +188,7 @@ class _StartupLoading extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
-      body: Center(
-        child: CircularProgressIndicator(),
-      ),
-    );
+    return const Scaffold(body: Center(child: CircularProgressIndicator()));
   }
 }
 
@@ -246,9 +208,9 @@ class _StartupError extends StatelessWidget {
             children: [
               Text(
                 'CMYKE 启动失败',
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 12),
               Text(

@@ -29,9 +29,7 @@ class MemoryTierScreen extends StatelessWidget {
       animation: memoryRepository,
       builder: (context, _) {
         return Scaffold(
-          appBar: AppBar(
-            title: Text(tier.label),
-          ),
+          appBar: AppBar(title: Text(tier.label)),
           body: Padding(
             padding: const EdgeInsets.all(20),
             child: Column(
@@ -40,8 +38,8 @@ class MemoryTierScreen extends StatelessWidget {
                 Text(
                   _tierDescription(tier),
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: const Color(0xFF5E636F),
-                      ),
+                    color: const Color(0xFF5E636F),
+                  ),
                 ),
                 const SizedBox(height: 16),
                 Expanded(
@@ -66,22 +64,11 @@ class MemoryTierScreen extends StatelessWidget {
   }
 }
 
-enum _MemoryTierAction {
-  export,
-  import,
-  forge,
-}
+enum _MemoryTierAction { export, import, forge }
 
-enum _KnowledgeBaseAction {
-  exportAll,
-  importAll,
-}
+enum _KnowledgeBaseAction { exportAll, importAll }
 
-enum _KnowledgeCollectionAction {
-  export,
-  importInto,
-  forge,
-}
+enum _KnowledgeCollectionAction { export, importInto, forge }
 
 class _SingleTierEditor extends StatelessWidget {
   const _SingleTierEditor({
@@ -101,10 +88,7 @@ class _SingleTierEditor extends StatelessWidget {
     final ioService = MemoryImportExportService();
     final forgeService = MemoryForgeService();
     final collection = memoryRepository.defaultCollection(tier);
-    final records = memoryRepository.recordsForTier(
-      tier,
-      sessionId: sessionId,
-    );
+    final records = memoryRepository.recordsForTier(tier, sessionId: sessionId);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -112,9 +96,9 @@ class _SingleTierEditor extends StatelessWidget {
           children: [
             Text(
               collection.name,
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
             ),
             const Spacer(),
             PopupMenuButton<_MemoryTierAction>(
@@ -186,9 +170,7 @@ class _SingleTierEditor extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         if (records.isEmpty)
-          _EmptyState(
-            message: '暂无记录，可以新增手动记忆。',
-          )
+          _EmptyState(message: '暂无记录，可以新增手动记忆。')
         else
           Expanded(
             child: ListView.builder(
@@ -242,9 +224,9 @@ class _ExternalCollections extends StatelessWidget {
           children: [
             Text(
               '知识库',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
             ),
             const Spacer(),
             PopupMenuButton<_KnowledgeBaseAction>(
@@ -379,9 +361,7 @@ class MemoryCollectionScreen extends StatelessWidget {
         final ioService = MemoryImportExportService();
         final forgeService = MemoryForgeService();
         return Scaffold(
-          appBar: AppBar(
-            title: Text(updated.name),
-          ),
+          appBar: AppBar(title: Text(updated.name)),
           body: Padding(
             padding: const EdgeInsets.all(20),
             child: Column(
@@ -390,8 +370,8 @@ class MemoryCollectionScreen extends StatelessWidget {
                 Text(
                   '外部知识库仅在需要时调用，适合专业资料与用户导入数据。',
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: const Color(0xFF5E636F),
-                      ),
+                    color: const Color(0xFF5E636F),
+                  ),
                 ),
                 const SizedBox(height: 16),
                 Row(
@@ -399,8 +379,8 @@ class MemoryCollectionScreen extends StatelessWidget {
                     Text(
                       '记录列表',
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                     const Spacer(),
                     PopupMenuButton<_KnowledgeCollectionAction>(
@@ -417,7 +397,9 @@ class MemoryCollectionScreen extends StatelessWidget {
                               return;
                             }
                             ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('已导出: ${result.jsonPath}')),
+                              SnackBar(
+                                content: Text('已导出: ${result.jsonPath}'),
+                              ),
                             );
                             break;
                           case _KnowledgeCollectionAction.importInto:
@@ -532,11 +514,7 @@ class _RecordTile extends StatelessWidget {
       margin: const EdgeInsets.symmetric(vertical: 6),
       child: ListTile(
         title: Text(title),
-        subtitle: Text(
-          subtitle,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-        ),
+        subtitle: Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
         trailing: Wrap(
           spacing: 8,
           children: [
@@ -590,9 +568,9 @@ class _EmptyState extends StatelessWidget {
     return Center(
       child: Text(
         message,
-        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: const Color(0xFF7A7F8A),
-            ),
+        style: Theme.of(
+          context,
+        ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF7A7F8A)),
       ),
     );
   }
@@ -647,7 +625,8 @@ Future<void> _openMemoryImportDialog(
                     controller: controller,
                     decoration: const InputDecoration(
                       labelText: '文件路径',
-                      hintText: r'C:\Users\...\Documents\cmyke\exports\xxx.json',
+                      hintText:
+                          r'C:\Users\...\Documents\cmyke\exports\xxx.json',
                     ),
                     minLines: 1,
                     maxLines: 2,
@@ -660,15 +639,17 @@ Future<void> _openMemoryImportDialog(
                     onChanged: isImporting
                         ? null
                         : (value) => setState(() {
-                              markImportedTag = value ?? true;
-                            }),
+                            markImportedTag = value ?? true;
+                          }),
                   ),
                 ],
               ),
             ),
             actions: [
               TextButton(
-                onPressed: isImporting ? null : () => Navigator.of(dialogContext).pop(),
+                onPressed: isImporting
+                    ? null
+                    : () => Navigator.of(dialogContext).pop(),
                 child: const Text('取消'),
               ),
               FilledButton(
@@ -685,7 +666,8 @@ Future<void> _openMemoryImportDialog(
                             path: path,
                             repository: repository,
                             onlyTier: onlyTier,
-                            targetExternalCollectionId: targetExternalCollectionId,
+                            targetExternalCollectionId:
+                                targetExternalCollectionId,
                             markImportedTag: markImportedTag,
                             embed: false,
                           );
@@ -745,19 +727,20 @@ Future<void> _openMemoryForgeDialog(
   final rootContext = context;
   final providers = settingsRepository.providersByKind(ProviderKind.llm);
   if (providers.isEmpty) {
-    ScaffoldMessenger.of(rootContext).showSnackBar(
-      const SnackBar(content: Text('未配置 LLM 模型，无法生成记忆。')),
-    );
+    ScaffoldMessenger.of(
+      rootContext,
+    ).showSnackBar(const SnackBar(content: Text('未配置 LLM 模型，无法生成记忆。')));
     return;
   }
 
-  final preferredAgent = settingsRepository.settings.memoryAgentProviderId?.trim();
+  final preferredAgent = settingsRepository.settings.memoryAgentProviderId
+      ?.trim();
   final preferredLlm = settingsRepository.settings.llmProviderId?.trim();
   var selectedProviderId = (preferredAgent != null && preferredAgent.isNotEmpty)
       ? preferredAgent
       : (preferredLlm != null && preferredLlm.isNotEmpty)
-          ? preferredLlm
-          : providers.first.id;
+      ? preferredLlm
+      : providers.first.id;
   if (!providers.any((provider) => provider.id == selectedProviderId)) {
     selectedProviderId = providers.first.id;
   }
@@ -783,11 +766,13 @@ Future<void> _openMemoryForgeDialog(
       return StatefulBuilder(
         builder: (context, setState) {
           Future<void> generate() async {
-            final provider = settingsRepository.findProvider(selectedProviderId);
+            final provider = settingsRepository.findProvider(
+              selectedProviderId,
+            );
             if (provider == null) {
-              ScaffoldMessenger.of(rootContext).showSnackBar(
-                const SnackBar(content: Text('请选择有效的 LLM 配置。')),
-              );
+              ScaffoldMessenger.of(
+                rootContext,
+              ).showSnackBar(const SnackBar(content: Text('请选择有效的 LLM 配置。')));
               return;
             }
             setState(() => isGenerating = true);
@@ -810,15 +795,16 @@ Future<void> _openMemoryForgeDialog(
                 keyController.text = result.coreKey!;
               }
               if (result.occurredAt != null) {
-                occurredAtController.text = result.occurredAt!.toIso8601String();
+                occurredAtController.text = result.occurredAt!
+                    .toIso8601String();
               }
             } catch (error) {
               if (!rootContext.mounted) {
                 return;
               }
-              ScaffoldMessenger.of(rootContext).showSnackBar(
-                SnackBar(content: Text('生成失败: $error')),
-              );
+              ScaffoldMessenger.of(
+                rootContext,
+              ).showSnackBar(SnackBar(content: Text('生成失败: $error')));
             } finally {
               if (rootContext.mounted) {
                 setState(() => isGenerating = false);
@@ -907,7 +893,9 @@ Future<void> _openMemoryForgeDialog(
                 }
                 await repository.addRecord(
                   tier: MemoryTier.context,
-                  collectionId: repository.defaultCollection(MemoryTier.context).id,
+                  collectionId: repository
+                      .defaultCollection(MemoryTier.context)
+                      .id,
                   sessionId: sid,
                   record: MemoryRecord(
                     id: DateTime.now().microsecondsSinceEpoch.toString(),
@@ -926,12 +914,13 @@ Future<void> _openMemoryForgeDialog(
               return;
             }
             Navigator.of(dialogContext).pop();
-            ScaffoldMessenger.of(rootContext).showSnackBar(
-              SnackBar(content: Text('已写入: ${tier.label}')),
-            );
+            ScaffoldMessenger.of(
+              rootContext,
+            ).showSnackBar(SnackBar(content: Text('已写入: ${tier.label}')));
           }
 
-          final canSave = !isGenerating &&
+          final canSave =
+              !isGenerating &&
               (draft != null || contentController.text.trim().isNotEmpty);
 
           return AlertDialog(
@@ -977,7 +966,8 @@ Future<void> _openMemoryForgeDialog(
                         enabled: !isGenerating,
                         decoration: const InputDecoration(
                           labelText: 'core_key（可留空让模型生成）',
-                          hintText: 'persona.name / user.preference.* / constraints.*',
+                          hintText:
+                              'persona.name / user.preference.* / constraints.*',
                         ),
                       ),
                     ],
@@ -1031,7 +1021,9 @@ Future<void> _openMemoryForgeDialog(
             ),
             actions: [
               TextButton(
-                onPressed: isGenerating ? null : () => Navigator.of(dialogContext).pop(),
+                onPressed: isGenerating
+                    ? null
+                    : () => Navigator.of(dialogContext).pop(),
                 child: const Text('取消'),
               ),
               FilledButton(
@@ -1068,8 +1060,7 @@ Future<void> _openCollectionDialog(
   MemoryRepository repository, {
   MemoryCollection? collection,
 }) async {
-  final controller =
-      TextEditingController(text: collection?.name ?? '');
+  final controller = TextEditingController(text: collection?.name ?? '');
   await showDialog<void>(
     context: context,
     builder: (context) {
@@ -1117,10 +1108,8 @@ Future<void> _openRecordDialog(
   MemoryRecord? record,
   String? sessionId,
 }) async {
-  final titleController =
-      TextEditingController(text: record?.title ?? '');
-  final contentController =
-      TextEditingController(text: record?.content ?? '');
+  final titleController = TextEditingController(text: record?.title ?? '');
+  final contentController = TextEditingController(text: record?.content ?? '');
   await showDialog<void>(
     context: context,
     builder: (context) {
@@ -1154,7 +1143,8 @@ Future<void> _openRecordDialog(
                 return;
               }
               final nextRecord = MemoryRecord(
-                id: record?.id ??
+                id:
+                    record?.id ??
                     DateTime.now().microsecondsSinceEpoch.toString(),
                 tier: tier,
                 content: content,

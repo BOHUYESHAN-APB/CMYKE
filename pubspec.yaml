@@ -34,7 +34,8 @@ dependencies:
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
-  google_fonts: ^6.3.0
+  tray_manager: ^0.5.2
+  flutter_acrylic: ^1.1.4
   path_provider: ^2.1.5
   path: ^1.9.0
   http: ^1.6.0
@@ -71,11 +72,36 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
+  fonts:
+    - family: MiSans
+      fonts:
+        - asset: assets/fonts/misans/MiSans-Light.ttf
+          weight: 300
+        - asset: assets/fonts/misans/MiSans-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/misans/MiSans-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/misans/MiSans-Semibold.ttf
+          weight: 600
+        - asset: assets/fonts/misans/MiSans-Bold.ttf
+          weight: 700
+    - family: HarmonyOSSansSC
+      fonts:
+        - asset: assets/fonts/harmonyos_sans/HarmonyOS_Sans_SC-Light.ttf
+          weight: 300
+        - asset: assets/fonts/harmonyos_sans/HarmonyOS_Sans_SC-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/harmonyos_sans/HarmonyOS_Sans_SC-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/harmonyos_sans/HarmonyOS_Sans_SC-Bold.ttf
+          weight: 700
+
   assets:
     - assets/live3d/
     - assets/live3d/vendor/
     - assets/live3d/vendor/utils/
     - assets/live3d/animations/
+    - assets/icons/
     - assets/live3d/animations/vroid_vrma_motion_pack/
     - assets/live3d/animations/my_mate_engine_converted/FACE_LAYER/
     - assets/live3d/animations/my_mate_engine_converted/PET_BIG_SCREEN/

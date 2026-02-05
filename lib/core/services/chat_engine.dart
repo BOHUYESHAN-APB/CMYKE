@@ -35,9 +35,9 @@ class ChatEngine extends ChangeNotifier {
     required ChatRepository chatRepository,
     required MemoryRepository memoryRepository,
     required SettingsRepository settingsRepository,
-  })  : _chatRepository = chatRepository,
-        _memoryRepository = memoryRepository,
-        _settingsRepository = settingsRepository {
+  }) : _chatRepository = chatRepository,
+       _memoryRepository = memoryRepository,
+       _settingsRepository = settingsRepository {
     _chatRepository.addListener(_refreshTokenUsage);
     _memoryRepository.addListener(_refreshTokenUsage);
     _settingsRepository.addListener(_refreshTokenUsage);
@@ -65,8 +65,7 @@ class ChatEngine extends ChangeNotifier {
       _updateTalkingState();
       notifyListeners();
     });
-    _audioPlayingSubscription =
-        _audioPlayer.playingStream.listen((playing) {
+    _audioPlayingSubscription = _audioPlayer.playingStream.listen((playing) {
       _isAudioPlaying = playing;
       _syncLipSyncState();
       _updateTalkingState();
@@ -273,72 +272,74 @@ class ChatEngine extends ChangeNotifier {
           systemPrompt: systemPrompt,
         )
         .listen(
-      (event) => unawaited(handleEvent(event)),
-      onError: (error) async {
-        _isStreaming = false;
-        _updateTalkingState();
-        notifyListeners();
-        await _audioPlayer.stop();
-        await _chatRepository.updateMessageContent(
-          assistantMessage.id,
-          '请求失败: $error',
-          persist: true,
+          (event) => unawaited(handleEvent(event)),
+          onError: (error) async {
+            _isStreaming = false;
+            _updateTalkingState();
+            notifyListeners();
+            await _audioPlayer.stop();
+            await _chatRepository.updateMessageContent(
+              assistantMessage.id,
+              '请求失败: $error',
+              persist: true,
+            );
+          },
+          onDone: () async {
+            _isStreaming = false;
+            _updateTalkingState();
+            notifyListeners();
+            final raw = buffer.toString();
+            final provisional =
+                _settingsRepository.settings.route == ModelRoute.realtime
+                ? raw
+                : _stripForbiddenAsides(raw);
+            if (provisional != raw) {
+              await _chatRepository.updateMessageContent(
+                assistantMessage.id,
+                provisional,
+                persist: false,
+              );
+            }
+            final content = await _postProcessAssistantText(
+              provider: provider,
+              content: provisional,
+              modelProvidedAudio: receivedAudio,
+            );
+            final parts = _splitAssistantResponse(content);
+            await _applyAssistantResponse(assistantMessage, parts);
+            if (receivedAudio && audioStartFuture != null) {
+              await audioStartFuture;
+              await _audioPlayer.finish();
+            }
+            if (_shouldSpeakResponse(modelProvidedAudio: receivedAudio)) {
+              await _playTts(parts.join('\n'));
+            }
+            _refreshTokenUsage();
+            unawaited(
+              _maybeTriggerMemoryAgent(
+                userText: trimmed,
+                assistantText: parts.join('\n'),
+                sourceMessageId: assistantMessage.id,
+              ),
+            );
+            unawaited(
+              _maybeTriggerMotionAgent(
+                userText: trimmed,
+                assistantText: parts.join('\n'),
+              ),
+            );
+          },
+          cancelOnError: true,
         );
-      },
-      onDone: () async {
-        _isStreaming = false;
-        _updateTalkingState();
-        notifyListeners();
-        final raw = buffer.toString();
-        final provisional = _settingsRepository.settings.route == ModelRoute.realtime
-            ? raw
-            : _stripForbiddenAsides(raw);
-        if (provisional != raw) {
-          await _chatRepository.updateMessageContent(
-            assistantMessage.id,
-            provisional,
-            persist: false,
-          );
-        }
-        final content = await _postProcessAssistantText(
-          provider: provider,
-          content: provisional,
-          modelProvidedAudio: receivedAudio,
-        );
-        final parts = _splitAssistantResponse(content);
-        await _applyAssistantResponse(assistantMessage, parts);
-        if (receivedAudio && audioStartFuture != null) {
-          await audioStartFuture;
-          await _audioPlayer.finish();
-        }
-        if (_shouldSpeakResponse(modelProvidedAudio: receivedAudio)) {
-          await _playTts(parts.join('\n'));
-        }
-        _refreshTokenUsage();
-        unawaited(
-          _maybeTriggerMemoryAgent(
-            userText: trimmed,
-            assistantText: parts.join('\n'),
-            sourceMessageId: assistantMessage.id,
-          ),
-        );
-        unawaited(
-          _maybeTriggerMotionAgent(
-            userText: trimmed,
-            assistantText: parts.join('\n'),
-          ),
-        );
-      },
-      cancelOnError: true,
-    );
   }
 
   Future<String> _describeLive3dMotions() async {
     final lines = <String>[];
     lines.add('Live3D 动作目录（VRMA）:');
     try {
-      final raw =
-          await rootBundle.loadString('assets/live3d/animations/catalog.json');
+      final raw = await rootBundle.loadString(
+        'assets/live3d/animations/catalog.json',
+      );
       final decoded = jsonDecode(raw);
       if (decoded is Map<String, dynamic>) {
         final motions = decoded['motions'];
@@ -371,7 +372,9 @@ class ChatEngine extends ChangeNotifier {
     lines.add('程序动作（Procedural overlays）:');
     lines.add('- procedural_stable_idle: 稳定待机叠加（呼吸/轻微摆动）');
     lines.add('- procedural_talk_overlay: 说话叠加（轻微躯干/手臂动作）');
-    lines.add('- procedural_nod / procedural_look_left / procedural_look_right: 仅在被明确触发时生效');
+    lines.add(
+      '- procedural_nod / procedural_look_left / procedural_look_right: 仅在被明确触发时生效',
+    );
     lines.add('');
     lines.add('调试指令:');
     lines.add('- /play <id> 触发动作（例如 /play gesture_greeting）');
@@ -441,8 +444,9 @@ class ChatEngine extends ChangeNotifier {
     if (session == null) {
       return;
     }
-    final standardProvider =
-        _settingsRepository.findProvider(_settingsRepository.settings.llmProviderId);
+    final standardProvider = _settingsRepository.findProvider(
+      _settingsRepository.settings.llmProviderId,
+    );
     if (standardProvider == null) {
       await _chatRepository.updateMessageContent(
         assistantMessage.id,
@@ -488,10 +492,7 @@ class ChatEngine extends ChangeNotifier {
     }
   }
 
-  String _formatUniversalAgentResult(
-    String goal,
-    UniversalAgentResult result,
-  ) {
+  String _formatUniversalAgentResult(String goal, UniversalAgentResult result) {
     final buffer = StringBuffer();
     buffer.writeln('【目标】');
     buffer.writeln(goal);
@@ -508,8 +509,9 @@ class ChatEngine extends ChangeNotifier {
       return '通用Agent';
     }
     const maxLen = 18;
-    final snippet =
-        trimmed.length <= maxLen ? trimmed : '${trimmed.substring(0, maxLen)}...';
+    final snippet = trimmed.length <= maxLen
+        ? trimmed
+        : '${trimmed.substring(0, maxLen)}...';
     return '通用Agent · $snippet';
   }
 
@@ -659,7 +661,9 @@ class ChatEngine extends ChangeNotifier {
       }
       if (!_supportsStreamingAudio() &&
           provider.protocol != ProviderProtocol.deviceBuiltin) {
-        debugPrint('[TTS] Streaming audio disabled on this platform. Using device TTS.');
+        debugPrint(
+          '[TTS] Streaming audio disabled on this platform. Using device TTS.',
+        );
       }
       await _speak(text);
       return;
@@ -701,10 +705,7 @@ class ChatEngine extends ChangeNotifier {
       _refreshTokenUsage();
       return;
     }
-    final currentTokens = _estimatePromptTokens(
-      messages,
-      session.id,
-    );
+    final currentTokens = _estimatePromptTokens(messages, session.id);
     if (currentTokens < (limit * _compressionTriggerRatio).round()) {
       _refreshTokenUsage();
       return;
@@ -737,8 +738,8 @@ class ChatEngine extends ChangeNotifier {
     try {
       final summarizer = _resolveSummarizerProvider(provider);
       final summarizerLimit = _resolveContextLimit(summarizer);
-      final summaryBudget =
-          (min(limit, summarizerLimit ?? limit) * 0.7).round();
+      final summaryBudget = (min(limit, summarizerLimit ?? limit) * 0.7)
+          .round();
       final trimmedCandidates = _trimMessagesToTokenBudget(
         candidates,
         summaryBudget,
@@ -763,10 +764,7 @@ class ChatEngine extends ChangeNotifier {
         sessionId: session.id,
         scope: 'brain.session',
       );
-      await _memoryRepository.replaceSessionSummary(
-        session.id,
-        summaryRecord,
-      );
+      await _memoryRepository.replaceSessionSummary(session.id, summaryRecord);
     } catch (_) {
       // Ignore compression errors and continue.
     } finally {
@@ -831,7 +829,8 @@ class ChatEngine extends ChangeNotifier {
         '输出使用简明中文要点列表，不要加入虚构内容。';
     final existing = previousSummary?.trim();
     if (existing != null && existing.isNotEmpty) {
-      systemPrompt = '$systemPrompt\n已有摘要如下，请在此基础上补充新增要点：\n'
+      systemPrompt =
+          '$systemPrompt\n已有摘要如下，请在此基础上补充新增要点：\n'
           '$existing';
     }
     return _llmClient.completeChat(
@@ -846,10 +845,12 @@ class ChatEngine extends ChangeNotifier {
       MemoryTier.context,
       sessionId: sessionId,
     );
-    final crossRecords =
-        _memoryRepository.recordsForTier(MemoryTier.crossSession).take(12);
-    final autoRecords =
-        _memoryRepository.recordsForTier(MemoryTier.autonomous).take(12);
+    final crossRecords = _memoryRepository
+        .recordsForTier(MemoryTier.crossSession)
+        .take(12);
+    final autoRecords = _memoryRepository
+        .recordsForTier(MemoryTier.autonomous)
+        .take(12);
     return TokenEstimator.estimateMessages(messages) +
         TokenEstimator.estimateRecords(contextRecords) +
         TokenEstimator.estimateRecords(crossRecords) +
@@ -976,7 +977,8 @@ class ChatEngine extends ChangeNotifier {
     }
     final providerId = settings.motionAgentProviderId ?? settings.llmProviderId;
     final provider = _settingsRepository.findProvider(providerId);
-    if (provider == null || provider.protocol == ProviderProtocol.deviceBuiltin) {
+    if (provider == null ||
+        provider.protocol == ProviderProtocol.deviceBuiltin) {
       return;
     }
     if (provider.kind != ProviderKind.llm) {
@@ -999,12 +1001,14 @@ class ChatEngine extends ChangeNotifier {
       return;
     }
 
-    final allowed = motions.where((m) {
-      final id = (m['id'] ?? '').toString().trim();
-      if (id.isEmpty) return false;
-      final tier = (m['agent'] ?? '').toString().trim().toLowerCase();
-      return tier == 'common' || tier == 'rare';
-    }).toList(growable: false);
+    final allowed = motions
+        .where((m) {
+          final id = (m['id'] ?? '').toString().trim();
+          if (id.isEmpty) return false;
+          final tier = (m['agent'] ?? '').toString().trim().toLowerCase();
+          return tier == 'common' || tier == 'rare';
+        })
+        .toList(growable: false);
     if (allowed.isEmpty) {
       return;
     }
@@ -1068,7 +1072,8 @@ class ChatEngine extends ChangeNotifier {
     }
     final providerId = settings.memoryAgentProviderId ?? settings.llmProviderId;
     final provider = _settingsRepository.findProvider(providerId);
-    if (provider == null || provider.protocol == ProviderProtocol.deviceBuiltin) {
+    if (provider == null ||
+        provider.protocol == ProviderProtocol.deviceBuiltin) {
       return;
     }
     if (provider.kind != ProviderKind.llm) {
@@ -1150,23 +1155,26 @@ class ChatEngine extends ChangeNotifier {
     final entries = session.messages
         .where((m) => m.role != ChatRole.system)
         .where((m) => m.content.trim().isNotEmpty)
-        .where((m) => !(m.role == ChatRole.user && m.content.trim().startsWith('/')))
+        .where(
+          (m) => !(m.role == ChatRole.user && m.content.trim().startsWith('/')),
+        )
         .toList(growable: false);
     if (entries.isEmpty) {
       return const [];
     }
-    final start = entries.length > maxMessages ? entries.length - maxMessages : 0;
+    final start = entries.length > maxMessages
+        ? entries.length - maxMessages
+        : 0;
     final slice = entries.sublist(start);
-    return slice.map((m) {
-      var content = m.content.trim();
-      if (content.length > 240) {
-        content = '${content.substring(0, 240)}…';
-      }
-      return {
-        'role': m.role.name,
-        'content': content,
-      };
-    }).toList(growable: false);
+    return slice
+        .map((m) {
+          var content = m.content.trim();
+          if (content.length > 240) {
+            content = '${content.substring(0, 240)}…';
+          }
+          return {'role': m.role.name, 'content': content};
+        })
+        .toList(growable: false);
   }
 
   Future<Map<String, dynamic>?> _loadVrmaCatalogForMotionAgent() async {
@@ -1175,8 +1183,9 @@ class ChatEngine extends ChangeNotifier {
       return cached;
     }
     try {
-      final raw =
-          await rootBundle.loadString('assets/live3d/animations/catalog.json');
+      final raw = await rootBundle.loadString(
+        'assets/live3d/animations/catalog.json',
+      );
       final decoded = jsonDecode(raw);
       if (decoded is Map<String, dynamic>) {
         return decoded;
@@ -1223,9 +1232,11 @@ class ChatEngine extends ChangeNotifier {
     if (original.trim().isEmpty) {
       return original;
     }
-    final isRealtime = _settingsRepository.settings.route == ModelRoute.realtime;
-    final normalized =
-        isRealtime ? original.replaceAll('[SPLIT]', '\n') : original;
+    final isRealtime =
+        _settingsRepository.settings.route == ModelRoute.realtime;
+    final normalized = isRealtime
+        ? original.replaceAll('[SPLIT]', '\n')
+        : original;
     if (modelProvidedAudio) {
       final base = isRealtime ? normalized : _stripForbiddenAsides(normalized);
       return _redactIdentityDisclosure(base).trimRight();
@@ -1250,7 +1261,9 @@ class ChatEngine extends ChangeNotifier {
           // Ignore and fall back to local stripping below.
         }
       }
-      return _redactIdentityDisclosure(_stripForbiddenAsides(softened)).trimRight();
+      return _redactIdentityDisclosure(
+        _stripForbiddenAsides(softened),
+      ).trimRight();
     }
     final softened = _stripForbiddenAsides(normalized);
     if (!_violatesAssistantOutputPolicy(softened)) {
@@ -1294,7 +1307,8 @@ class ChatEngine extends ChangeNotifier {
 4) 允许且必须原样保留这些系统标记：`[SPLIT]`、以及输入中已有的 `[IMAGE: ...]`。
 只输出改写后的正文，不要加任何前缀或标题。
 ''';
-    final prompt = '''
+    final prompt =
+        '''
 原始回复：
 <<<
 $original
@@ -1352,7 +1366,10 @@ $original
         if (token == null) {
           continue;
         }
-        final inner = token.substring(pat.open.length, token.length - pat.close.length);
+        final inner = token.substring(
+          pat.open.length,
+          token.length - pat.close.length,
+        );
         if (_looksLikeForbiddenAside(inner.trim())) {
           return true;
         }
@@ -1368,13 +1385,7 @@ $original
     if (content.isEmpty) {
       return false;
     }
-    const markers = [
-      '（',
-      '(',
-      '【',
-      '*',
-      '```',
-    ];
+    const markers = ['（', '(', '【', '*', '```'];
     for (final marker in markers) {
       if (content.contains(marker)) {
         return true;
@@ -1460,7 +1471,10 @@ $original
         r'\b(?:as\s+a)\s+(?:language\s+model|llm)\b',
         caseSensitive: false,
       ),
-      RegExp(r"\b(?:i\s*(?:am|'m))\s+(?:chatgpt|gpt(?:-?\d+)?)\b", caseSensitive: false),
+      RegExp(
+        r"\b(?:i\s*(?:am|'m))\s+(?:chatgpt|gpt(?:-?\d+)?)\b",
+        caseSensitive: false,
+      ),
     ];
     for (final pattern in patterns) {
       if (pattern.hasMatch(normalized)) {
@@ -1601,8 +1615,7 @@ $original
     if (trimmedLine.length < 2) {
       return false;
     }
-    final inner =
-        trimmedLine.substring(1, trimmedLine.length - 1).trim();
+    final inner = trimmedLine.substring(1, trimmedLine.length - 1).trim();
     return _looksLikeForbiddenAside(inner);
   }
 
@@ -1779,6 +1792,7 @@ $original
           '- 禁止输出 `[SPLIT]`，也不要尝试把回复拆分成多段消息。\n'
           '- 只输出连续的纯文本台词正文。';
     }
+
     final sessionId = _chatRepository.activeSessionId;
     final contextRecords = _memoryRepository.recordsForTier(
       MemoryTier.context,
@@ -1793,13 +1807,13 @@ $original
     final timeDiary = timeRange == null
         ? const <MemoryRecord>[]
         : diaryAll
-            .where(
-              (record) =>
-                  !record.createdAt.isBefore(timeRange.start) &&
-                  record.createdAt.isBefore(timeRange.end),
-            )
-            .take(24)
-            .toList(growable: false);
+              .where(
+                (record) =>
+                    !record.createdAt.isBefore(timeRange.start) &&
+                    record.createdAt.isBefore(timeRange.end),
+              )
+              .take(24)
+              .toList(growable: false);
     final timeDiaryIds = timeDiary.map((record) => record.id).toSet();
 
     final relevantAll = await _memoryRepository.searchRelevantScored(
@@ -1841,8 +1855,9 @@ $original
         (t) => t.startsWith('core_key:'),
         orElse: () => '',
       );
-      final key =
-          keyTag.isEmpty ? '' : keyTag.substring('core_key:'.length).trim();
+      final key = keyTag.isEmpty
+          ? ''
+          : keyTag.substring('core_key:'.length).trim();
       return key.isEmpty ? record.id : key;
     }
 

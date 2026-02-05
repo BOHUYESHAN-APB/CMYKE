@@ -1,7 +1,7 @@
-import 'dart:io' show Platform;
-
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+
+import '../../../ui/theme/cmyke_chrome.dart';
+import '../../../ui/widgets/frosted_surface.dart';
 
 class ChatHeader extends StatelessWidget {
   const ChatHeader({
@@ -31,17 +31,12 @@ class ChatHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final brandStyle = Platform.environment.containsKey('FLUTTER_TEST')
-        ? const TextStyle(
-            fontSize: 24,
-            fontWeight: FontWeight.w600,
-            color: Color(0xFF1F2228),
-          )
-        : GoogleFonts.notoSerifSc(
-            fontSize: 24,
-            fontWeight: FontWeight.w600,
-            color: const Color(0xFF1F2228),
-          );
+    final chrome = context.chrome;
+    final brandStyle = Theme.of(context).textTheme.headlineSmall?.copyWith(
+      fontWeight: FontWeight.w800,
+      letterSpacing: -0.5,
+      color: chrome.textPrimary,
+    );
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
       child: Row(
@@ -50,21 +45,19 @@ class ChatHeader extends StatelessWidget {
             IconButton(
               tooltip: '会话列表',
               icon: const Icon(Icons.menu),
-              onPressed: onOpenDrawer ?? () => Scaffold.of(context).openDrawer(),
+              onPressed:
+                  onOpenDrawer ?? () => Scaffold.of(context).openDrawer(),
             ),
           if (showMenuButton) const SizedBox(width: 4),
-          Text(
-            'CMYKE',
-            style: brandStyle,
-          ),
+          Text('CMYKE', style: brandStyle),
           const SizedBox(width: 16),
           Expanded(
             child: Text(
               sessionTitle,
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    color: const Color(0xFF4F5563),
-                  ),
+                fontWeight: FontWeight.w600,
+                color: chrome.textSecondary,
+              ),
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -105,10 +98,7 @@ class ChatHeader extends StatelessWidget {
                 value: _ExportAction.session,
                 child: Text('导出当前会话'),
               ),
-              PopupMenuItem(
-                value: _ExportAction.all,
-                child: Text('导出全部会话'),
-              ),
+              PopupMenuItem(value: _ExportAction.all, child: Text('导出全部会话')),
             ],
           ),
         ],
@@ -130,42 +120,38 @@ class _TokenStatus extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final chrome = context.chrome;
     final label = tokenLimit == null
         ? 'Tokens $estimatedTokens'
         : 'Tokens $estimatedTokens / $tokenLimit';
     final ratio = (tokenLimit == null || tokenLimit == 0)
         ? null
         : estimatedTokens / tokenLimit!;
-    final accent = _accentColor(ratio);
+    final accent = _accentColor(chrome, ratio);
     final textStyle = Theme.of(context).textTheme.labelMedium?.copyWith(
-          color: accent,
-          fontWeight: FontWeight.w600,
-        );
-    return Container(
+      color: accent,
+      fontWeight: FontWeight.w600,
+    );
+    return FrostedSurface(
+      borderRadius: BorderRadius.circular(999),
+      blurSigma: chrome.blurSigma * 0.7,
+      shadows: const [],
+      highlight: false,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF1F3F6),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: const Color(0xFFE0E3EA)),
-      ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(label, style: textStyle),
           if (isCompressing) ...[
             const SizedBox(width: 8),
-            const Icon(
-              Icons.autorenew,
-              size: 14,
-              color: Color(0xFF2C7A63),
-            ),
+            Icon(Icons.autorenew, size: 14, color: chrome.accent),
             const SizedBox(width: 4),
             Text(
               '压缩中',
               style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: const Color(0xFF2C7A63),
-                    fontWeight: FontWeight.w600,
-                  ),
+                color: chrome.accent,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ],
         ],
@@ -173,9 +159,9 @@ class _TokenStatus extends StatelessWidget {
     );
   }
 
-  Color _accentColor(double? ratio) {
+  Color _accentColor(CmykeChrome chrome, double? ratio) {
     if (ratio == null) {
-      return const Color(0xFF2C7A63);
+      return chrome.accent;
     }
     if (ratio >= 0.92) {
       return const Color(0xFFC24A3A);
@@ -183,7 +169,7 @@ class _TokenStatus extends StatelessWidget {
     if (ratio >= 0.7) {
       return const Color(0xFFB67A00);
     }
-    return const Color(0xFF2C7A63);
+    return chrome.accent;
   }
 }
 

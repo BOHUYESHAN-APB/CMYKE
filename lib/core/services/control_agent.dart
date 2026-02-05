@@ -9,11 +9,9 @@ import 'tool_router.dart';
 /// - Emits expression/stage events to the runtime bus.
 /// - Dispatches tool intents and research jobs via ToolRouter.
 class ControlAgent {
-  ControlAgent({
-    required RuntimeEventBus bus,
-    required ToolRouter toolRouter,
-  })  : _bus = bus,
-        _toolRouter = toolRouter;
+  ControlAgent({required RuntimeEventBus bus, required ToolRouter toolRouter})
+    : _bus = bus,
+      _toolRouter = toolRouter;
 
   final RuntimeEventBus _bus;
   final ToolRouter _toolRouter;

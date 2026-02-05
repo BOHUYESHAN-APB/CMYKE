@@ -49,10 +49,7 @@ class DiaryMemoryOp {
 }
 
 class MemoryAgentResult {
-  const MemoryAgentResult({
-    this.core = const [],
-    this.diary = const [],
-  });
+  const MemoryAgentResult({this.core = const [], this.diary = const []});
 
   final List<CoreMemoryOp> core;
   final List<DiaryMemoryOp> diary;
@@ -85,25 +82,33 @@ class MemoryAgent {
 
     final mode = (conversationMode ?? '').trim();
     final trimmedContext = contextMessages
-        .where((m) =>
-            (m['role'] ?? '').toString().trim().isNotEmpty &&
-            (m['content'] ?? '').toString().trim().isNotEmpty)
+        .where(
+          (m) =>
+              (m['role'] ?? '').toString().trim().isNotEmpty &&
+              (m['content'] ?? '').toString().trim().isNotEmpty,
+        )
         .take(14)
-        .map((m) => {
-              'role': (m['role'] ?? '').toString().trim(),
-              'content': (m['content'] ?? '').toString().trim(),
-            })
+        .map(
+          (m) => {
+            'role': (m['role'] ?? '').toString().trim(),
+            'content': (m['content'] ?? '').toString().trim(),
+          },
+        )
         .toList(growable: false);
 
     final corePairs = existingCore
-        .where((m) =>
-            (m['key'] ?? '').toString().trim().isNotEmpty &&
-            (m['value'] ?? '').toString().trim().isNotEmpty)
+        .where(
+          (m) =>
+              (m['key'] ?? '').toString().trim().isNotEmpty &&
+              (m['value'] ?? '').toString().trim().isNotEmpty,
+        )
         .take(40)
-        .map((m) => {
-              'key': (m['key'] ?? '').toString().trim(),
-              'value': (m['value'] ?? '').toString().trim(),
-            })
+        .map(
+          (m) => {
+            'key': (m['key'] ?? '').toString().trim(),
+            'value': (m['value'] ?? '').toString().trim(),
+          },
+        )
         .toList(growable: false);
 
     final payload = {
@@ -212,7 +217,9 @@ Rules:
       final value = (m['value'] ?? '').toString().trim();
       final title = (m['title'] ?? '').toString().trim();
       final reason = (m['reason'] ?? '').toString().trim();
-      final tags = _coerceStringList(m['tags']).take(12).toList(growable: false);
+      final tags = _coerceStringList(
+        m['tags'],
+      ).take(12).toList(growable: false);
       final confidence = _coerceConfidence(m['confidence']);
       out.add(
         CoreMemoryOp(
@@ -239,7 +246,9 @@ Rules:
       final action = (m['action'] ?? 'none').toString().trim().toLowerCase();
       final summary = (m['summary'] ?? '').toString().trim();
       final title = (m['title'] ?? '').toString().trim();
-      final tags = _coerceStringList(m['tags']).take(12).toList(growable: false);
+      final tags = _coerceStringList(
+        m['tags'],
+      ).take(12).toList(growable: false);
       final confidence = _coerceConfidence(m['confidence']);
       final occurredAtRaw = (m['occurred_at'] ?? '').toString().trim();
       DateTime occurredAt = now;
@@ -297,7 +306,8 @@ Rules:
     final end = trimmed.lastIndexOf('}');
     if (start < 0 || end <= start) return null;
     final candidate = trimmed.substring(start, end + 1).trim();
-    return candidate.startsWith('{') && candidate.endsWith('}') ? candidate : null;
+    return candidate.startsWith('{') && candidate.endsWith('}')
+        ? candidate
+        : null;
   }
 }
-

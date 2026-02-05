@@ -1,18 +1,6 @@
-enum StageMotion {
-  idle,
-  wave,
-  nod,
-  lookLeft,
-  lookRight,
-  lookAtUser,
-}
+enum StageMotion { idle, wave, nod, lookLeft, lookRight, lookAtUser }
 
-enum StageTarget {
-  cameraLeft,
-  cameraRight,
-  user,
-  none,
-}
+enum StageTarget { cameraLeft, cameraRight, user, none }
 
 class StageAction {
   const StageAction({

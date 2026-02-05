@@ -1,9 +1,4 @@
-enum MemoryTier {
-  context,
-  crossSession,
-  autonomous,
-  external,
-}
+enum MemoryTier { context, crossSession, autonomous, external }
 
 extension MemoryTierLabel on MemoryTier {
   String get label {

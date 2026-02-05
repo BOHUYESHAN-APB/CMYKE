@@ -9,10 +9,7 @@ import '../repositories/settings_repository.dart';
 import 'llm_client.dart';
 
 class UniversalAgentResult {
-  const UniversalAgentResult({
-    required this.plan,
-    required this.output,
-  });
+  const UniversalAgentResult({required this.plan, required this.output});
 
   final String plan;
   final String output;
@@ -23,9 +20,9 @@ class UniversalAgent {
     required SettingsRepository settingsRepository,
     required MemoryRepository memoryRepository,
     LlmClient? llmClient,
-  })  : _settingsRepository = settingsRepository,
-        _memoryRepository = memoryRepository,
-        _llmClient = llmClient ?? LlmClient();
+  }) : _settingsRepository = settingsRepository,
+       _memoryRepository = memoryRepository,
+       _llmClient = llmClient ?? LlmClient();
 
   final SettingsRepository _settingsRepository;
   final MemoryRepository _memoryRepository;
@@ -78,15 +75,13 @@ class UniversalAgent {
       MemoryTier.context,
       sessionId: sessionId,
     );
-    final relevant =
-        await _memoryRepository.searchRelevant(userMessage, limit: 12);
+    final relevant = await _memoryRepository.searchRelevant(
+      userMessage,
+      limit: 12,
+    );
     if (relevant.isEmpty) {
-      final cross = _memoryRepository.recordsForTier(
-        MemoryTier.crossSession,
-      );
-      final auto = _memoryRepository.recordsForTier(
-        MemoryTier.autonomous,
-      );
+      final cross = _memoryRepository.recordsForTier(MemoryTier.crossSession);
+      final auto = _memoryRepository.recordsForTier(MemoryTier.autonomous);
       if (contextRecords.isEmpty && cross.isEmpty && auto.isEmpty) {
         return base;
       }
@@ -183,8 +178,7 @@ class UniversalAgent {
     ResearchDepth depth,
     ResearchDeliverable deliverable,
   ) {
-    final depthHint =
-        depth == ResearchDepth.deep ? 'deep' : 'quick';
+    final depthHint = depth == ResearchDepth.deep ? 'deep' : 'quick';
     return 'You are a universal task planner. Produce a $depthHint execution '
         'plan with 4-8 steps. Each step should include purpose and required '
         'information. Output the plan in Chinese. Do not output the final '
@@ -195,8 +189,7 @@ class UniversalAgent {
     ResearchDepth depth,
     ResearchDeliverable deliverable,
   ) {
-    final depthHint =
-        depth == ResearchDepth.deep ? 'deep' : 'quick';
+    final depthHint = depth == ResearchDepth.deep ? 'deep' : 'quick';
     return 'You are a universal research agent. Produce a $depthHint result '
         'based on the goal and plan. Output in Chinese. Deliverable: '
         '${_deliverableLabel(deliverable)}. If external sources are missing, '

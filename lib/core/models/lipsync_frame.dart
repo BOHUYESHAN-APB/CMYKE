@@ -16,10 +16,10 @@ class LipSyncFrame {
   final int? timestampMs;
 
   Map<String, double> toMap() => {
-        'aa': aa,
-        'ee': ee,
-        'ih': ih,
-        'oh': oh,
-        'ou': ou,
-      };
+    'aa': aa,
+    'ee': ee,
+    'ih': ih,
+    'oh': oh,
+    'ou': ou,
+  };
 }

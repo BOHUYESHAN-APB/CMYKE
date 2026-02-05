@@ -70,10 +70,7 @@ class TokenEstimator {
   }
 
   static bool _isWhitespace(int rune) {
-    return rune == 0x20 ||
-        rune == 0x0A ||
-        rune == 0x0D ||
-        rune == 0x09;
+    return rune == 0x20 || rune == 0x0A || rune == 0x0D || rune == 0x09;
   }
 
   static bool _isAsciiWord(int rune) {

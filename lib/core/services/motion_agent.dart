@@ -17,7 +17,8 @@ class MotionAgentDecision {
   final double confidence;
   final String? reason;
 
-  bool get shouldPlay => action == 'play' && id != null && id!.trim().isNotEmpty;
+  bool get shouldPlay =>
+      action == 'play' && id != null && id!.trim().isNotEmpty;
 }
 
 /// Picks a single VRMA motion id from a provided catalog.
@@ -50,14 +51,18 @@ class MotionAgent {
     final summarized = _summarizeMotions(allowedMotions);
     final mode = (conversationMode ?? '').trim();
     final trimmedContext = contextMessages
-        .where((m) =>
-            (m['role'] ?? '').toString().trim().isNotEmpty &&
-            (m['content'] ?? '').toString().trim().isNotEmpty)
+        .where(
+          (m) =>
+              (m['role'] ?? '').toString().trim().isNotEmpty &&
+              (m['content'] ?? '').toString().trim().isNotEmpty,
+        )
         .take(10)
-        .map((m) => {
-              'role': (m['role'] ?? '').toString().trim(),
-              'content': (m['content'] ?? '').toString().trim(),
-            })
+        .map(
+          (m) => {
+            'role': (m['role'] ?? '').toString().trim(),
+            'content': (m['content'] ?? '').toString().trim(),
+          },
+        )
         .toList(growable: false);
     final payload = {
       if (mode.isNotEmpty) 'mode': mode,
@@ -125,7 +130,8 @@ class MotionAgent {
       }
       result.add({
         'id': id,
-        if (name.isNotEmpty) 'name': name.length > 80 ? name.substring(0, 80) : name,
+        if (name.isNotEmpty)
+          'name': name.length > 80 ? name.substring(0, 80) : name,
         if (type.isNotEmpty) 'type': type,
         if (agentTier.isNotEmpty) 'agent_tier': agentTier,
         if (tags.isNotEmpty) 'tags': tags.take(10).toList(),
@@ -190,6 +196,8 @@ class MotionAgent {
     final end = trimmed.lastIndexOf('}');
     if (start < 0 || end <= start) return null;
     final candidate = trimmed.substring(start, end + 1).trim();
-    return candidate.startsWith('{') && candidate.endsWith('}') ? candidate : null;
+    return candidate.startsWith('{') && candidate.endsWith('}')
+        ? candidate
+        : null;
   }
 }

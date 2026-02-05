@@ -24,31 +24,31 @@ class MemoryRecord {
   final String? scope;
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'tier': tier.key,
-        'content': content,
-        'created_at': createdAt.toIso8601String(),
-        'source_message_id': sourceMessageId,
-        'title': title,
-        'tags': tags,
-        'session_id': sessionId,
-        'scope': scope,
-      };
+    'id': id,
+    'tier': tier.key,
+    'content': content,
+    'created_at': createdAt.toIso8601String(),
+    'source_message_id': sourceMessageId,
+    'title': title,
+    'tags': tags,
+    'session_id': sessionId,
+    'scope': scope,
+  };
 
   factory MemoryRecord.fromJson(Map<String, dynamic> json) => MemoryRecord(
-        id: json['id'] as String,
-        tier: MemoryTier.values.firstWhere(
-          (tier) => tier.key == json['tier'],
-          orElse: () => MemoryTier.context,
-        ),
-        content: json['content'] as String,
-        createdAt: DateTime.parse(json['created_at'] as String),
-        sourceMessageId: json['source_message_id'] as String?,
-        title: json['title'] as String?,
-        tags: (json['tags'] as List<dynamic>? ?? []).cast<String>(),
-        sessionId: json['session_id'] as String?,
-        scope: json['scope'] as String?,
-      );
+    id: json['id'] as String,
+    tier: MemoryTier.values.firstWhere(
+      (tier) => tier.key == json['tier'],
+      orElse: () => MemoryTier.context,
+    ),
+    content: json['content'] as String,
+    createdAt: DateTime.parse(json['created_at'] as String),
+    sourceMessageId: json['source_message_id'] as String?,
+    title: json['title'] as String?,
+    tags: (json['tags'] as List<dynamic>? ?? []).cast<String>(),
+    sessionId: json['session_id'] as String?,
+    scope: json['scope'] as String?,
+  );
 
   MemoryRecord copyWith({
     String? id,

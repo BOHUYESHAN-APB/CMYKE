@@ -8,29 +8,28 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
 
-
 import 'package:cmyke/app.dart';
 
-const MethodChannel _pathProviderChannel =
-    MethodChannel('plugins.flutter.io/path_provider');
+const MethodChannel _pathProviderChannel = MethodChannel(
+  'plugins.flutter.io/path_provider',
+);
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUpAll(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(
-      _pathProviderChannel,
-      (MethodCall methodCall) async {
-        switch (methodCall.method) {
-          case 'getApplicationDocumentsDirectory':
-          case 'getTemporaryDirectory':
-            return '.';
-          default:
-            return '.';
-        }
-      },
-    );
+        .setMockMethodCallHandler(_pathProviderChannel, (
+          MethodCall methodCall,
+        ) async {
+          switch (methodCall.method) {
+            case 'getApplicationDocumentsDirectory':
+            case 'getTemporaryDirectory':
+              return '.';
+            default:
+              return '.';
+          }
+        });
   });
 
   testWidgets('CMYKE app loads the chat shell', (WidgetTester tester) async {

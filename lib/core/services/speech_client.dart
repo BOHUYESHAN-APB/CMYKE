@@ -32,9 +32,7 @@ class SpeechClient {
     final response = await request.send();
     if (response.statusCode != HttpStatus.ok) {
       final body = await response.stream.bytesToString();
-      throw HttpException(
-        'TTS request failed: ${response.statusCode} $body',
-      );
+      throw HttpException('TTS request failed: ${response.statusCode} $body');
     }
 
     await for (final chunk in response.stream) {
@@ -53,15 +51,11 @@ class SpeechClient {
     final request = http.MultipartRequest('POST', uri)
       ..headers.addAll(_headers(provider))
       ..fields['model'] = provider.model
-      ..files.add(
-        await http.MultipartFile.fromPath('file', audioFile.path),
-      );
+      ..files.add(await http.MultipartFile.fromPath('file', audioFile.path));
     final response = await request.send();
     final body = await response.stream.bytesToString();
     if (response.statusCode != HttpStatus.ok) {
-      throw HttpException(
-        'STT request failed: ${response.statusCode} $body',
-      );
+      throw HttpException('STT request failed: ${response.statusCode} $body');
     }
     final json = jsonDecode(body) as Map<String, dynamic>;
     return json['text'] as String? ?? '';

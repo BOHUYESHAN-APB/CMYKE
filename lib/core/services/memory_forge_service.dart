@@ -24,7 +24,8 @@ class MemoryForgeDraft {
 }
 
 class MemoryForgeService {
-  MemoryForgeService({LlmClient? llmClient}) : _llmClient = llmClient ?? LlmClient();
+  MemoryForgeService({LlmClient? llmClient})
+    : _llmClient = llmClient ?? LlmClient();
 
   final LlmClient _llmClient;
 
@@ -68,7 +69,8 @@ class MemoryForgeService {
 
   String _systemPromptForTier(MemoryTier tier) {
     final tierName = tier.label;
-    final rules = '''
+    final rules =
+        '''
 You are the CMYKE Memory Forge.
 
 Task:
@@ -166,7 +168,9 @@ Rules:
       if (content.isEmpty) {
         return null;
       }
-      final tags = _coerceStringList(map['tags']).take(12).toList(growable: false);
+      final tags = _coerceStringList(
+        map['tags'],
+      ).take(12).toList(growable: false);
 
       String? coreKey;
       DateTime? occurredAt;
@@ -223,7 +227,8 @@ Rules:
     final end = trimmed.lastIndexOf('}');
     if (start < 0 || end <= start) return null;
     final candidate = trimmed.substring(start, end + 1).trim();
-    return candidate.startsWith('{') && candidate.endsWith('}') ? candidate : null;
+    return candidate.startsWith('{') && candidate.endsWith('}')
+        ? candidate
+        : null;
   }
 }
-

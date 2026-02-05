@@ -27,7 +27,9 @@ class LlmClient {
           systemPrompt: systemPrompt,
         );
       case ProviderProtocol.deviceBuiltin:
-        throw UnsupportedError('Device builtin protocol is not supported for LLM.');
+        throw UnsupportedError(
+          'Device builtin protocol is not supported for LLM.',
+        );
     }
   }
 
@@ -50,7 +52,9 @@ class LlmClient {
           systemPrompt: systemPrompt,
         );
       case ProviderProtocol.deviceBuiltin:
-        throw UnsupportedError('Device builtin protocol is not supported for LLM.');
+        throw UnsupportedError(
+          'Device builtin protocol is not supported for LLM.',
+        );
     }
   }
 
@@ -101,14 +105,13 @@ class LlmClient {
     final response = await request.send();
     if (response.statusCode != HttpStatus.ok) {
       final body = await response.stream.bytesToString();
-      throw HttpException(
-        'LLM request failed: ${response.statusCode} $body',
-      );
+      throw HttpException('LLM request failed: ${response.statusCode} $body');
     }
 
-    await for (final line in response.stream
-        .transform(utf8.decoder)
-        .transform(const LineSplitter())) {
+    await for (final line
+        in response.stream
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())) {
       if (!line.startsWith('data:')) {
         continue;
       }
@@ -122,15 +125,16 @@ class LlmClient {
         continue;
       }
       final delta =
-          (choices.first as Map<String, dynamic>)['delta'] as Map<String, dynamic>?;
+          (choices.first as Map<String, dynamic>)['delta']
+              as Map<String, dynamic>?;
       final audio = delta?['audio'] as Map<String, dynamic>?;
       final content = delta?['content'] as String?;
       final transcript = audio?['transcript'] as String?;
       final textDelta = (content != null && content.isNotEmpty)
           ? content
           : (transcript != null && transcript.isNotEmpty)
-              ? transcript
-              : null;
+          ? transcript
+          : null;
       if (textDelta != null && textDelta.isNotEmpty) {
         yield LlmStreamEvent(textDelta: textDelta);
       }
@@ -169,9 +173,10 @@ class LlmClient {
       );
     }
 
-    await for (final line in response.stream
-        .transform(utf8.decoder)
-        .transform(const LineSplitter())) {
+    await for (final line
+        in response.stream
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())) {
       if (line.trim().isEmpty) {
         continue;
       }
@@ -216,8 +221,9 @@ class LlmClient {
     if (choices.isEmpty) {
       return '';
     }
-    final message = (choices.first as Map<String, dynamic>)['message']
-        as Map<String, dynamic>?;
+    final message =
+        (choices.first as Map<String, dynamic>)['message']
+            as Map<String, dynamic>?;
     return message?['content'] as String? ?? '';
   }
 
@@ -341,17 +347,11 @@ class LlmClient {
   }) {
     final list = <Map<String, String>>[];
     if (systemPrompt != null && systemPrompt.trim().isNotEmpty) {
-      list.add({
-        'role': 'system',
-        'content': systemPrompt,
-      });
+      list.add({'role': 'system', 'content': systemPrompt});
     }
     list.addAll(
       messages.map(
-        (message) => {
-          'role': message.role.name,
-          'content': message.content,
-        },
+        (message) => {'role': message.role.name, 'content': message.content},
       ),
     );
     final payload = <String, dynamic>{
@@ -377,7 +377,9 @@ class LlmClient {
     if (provider.seed != null) {
       payload['seed'] = provider.seed;
     }
-    final wantsAudio = provider.capabilities.contains(ProviderCapability.audioOut);
+    final wantsAudio = provider.capabilities.contains(
+      ProviderCapability.audioOut,
+    );
     if (provider.kind == ProviderKind.omni ||
         provider.kind == ProviderKind.realtime) {
       payload['modalities'] = wantsAudio ? ['text', 'audio'] : ['text'];
@@ -439,10 +441,7 @@ class LlmClient {
       final response = await http.post(
         uri,
         headers: headers,
-        body: jsonEncode({
-          'model': model,
-          'prompt': input,
-        }),
+        body: jsonEncode({'model': model, 'prompt': input}),
       );
       if (response.statusCode != HttpStatus.ok) {
         throw HttpException(
@@ -478,17 +477,11 @@ class LlmClient {
   }) {
     final list = <Map<String, String>>[];
     if (systemPrompt != null && systemPrompt.trim().isNotEmpty) {
-      list.add({
-        'role': 'system',
-        'content': systemPrompt,
-      });
+      list.add({'role': 'system', 'content': systemPrompt});
     }
     list.addAll(
       messages.map(
-        (message) => {
-          'role': message.role.name,
-          'content': message.content,
-        },
+        (message) => {'role': message.role.name, 'content': message.content},
       ),
     );
     final payload = <String, dynamic>{

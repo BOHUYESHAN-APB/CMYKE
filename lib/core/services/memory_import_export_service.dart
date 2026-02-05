@@ -9,10 +9,7 @@ import '../models/memory_tier.dart';
 import '../repositories/memory_repository.dart';
 
 class MemoryExportResult {
-  const MemoryExportResult({
-    required this.jsonPath,
-    this.markdownPath,
-  });
+  const MemoryExportResult({required this.jsonPath, this.markdownPath});
 
   final String jsonPath;
   final String? markdownPath;
@@ -50,8 +47,8 @@ class MemoryImportExportService {
     final selected = normalizedTiers == null
         ? collections
         : collections
-            .where((collection) => normalizedTiers.contains(collection.tier))
-            .toList(growable: false);
+              .where((collection) => normalizedTiers.contains(collection.tier))
+              .toList(growable: false);
 
     final exportedAt = DateTime.now();
     final payload = {
@@ -73,10 +70,7 @@ class MemoryImportExportService {
     if (includeMarkdown) {
       mdPath = await _writeTextFile(
         filename: '$baseName.md',
-        contents: _collectionsToMarkdown(
-          selected,
-          exportedAt: exportedAt,
-        ),
+        contents: _collectionsToMarkdown(selected, exportedAt: exportedAt),
       );
     }
     return MemoryExportResult(jsonPath: jsonPath, markdownPath: mdPath);
@@ -95,9 +89,10 @@ class MemoryImportExportService {
     if (decoded is List) {
       return decoded
           .whereType<Map>()
-          .map((entry) => MemoryCollection.fromJson(
-                Map<String, dynamic>.from(entry),
-              ))
+          .map(
+            (entry) =>
+                MemoryCollection.fromJson(Map<String, dynamic>.from(entry)),
+          )
           .toList();
     }
     if (decoded is! Map) {
@@ -110,9 +105,10 @@ class MemoryImportExportService {
     }
     return candidate
         .whereType<Map>()
-        .map((entry) => MemoryCollection.fromJson(
-              Map<String, dynamic>.from(entry),
-            ))
+        .map(
+          (entry) =>
+              MemoryCollection.fromJson(Map<String, dynamic>.from(entry)),
+        )
         .toList();
   }
 
@@ -167,7 +163,8 @@ class MemoryImportExportService {
         final existing = repository
             .collectionsByTier(MemoryTier.external)
             .firstWhere(
-              (c) => c.name.trim().toLowerCase() == normalizedName.toLowerCase(),
+              (c) =>
+                  c.name.trim().toLowerCase() == normalizedName.toLowerCase(),
               orElse: () => MemoryCollection(
                 id: '',
                 tier: MemoryTier.external,
@@ -226,8 +223,7 @@ class MemoryImportExportService {
           }
         }
 
-        final normalizedScope =
-            _normalizeScopeForTier(tier, record.scope);
+        final normalizedScope = _normalizeScopeForTier(tier, record.scope);
         final dedupeKey = _dedupeKey(
           collectionId: targetCollectionId,
           tier: tier,
@@ -235,8 +231,10 @@ class MemoryImportExportService {
           sessionId: record.sessionId,
         );
 
-        final contentSet =
-            existingContentIndex.putIfAbsent(dedupeKey, () => <String>{});
+        final contentSet = existingContentIndex.putIfAbsent(
+          dedupeKey,
+          () => <String>{},
+        );
 
         if (tier == MemoryTier.crossSession) {
           final coreKey = _extractCoreKey(record.tags);
@@ -245,7 +243,9 @@ class MemoryImportExportService {
             if (existing != null) {
               final importedTitle = record.title?.trim();
               await repository.updateRecord(
-                collectionId: repository.defaultCollection(MemoryTier.crossSession).id,
+                collectionId: repository
+                    .defaultCollection(MemoryTier.crossSession)
+                    .id,
                 record: existing.copyWith(
                   content: normalizedContent,
                   title: importedTitle == null || importedTitle.isEmpty
@@ -275,8 +275,9 @@ class MemoryImportExportService {
         final importedTags = _mergeImportTags(
           record.tags,
           markImportedTag: markImportedTag,
-          ensureCoreKey:
-              tier == MemoryTier.crossSession ? _extractCoreKey(record.tags) : null,
+          ensureCoreKey: tier == MemoryTier.crossSession
+              ? _extractCoreKey(record.tags)
+              : null,
         );
         final toInsert = MemoryRecord(
           id: '${DateTime.now().microsecondsSinceEpoch}_${importIdSeq++}',
@@ -311,7 +312,9 @@ class MemoryImportExportService {
     );
   }
 
-  Map<String, Set<String>> _buildExistingContentIndex(MemoryRepository repository) {
+  Map<String, Set<String>> _buildExistingContentIndex(
+    MemoryRepository repository,
+  ) {
     final index = <String, Set<String>>{};
     for (final collection in repository.collections) {
       for (final record in collection.records) {

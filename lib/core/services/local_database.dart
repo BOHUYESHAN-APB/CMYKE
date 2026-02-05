@@ -175,9 +175,7 @@ class LocalDatabase {
         notes TEXT
       )
     ''');
-    await db.execute(
-      'CREATE INDEX idx_providers_kind ON providers(kind)',
-    );
+    await db.execute('CREATE INDEX idx_providers_kind ON providers(kind)');
 
     await db.execute('''
       CREATE TABLE app_settings (
@@ -210,15 +208,25 @@ class LocalDatabase {
     ''');
   }
 
-  Future<void> _upgradeSchema(Database db, int oldVersion, int newVersion) async {
+  Future<void> _upgradeSchema(
+    Database db,
+    int oldVersion,
+    int newVersion,
+  ) async {
     if (oldVersion < 2) {
-      await db.execute('ALTER TABLE providers ADD COLUMN embedding_base_url TEXT');
+      await db.execute(
+        'ALTER TABLE providers ADD COLUMN embedding_base_url TEXT',
+      );
     }
     if (oldVersion < 3) {
-      await db.execute('ALTER TABLE providers ADD COLUMN embedding_api_key TEXT');
+      await db.execute(
+        'ALTER TABLE providers ADD COLUMN embedding_api_key TEXT',
+      );
     }
     if (oldVersion < 4) {
-      await db.execute('ALTER TABLE app_settings ADD COLUMN live3d_model_path TEXT');
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN live3d_model_path TEXT',
+      );
     }
     if (oldVersion < 5) {
       await db.execute('ALTER TABLE memory_records ADD COLUMN session_id TEXT');
@@ -231,9 +239,15 @@ class LocalDatabase {
     }
     if (oldVersion < 7) {
       await db.execute('ALTER TABLE app_settings ADD COLUMN persona_mode TEXT');
-      await db.execute('ALTER TABLE app_settings ADD COLUMN persona_level TEXT');
-      await db.execute('ALTER TABLE app_settings ADD COLUMN persona_style TEXT');
-      await db.execute('ALTER TABLE app_settings ADD COLUMN persona_prompt TEXT');
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN persona_level TEXT',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN persona_style TEXT',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN persona_prompt TEXT',
+      );
     }
     if (oldVersion < 8) {
       await db.execute(

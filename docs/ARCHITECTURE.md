@@ -31,6 +31,32 @@ realtime, multimodal agent runtime without breaking core UX.
   - `ChatExportService`: exports logs to `Documents/cmyke/exports/`.
   - `LlmClient`: chat + embedding calls (OpenAI-compatible + Ollama).
 
+## Deployment Modes (Client Tiers)
+
+We keep **frontend capabilities** so mobile can still work independently.
+
+1) **Mobile Lite (Flutter only)**
+   - Basic chat (LLM) + web search.
+   - **Voice input/output enabled** (device STT/TTS).
+   - **Deep Research available** when connected to a remote gateway.
+   - No local sandbox tools, no local MCP, no computer-use.
+
+2) **Desktop Full (Flutter + Rust Gateway)**
+   - Full tools, MCP, OpenCode, Deep Research workspace.
+   - Computer-use adapters (Windows UIA + OCR fallback).
+
+3) **Gateway-only (Rust daemon)**
+   - For users who want to run CMYKE in chat apps without client UI.
+   - Channels: Telegram → Feishu → Computer-Use (QQ/WeChat).
+
+## Remote Gateway Linking
+
+- Mobile Lite can connect to a remote **Desktop Full** or **Gateway-only** host.
+- Supports **LAN pairing** and **WAN pairing**:
+  - **LAN pairing**: auto-discovery + local token; lowest latency.
+  - **WAN pairing**: explicit URL + token; TLS required.
+- Deep Research jobs execute on the gateway; mobile receives status + artifacts.
+
 ## Agent Roles (Draft)
 
 - Standard LLM
@@ -98,6 +124,10 @@ agent to handle tool calls and advanced workflows.
   vector retrieval is disabled.
 - Voice input/output is currently handled locally via STT/TTS to support
   barge-in testing. Native realtime audio WS integration is planned next.
+- Windows voice-channel monitoring supports in-app input-device selection
+  (with system default fallback when not selected).
+- Deep Research has a desktop local execution path in Flutter for current use;
+  gateway/OpenCode delegated execution remains the target routing.
 - Provider protocols supported: OpenAI-compatible (OpenAI/SiliconFlow/DashScope/
   LM Studio) and Ollama native (`/api/chat`).
 

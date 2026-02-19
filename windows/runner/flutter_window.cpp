@@ -1,13 +1,142 @@
 #include "flutter_window.h"
 
 #include <optional>
+#include <string>
+#include <vector>
 
 #include <flutter/method_channel.h>
 #include <flutter/standard_method_codec.h>
 
+#include <mmdeviceapi.h>
+#include <functiondiscoverykeys_devpkey.h>
+#include <shellapi.h>
+#include <propidl.h>
+
 #include "flutter/generated_plugin_registrant.h"
 
 namespace {
+
+class ScopedComInit {
+ public:
+  ScopedComInit() : hr_(::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)) {}
+  ~ScopedComInit() {
+    if (hr_ == S_OK || hr_ == S_FALSE) {
+      ::CoUninitialize();
+    }
+  }
+  bool ok() const { return hr_ == S_OK || hr_ == S_FALSE || hr_ == RPC_E_CHANGED_MODE; }
+
+ private:
+  HRESULT hr_;
+};
+
+std::string WideToUtf8(const std::wstring& input) {
+  if (input.empty()) {
+    return std::string();
+  }
+  const int size_needed =
+      ::WideCharToMultiByte(CP_UTF8, 0, input.c_str(), -1, nullptr, 0, nullptr, nullptr);
+  if (size_needed <= 0) {
+    return std::string();
+  }
+  std::string output;
+  output.resize(static_cast<size_t>(size_needed - 1));
+  ::WideCharToMultiByte(CP_UTF8, 0, input.c_str(), -1, output.data(), size_needed, nullptr, nullptr);
+  return output;
+}
+
+struct AudioDeviceInfo {
+  std::wstring id;
+  std::wstring name;
+  bool is_default = false;
+};
+
+std::optional<std::wstring> GetDefaultCaptureDeviceId() {
+  ScopedComInit com;
+  if (!com.ok()) {
+    return std::nullopt;
+  }
+  IMMDeviceEnumerator* enumerator = nullptr;
+  HRESULT hr = ::CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr,
+                                  CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
+                                  reinterpret_cast<void**>(&enumerator));
+  if (FAILED(hr) || !enumerator) {
+    return std::nullopt;
+  }
+  IMMDevice* device = nullptr;
+  hr = enumerator->GetDefaultAudioEndpoint(eCapture, eConsole, &device);
+  enumerator->Release();
+  if (FAILED(hr) || !device) {
+    return std::nullopt;
+  }
+  LPWSTR id = nullptr;
+  std::optional<std::wstring> out;
+  if (SUCCEEDED(device->GetId(&id)) && id) {
+    out = std::wstring(id);
+    ::CoTaskMemFree(id);
+  }
+  device->Release();
+  return out;
+}
+
+std::vector<AudioDeviceInfo> ListCaptureDevices() {
+  std::vector<AudioDeviceInfo> devices;
+  ScopedComInit com;
+  if (!com.ok()) {
+    return devices;
+  }
+  IMMDeviceEnumerator* enumerator = nullptr;
+  HRESULT hr = ::CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr,
+                                  CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
+                                  reinterpret_cast<void**>(&enumerator));
+  if (FAILED(hr) || !enumerator) {
+    return devices;
+  }
+  std::optional<std::wstring> default_id = GetDefaultCaptureDeviceId();
+
+  IMMDeviceCollection* collection = nullptr;
+  hr = enumerator->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE, &collection);
+  enumerator->Release();
+  if (FAILED(hr) || !collection) {
+    return devices;
+  }
+  UINT count = 0;
+  collection->GetCount(&count);
+  for (UINT i = 0; i < count; ++i) {
+    IMMDevice* device = nullptr;
+    if (FAILED(collection->Item(i, &device)) || !device) {
+      continue;
+    }
+    LPWSTR id = nullptr;
+    std::wstring device_id;
+    if (SUCCEEDED(device->GetId(&id)) && id) {
+      device_id = id;
+      ::CoTaskMemFree(id);
+    }
+    IPropertyStore* store = nullptr;
+    std::wstring friendly_name;
+    if (SUCCEEDED(device->OpenPropertyStore(STGM_READ, &store)) && store) {
+      PROPVARIANT prop;
+      ::PropVariantInit(&prop);
+      if (SUCCEEDED(store->GetValue(PKEY_Device_FriendlyName, &prop))) {
+        if (prop.vt == VT_LPWSTR && prop.pwszVal) {
+          friendly_name = prop.pwszVal;
+        }
+      }
+      ::PropVariantClear(&prop);
+      store->Release();
+    }
+    device->Release();
+
+    AudioDeviceInfo info;
+    info.id = device_id;
+    info.name = friendly_name.empty() ? device_id : friendly_name;
+    info.is_default = default_id.has_value() && device_id == default_id.value();
+    devices.push_back(std::move(info));
+  }
+  collection->Release();
+  return devices;
+}
 
 void ApplyStyleChange(HWND hwnd) {
   ::SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
@@ -223,6 +352,58 @@ bool FlutterWindow::OnCreate() {
 
   // Keep the channel alive for the lifetime of the window.
   channel_ = std::move(channel);
+
+  auto audio_channel =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(), "cmyke/audio",
+          &flutter::StandardMethodCodec::GetInstance());
+  audio_channel->SetMethodCallHandler(
+      [](
+          const flutter::MethodCall<flutter::EncodableValue>& call,
+          std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+              result) {
+        const auto& method = call.method_name();
+        if (method == "listInputDevices") {
+          const auto devices = ListCaptureDevices();
+          flutter::EncodableList out;
+          out.reserve(devices.size());
+          for (const auto& device : devices) {
+            flutter::EncodableMap entry;
+            entry[flutter::EncodableValue("id")] =
+                flutter::EncodableValue(WideToUtf8(device.id));
+            entry[flutter::EncodableValue("name")] =
+                flutter::EncodableValue(WideToUtf8(device.name));
+            entry[flutter::EncodableValue("isDefault")] =
+                flutter::EncodableValue(device.is_default);
+            out.emplace_back(std::move(entry));
+          }
+          result->Success(flutter::EncodableValue(out));
+          return;
+        }
+        if (method == "getDefaultInputDevice") {
+          const auto devices = ListCaptureDevices();
+          for (const auto& device : devices) {
+            if (!device.is_default) continue;
+            flutter::EncodableMap entry;
+            entry[flutter::EncodableValue("id")] =
+                flutter::EncodableValue(WideToUtf8(device.id));
+            entry[flutter::EncodableValue("name")] =
+                flutter::EncodableValue(WideToUtf8(device.name));
+            result->Success(flutter::EncodableValue(entry));
+            return;
+          }
+          result->Success(flutter::EncodableValue());
+          return;
+        }
+        if (method == "openSoundSettings") {
+          ::ShellExecuteW(nullptr, L"open", L"ms-settings:sound", nullptr, nullptr,
+                          SW_SHOWNORMAL);
+          result->Success();
+          return;
+        }
+        result->NotImplemented();
+      });
+  audio_channel_ = std::move(audio_channel);
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {

@@ -3,10 +3,31 @@ import '../models/memory_record.dart';
 import '../models/memory_tier.dart';
 import '../models/provider_config.dart';
 import '../models/research_job.dart';
-import '../prompts/persona_lumi.dart';
 import '../repositories/memory_repository.dart';
 import '../repositories/settings_repository.dart';
 import 'llm_client.dart';
+
+const String _deepResearchSystemPrompt = '''
+你是 CMYKE 的“深度研究代理”，职责是交付可复核的研究产物，而不是闲聊。
+
+[身份与输出边界]
+- 当前模式是深度研究，不使用聊天伙伴人设语气。
+- 禁止输出 `[SPLIT]`。
+- 禁止输出“我是 AI/模型”等身份描述。
+- 输出必须结构化、可直接用于文档生成。
+
+[事实与来源]
+- 若问题涉及外部事实，优先使用输入中给出的“外部检索结果”。
+- 对无法核验的事实必须标注“待核验”，不要伪造来源。
+- 在结论后附“来源与核验状态”小节。
+
+[交付意识]
+- 根据 Deliverable 类型组织内容：
+  - structured report: 标题/摘要/正文/结论/来源
+  - slide deck: 按“第N页”给出标题+3~5要点+可视化建议
+  - comparison table: 给出可落地字段的对比表
+  - summary: 先结论后要点
+''';
 
 class UniversalAgentResult {
   const UniversalAgentResult({required this.plan, required this.output});
@@ -64,13 +85,7 @@ class UniversalAgent {
     String userMessage,
     String? sessionId,
   ) async {
-    final settings = _settingsRepository.settings;
-    final base = buildLumiPersona(
-      mode: settings.personaMode,
-      level: settings.personaLevel,
-      style: settings.personaStyle,
-      customPrompt: settings.personaPrompt,
-    );
+    const base = _deepResearchSystemPrompt;
     final contextRecords = _memoryRepository.recordsForTier(
       MemoryTier.context,
       sessionId: sessionId,
@@ -86,13 +101,13 @@ class UniversalAgent {
         return base;
       }
       final buffer = StringBuffer('$base\n');
-      _appendMemoryBlock(buffer, 'Session Memory', contextRecords);
-      _appendMemoryBlock(buffer, 'Cross-Session Memory', cross);
-      _appendMemoryBlock(buffer, 'Autonomous Memory', auto);
+      _appendMemoryBlock(buffer, '会话记忆', contextRecords);
+      _appendMemoryBlock(buffer, '跨会话记忆', cross);
+      _appendMemoryBlock(buffer, '自主记忆', auto);
       return buffer.toString();
     }
     final buffer = StringBuffer('$base\n');
-    _appendMemoryBlock(buffer, 'Session Memory', contextRecords);
+    _appendMemoryBlock(buffer, '会话记忆', contextRecords);
     final byTier = <MemoryTier, List<String>>{};
     for (final record in relevant) {
       byTier.putIfAbsent(record.tier, () => []).add(record.content);
@@ -108,9 +123,9 @@ class UniversalAgent {
       }
     }
 
-    appendTier(MemoryTier.crossSession, 'Cross-Session Memory');
-    appendTier(MemoryTier.autonomous, 'Autonomous Memory');
-    appendTier(MemoryTier.external, 'External Knowledge');
+    appendTier(MemoryTier.crossSession, '跨会话记忆');
+    appendTier(MemoryTier.autonomous, '自主记忆');
+    appendTier(MemoryTier.external, '外部知识');
     return buffer.toString();
   }
 
@@ -178,34 +193,45 @@ class UniversalAgent {
     ResearchDepth depth,
     ResearchDeliverable deliverable,
   ) {
-    final depthHint = depth == ResearchDepth.deep ? 'deep' : 'quick';
-    return 'You are a universal task planner. Produce a $depthHint execution '
-        'plan with 4-8 steps. Each step should include purpose and required '
-        'information. Output the plan in Chinese. Do not output the final '
-        'answer, only the plan. Deliverable: ${_deliverableLabel(deliverable)}.';
+    final depthHint = depth == ResearchDepth.deep ? '深度' : '快速';
+    return '''
+请输出“$depthHint研究计划”，要求：
+1) 仅输出计划，不输出最终结论；
+2) 计划 4-8 步，每步包含：目标、输入、方法、预期产出；
+3) 必须包含“检索与核验”步骤；
+4) 明确本次交付类型：${_deliverableLabel(deliverable)}；
+5) 全文中文，不使用 Markdown 代码块，不要输出 `[SPLIT]`。
+''';
   }
 
   String _writerInstruction(
     ResearchDepth depth,
     ResearchDeliverable deliverable,
   ) {
-    final depthHint = depth == ResearchDepth.deep ? 'deep' : 'quick';
-    return 'You are a universal research agent. Produce a $depthHint result '
-        'based on the goal and plan. Output in Chinese. Deliverable: '
-        '${_deliverableLabel(deliverable)}. If external sources are missing, '
-        'state the limitation and propose next steps.';
+    final depthHint = depth == ResearchDepth.deep ? '深度' : '快速';
+    return '''
+请基于 Goal 与 Plan 产出“$depthHint研究结果”。
+交付类型：${_deliverableLabel(deliverable)}。
+
+硬性要求：
+1) 不要输出 `[SPLIT]`；
+2) 不要使用闲聊语气或人设台词；
+3) 若缺失可验证外部来源，明确写“待核验”；
+4) 结尾必须包含“来源与核验状态”；
+5) 输出内容要可直接用于导出文档/PPT。
+''';
   }
 
   String _deliverableLabel(ResearchDeliverable deliverable) {
     switch (deliverable) {
       case ResearchDeliverable.summary:
-        return 'summary';
+        return '摘要';
       case ResearchDeliverable.report:
-        return 'structured report';
+        return '结构化研报';
       case ResearchDeliverable.table:
-        return 'comparison table';
+        return '对比表';
       case ResearchDeliverable.slides:
-        return 'slide outline';
+        return '演示文稿';
     }
   }
 }

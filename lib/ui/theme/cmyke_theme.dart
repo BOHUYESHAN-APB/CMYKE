@@ -1,7 +1,6 @@
-import 'dart:io' show Platform;
-
 import 'package:flutter/material.dart';
 
+import '../../core/models/app_settings.dart';
 import 'cmyke_chrome.dart';
 
 class CmykeTheme {
@@ -19,13 +18,23 @@ class CmykeTheme {
     'Arial',
   ];
 
-  static ThemeData light() => _build(Brightness.light);
-  static ThemeData dark() => _build(Brightness.dark);
+  static ThemeData light({
+    UiPalette palette = UiPalette.jade,
+    UiGlass glass = UiGlass.standard,
+  }) => _build(Brightness.light, palette, glass);
+  static ThemeData dark({
+    UiPalette palette = UiPalette.jade,
+    UiGlass glass = UiGlass.standard,
+  }) => _build(Brightness.dark, palette, glass);
 
-  static ThemeData _build(Brightness brightness) {
+  static ThemeData _build(
+    Brightness brightness,
+    UiPalette palette,
+    UiGlass glass,
+  ) {
     final chrome = brightness == Brightness.dark
-        ? CmykeChrome.dark()
-        : CmykeChrome.light();
+        ? CmykeChrome.dark(palette: palette, glass: glass)
+        : CmykeChrome.light(palette: palette, glass: glass);
 
     final baseTextTheme = ThemeData(brightness: brightness).textTheme;
 

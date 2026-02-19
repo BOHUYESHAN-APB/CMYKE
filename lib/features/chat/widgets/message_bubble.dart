@@ -92,6 +92,8 @@ class _BubbleBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isUser = message.role == ChatRole.user;
+    final sourceLabel = _sourceLabel(message);
+    final sourceColor = _sourceColor(context, message);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -101,6 +103,26 @@ class _BubbleBody extends StatelessWidget {
             context,
           ).textTheme.bodyMedium?.copyWith(color: textColor, height: 1.5),
         ),
+        if (sourceLabel != null) ...[
+          const SizedBox(height: 6),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: sourceColor.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                sourceLabel,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: sourceColor,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ],
         const SizedBox(height: 6),
         Row(
           mainAxisSize: MainAxisSize.min,
@@ -144,6 +166,54 @@ String _roleLabel(ChatRole role) {
       return 'Lumi';
     case ChatRole.system:
       return 'System';
+  }
+}
+
+String? _sourceLabel(ChatMessage message) {
+  final kind = message.sourceKind;
+  if (kind == null || kind == ChatSourceKind.user) {
+    return null;
+  }
+  switch (kind) {
+    case ChatSourceKind.mic:
+      return '麦克风输入';
+    case ChatSourceKind.voiceChannel:
+      return '语音频道';
+    case ChatSourceKind.barrage:
+      return '弹幕';
+    case ChatSourceKind.plugin:
+      return '插件';
+    case ChatSourceKind.system:
+      return '系统';
+    case ChatSourceKind.tool:
+      return '工具结果';
+    case ChatSourceKind.autonomy:
+      return '自主模式';
+    case ChatSourceKind.user:
+      return null;
+  }
+}
+
+Color _sourceColor(BuildContext context, ChatMessage message) {
+  final chrome = context.chrome;
+  switch (message.sourceKind) {
+    case ChatSourceKind.voiceChannel:
+      return Colors.tealAccent.shade400;
+    case ChatSourceKind.barrage:
+      return Colors.orangeAccent.shade200;
+    case ChatSourceKind.autonomy:
+      return chrome.accent;
+    case ChatSourceKind.tool:
+      return Colors.indigoAccent.shade100;
+    case ChatSourceKind.mic:
+      return Colors.lightBlueAccent.shade200;
+    case ChatSourceKind.plugin:
+      return Colors.pinkAccent.shade100;
+    case ChatSourceKind.system:
+      return chrome.textSecondary;
+    case ChatSourceKind.user:
+    case null:
+      return chrome.textSecondary;
   }
 }
 

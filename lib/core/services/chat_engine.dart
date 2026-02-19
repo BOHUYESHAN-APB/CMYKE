@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:collection';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -16,10 +17,12 @@ import '../models/memory_tier.dart';
 import '../models/memory_record.dart';
 import '../models/provider_config.dart';
 import '../models/research_job.dart';
+import '../models/tool_intent.dart';
 import '../prompts/persona_lumi.dart';
 import '../repositories/chat_repository.dart';
 import '../repositories/memory_repository.dart';
 import '../repositories/settings_repository.dart';
+import '../models/voice_transcript_event.dart';
 import 'audio_stream_player.dart';
 import 'llm_client.dart';
 import 'speech_client.dart';
@@ -109,6 +112,15 @@ class ChatEngine extends ChangeNotifier {
   bool _isStreaming = false;
   bool _isCompressing = false;
   String _partialTranscript = '';
+  bool _isVoiceChannelMonitoring = false;
+  String _voiceChannelPartialTranscript = '';
+  final List<VoiceTranscriptEvent> _voiceChannelHistory = [];
+  final Queue<VoiceTranscriptEvent> _voiceChannelPending = Queue();
+  bool _voiceChannelInjecting = false;
+  Timer? _voiceChannelRestartTimer;
+  bool _speechReady = false;
+  String _sttStatus = '';
+  String _sttLastError = '';
   int _estimatedTokens = 0;
   int? _tokenLimit;
 
@@ -116,21 +128,48 @@ class ChatEngine extends ChangeNotifier {
   static const double _compressionTriggerRatio = 0.92;
 
   bool get isListening => _isListening;
+  bool get isVoiceChannelMonitoring => _isVoiceChannelMonitoring;
   bool get isSpeaking => _isTtsSpeaking || _isAudioPlaying;
   bool get isStreaming => _isStreaming;
   bool get isCompressing => _isCompressing;
   String get partialTranscript => _partialTranscript;
+  String get voiceChannelPartialTranscript => _voiceChannelPartialTranscript;
+  List<VoiceTranscriptEvent> get voiceChannelHistory =>
+      List.unmodifiable(_voiceChannelHistory);
+  String get sttStatus => _sttStatus;
+  String get sttLastError => _sttLastError;
   int get estimatedTokens => _estimatedTokens;
   int? get tokenLimit => _tokenLimit;
 
-  Future<void> sendText(String text) async {
+  Future<void> sendText(
+    String text, {
+    ChatSourceKind sourceKind = ChatSourceKind.user,
+    String? sourceId,
+    ChatPriority priority = ChatPriority.user,
+  }) async {
     final trimmed = text.trim();
     if (trimmed.isEmpty) {
       return;
     }
+    final helpTopic = _parseHelpTopic(trimmed);
+    if (helpTopic != null) {
+      await _sendCommandHelp(
+        trimmed,
+        topic: helpTopic,
+        sourceKind: sourceKind,
+        sourceId: sourceId,
+        priority: priority,
+      );
+      return;
+    }
     if (trimmed == '/motions') {
       await interrupt();
-      await _chatRepository.sendUserMessage(trimmed);
+      await _chatRepository.sendUserMessage(
+        trimmed,
+        sourceKind: sourceKind,
+        sourceId: sourceId,
+        priority: priority,
+      );
       final info = await _describeLive3dMotions();
       await _chatRepository.addMessage(
         ChatMessage(
@@ -138,6 +177,8 @@ class ChatEngine extends ChangeNotifier {
           role: ChatRole.system,
           content: info,
           createdAt: DateTime.now(),
+          sourceKind: ChatSourceKind.system,
+          priority: ChatPriority.low,
         ),
         persist: true,
       );
@@ -146,13 +187,20 @@ class ChatEngine extends ChangeNotifier {
     if (trimmed == '/stop') {
       await interrupt();
       RuntimeHub.instance.live3dBridge.stopMotion();
-      await _chatRepository.sendUserMessage(trimmed);
+      await _chatRepository.sendUserMessage(
+        trimmed,
+        sourceKind: sourceKind,
+        sourceId: sourceId,
+        priority: priority,
+      );
       await _chatRepository.addMessage(
         ChatMessage(
           id: DateTime.now().microsecondsSinceEpoch.toString(),
           role: ChatRole.system,
           content: '已停止动作，回到 idle。',
           createdAt: DateTime.now(),
+          sourceKind: ChatSourceKind.system,
+          priority: ChatPriority.low,
         ),
         persist: true,
       );
@@ -165,13 +213,20 @@ class ChatEngine extends ChangeNotifier {
       }
       await interrupt();
       RuntimeHub.instance.live3dBridge.playMotion(motion);
-      await _chatRepository.sendUserMessage(trimmed);
+      await _chatRepository.sendUserMessage(
+        trimmed,
+        sourceKind: sourceKind,
+        sourceId: sourceId,
+        priority: priority,
+      );
       await _chatRepository.addMessage(
         ChatMessage(
           id: DateTime.now().microsecondsSinceEpoch.toString(),
           role: ChatRole.system,
           content: '已触发动作：$motion',
           createdAt: DateTime.now(),
+          sourceKind: ChatSourceKind.system,
+          priority: ChatPriority.low,
         ),
         persist: true,
       );
@@ -179,7 +234,12 @@ class ChatEngine extends ChangeNotifier {
     }
     if (trimmed == '/persona') {
       await interrupt();
-      await _chatRepository.sendUserMessage(trimmed);
+      await _chatRepository.sendUserMessage(
+        trimmed,
+        sourceKind: sourceKind,
+        sourceId: sourceId,
+        priority: priority,
+      );
       final settings = _settingsRepository.settings;
       final persona = buildLumiPersona(
         mode: settings.personaMode,
@@ -193,8 +253,31 @@ class ChatEngine extends ChangeNotifier {
           role: ChatRole.system,
           content: persona,
           createdAt: DateTime.now(),
+          sourceKind: ChatSourceKind.system,
+          priority: ChatPriority.low,
         ),
         persist: true,
+      );
+      return;
+    }
+    final toolCommand = _parseToolCommand(trimmed);
+    if (toolCommand != null) {
+      if (toolCommand.showHelp || toolCommand.query.trim().isEmpty) {
+        await _sendCommandHelp(
+          trimmed,
+          topic: 'tool',
+          sourceKind: sourceKind,
+          sourceId: sourceId,
+          priority: priority,
+        );
+        return;
+      }
+      await _runToolCommand(
+        trimmed,
+        toolCommand,
+        sourceKind: sourceKind,
+        sourceId: sourceId,
+        priority: priority,
       );
       return;
     }
@@ -203,8 +286,79 @@ class ChatEngine extends ChangeNotifier {
       await _runUniversalAgent(agentCommand);
       return;
     }
+    final tagCommand = _parseTagCommand(trimmed);
+    if (tagCommand != null) {
+      if (tagCommand.type == _TagCommandType.help) {
+        await _sendCommandHelp(
+          trimmed,
+          topic: tagCommand.topic ?? '',
+          sourceKind: sourceKind,
+          sourceId: sourceId,
+          priority: priority,
+        );
+        return;
+      }
+      if (tagCommand.type == _TagCommandType.tool) {
+        if (tagCommand.payload.trim().isEmpty) {
+          await _sendCommandHelp(
+            trimmed,
+            topic: 'tool',
+            sourceKind: sourceKind,
+            sourceId: sourceId,
+            priority: priority,
+          );
+          return;
+        }
+        await _runToolCommand(
+          trimmed,
+          _ToolCommand(
+            action: tagCommand.action ?? ToolAction.code,
+            query: tagCommand.payload,
+          ),
+          sourceKind: sourceKind,
+          sourceId: sourceId,
+          priority: priority,
+        );
+        return;
+      }
+      if (tagCommand.type == _TagCommandType.agent) {
+        if (tagCommand.payload.trim().isEmpty) {
+          await _sendCommandHelp(
+            trimmed,
+            topic: 'agent',
+            sourceKind: sourceKind,
+            sourceId: sourceId,
+            priority: priority,
+          );
+          return;
+        }
+        await _runUniversalAgent(
+          _AgentCommand(
+            goal: tagCommand.payload,
+            deliverable: tagCommand.deliverable ?? ResearchDeliverable.report,
+            depth: tagCommand.depth ?? ResearchDepth.deep,
+          ),
+        );
+        return;
+      }
+      if (tagCommand.type == _TagCommandType.info) {
+        await _sendCommandHelp(
+          trimmed,
+          topic: tagCommand.topic ?? '',
+          sourceKind: sourceKind,
+          sourceId: sourceId,
+          priority: priority,
+        );
+        return;
+      }
+    }
     await interrupt();
-    await _chatRepository.sendUserMessage(trimmed);
+    await _chatRepository.sendUserMessage(
+      trimmed,
+      sourceKind: sourceKind,
+      sourceId: sourceId,
+      priority: priority,
+    );
 
     final assistantMessage = ChatMessage(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
@@ -333,6 +487,10 @@ class ChatEngine extends ChangeNotifier {
         );
   }
 
+  Future<void> speakAssistant(String text) async {
+    await _playTts(text);
+  }
+
   Future<String> _describeLive3dMotions() async {
     final lines = <String>[];
     lines.add('Live3D 动作目录（VRMA）:');
@@ -419,6 +577,298 @@ class ChatEngine extends ChangeNotifier {
       );
     }
     return null;
+  }
+
+  String? _parseHelpTopic(String text) {
+    final trimmed = text.trim();
+    if (trimmed == '/help' || trimmed == '/commands' || trimmed == '/?') {
+      return '';
+    }
+    if (trimmed.startsWith('/help ')) {
+      return trimmed.substring(6).trim();
+    }
+    if (trimmed.startsWith('/commands ')) {
+      return trimmed.substring(10).trim();
+    }
+    if (trimmed == '/mcp') {
+      return 'mcp';
+    }
+    if (trimmed == '/skills') {
+      return 'skills';
+    }
+    if (trimmed == '/agents') {
+      return 'agents';
+    }
+    return null;
+  }
+
+  Future<void> _sendCommandHelp(
+    String rawText, {
+    required String topic,
+    required ChatSourceKind sourceKind,
+    required String? sourceId,
+    required ChatPriority priority,
+  }) async {
+    await interrupt();
+    await _chatRepository.sendUserMessage(
+      rawText,
+      sourceKind: sourceKind,
+      sourceId: sourceId,
+      priority: priority,
+    );
+    final info = _buildCommandHelp(topic: topic);
+    await _chatRepository.addMessage(
+      ChatMessage(
+        id: DateTime.now().microsecondsSinceEpoch.toString(),
+        role: ChatRole.system,
+        content: info,
+        createdAt: DateTime.now(),
+        sourceKind: ChatSourceKind.system,
+        priority: ChatPriority.low,
+      ),
+      persist: true,
+    );
+  }
+
+  _ToolCommand? _parseToolCommand(String text) {
+    final trimmed = text.trim();
+    if (!(trimmed == '/tool' || trimmed.startsWith('/tool '))) {
+      return null;
+    }
+    final rest = trimmed.substring(5).trim();
+    if (rest.isEmpty) {
+      return const _ToolCommand(
+        action: ToolAction.code,
+        query: '',
+        showHelp: true,
+      );
+    }
+    if (rest == 'help' || rest == '?' || rest == 'h') {
+      return const _ToolCommand(
+        action: ToolAction.code,
+        query: '',
+        showHelp: true,
+      );
+    }
+    final parts = rest.split(RegExp(r'\s+'));
+    if (parts.isEmpty) {
+      return null;
+    }
+    final action = _parseToolAction(parts.first);
+    if (action != null) {
+      final query = rest.substring(parts.first.length).trim();
+      return _ToolCommand(
+        action: action,
+        query: query,
+        showHelp: query.isEmpty,
+      );
+    }
+    return _ToolCommand(action: ToolAction.code, query: rest);
+  }
+
+  Future<void> _runToolCommand(
+    String rawText,
+    _ToolCommand command, {
+    required ChatSourceKind sourceKind,
+    required String? sourceId,
+    required ChatPriority priority,
+  }) async {
+    await interrupt();
+    await _chatRepository.sendUserMessage(
+      rawText,
+      sourceKind: sourceKind,
+      sourceId: sourceId,
+      priority: priority,
+    );
+    final sessionId = _chatRepository.activeSession?.id;
+    final intent = ToolIntent(
+      action: command.action,
+      query: command.query,
+      sessionId: sessionId,
+      routing: 'gateway',
+    );
+    final result = await RuntimeHub.instance.controlAgent.dispatchToolIntent(
+      intent,
+    );
+    await _chatRepository.addMessage(
+      ChatMessage(
+        id: DateTime.now().microsecondsSinceEpoch.toString(),
+        role: ChatRole.system,
+        content: result,
+        createdAt: DateTime.now(),
+        sourceKind: ChatSourceKind.tool,
+        priority: ChatPriority.low,
+      ),
+      persist: true,
+    );
+  }
+
+  ToolAction? _parseToolAction(String token) {
+    final normalized = token.trim().toLowerCase();
+    switch (normalized) {
+      case 'code':
+      case 'shell':
+      case 'run':
+      case 'cli':
+        return ToolAction.code;
+      case 'search':
+      case 'web':
+      case 'find':
+        return ToolAction.search;
+      case 'crawl':
+      case 'fetch':
+      case 'http':
+        return ToolAction.crawl;
+      case 'analyze':
+      case 'analysis':
+        return ToolAction.analyze;
+      case 'summarize':
+      case 'summary':
+      case 'sum':
+        return ToolAction.summarize;
+      case 'image':
+      case 'img':
+      case 'imagegen':
+      case 'imagine':
+        return ToolAction.imageGen;
+      case 'vision':
+      case 'imageanalyze':
+      case 'imganalyze':
+        return ToolAction.imageAnalyze;
+      default:
+        return null;
+    }
+  }
+
+  _TagCommand? _parseTagCommand(String text) {
+    final trimmed = text.trim();
+    if (!trimmed.startsWith('#')) {
+      return null;
+    }
+    final match = RegExp(r'^#([A-Za-z][\w-]*)(?:\s+(.+))?$')
+        .firstMatch(trimmed);
+    if (match == null) {
+      return null;
+    }
+    final tag = match.group(1)!.toLowerCase();
+    final payload = (match.group(2) ?? '').trim();
+    if (tag == 'help' || tag == '?') {
+      return _TagCommand.help(topic: payload);
+    }
+    if (tag == 'mcp' || tag == 'skills' || tag == 'agents') {
+      return _TagCommand.info(topic: tag);
+    }
+    if (tag == 'agent' || tag == 'research') {
+      return _TagCommand.agent(
+        payload: payload,
+        deliverable: ResearchDeliverable.report,
+        depth: ResearchDepth.deep,
+      );
+    }
+    if (tag == 'summary') {
+      return _TagCommand.tool(action: ToolAction.summarize, payload: payload);
+    }
+    if (tag == 'tool') {
+      return _TagCommand.tool(action: ToolAction.code, payload: payload);
+    }
+    final action = _parseToolAction(tag);
+    if (action != null) {
+      return _TagCommand.tool(action: action, payload: payload);
+    }
+    return null;
+  }
+
+  bool _isCommandMessage(String text) {
+    final trimmed = text.trim();
+    if (trimmed.startsWith('/')) {
+      return true;
+    }
+    return _parseTagCommand(trimmed) != null;
+  }
+
+  String _buildCommandHelp({String? topic}) {
+    final normalized = (topic ?? '').trim().toLowerCase();
+    final settings = _settingsRepository.settings;
+    final lines = <String>[];
+    void addGatewayStatus() {
+      final enabled = settings.toolGatewayEnabled ? '已启用' : '未启用';
+      final baseUrl = settings.toolGatewayBaseUrl.trim().isEmpty
+          ? '未配置'
+          : settings.toolGatewayBaseUrl.trim();
+      lines.add('工具网关状态: $enabled ($baseUrl)');
+      if (settings.toolGatewayPairingToken.trim().isEmpty) {
+        lines.add('工具网关 pairing token: 未配置');
+      } else {
+        lines.add('工具网关 pairing token: 已配置');
+      }
+    }
+
+    if (normalized == 'tool') {
+      lines.add('工具指令（/tool 与 #标签）');
+      lines.add('/tool <action> <query> 运行工具');
+      lines.add('/tool help 查看工具指令帮助');
+      lines.add('#tool <query> 默认走 code 执行');
+      lines.add('#search <query> 搜索');
+      lines.add('#crawl <url> 抓取网页');
+      lines.add('#analyze <text> 分析');
+      lines.add('#summarize <text> 摘要');
+      lines.add('#image <prompt> 生图（待接入）');
+      lines.add('#vision <prompt> 视觉分析（待接入）');
+      lines.add('支持的 action: code / search / crawl / analyze / summarize / image / vision');
+      addGatewayStatus();
+      return lines.join('\n');
+    }
+
+    if (normalized == 'agent' || normalized == 'research') {
+      lines.add('通用 Agent 指令');
+      lines.add('/agent <目标> 新建通用 Agent 会话');
+      lines.add('/research <目标> 深度研究（默认报告）');
+      lines.add('/summary <目标> 快速总结（浅层）');
+      lines.add('#agent <目标> 同 /agent');
+      lines.add('#research <目标> 同 /research');
+      return lines.join('\n');
+    }
+
+    if (normalized == 'mcp') {
+      lines.add('MCP 接入（规划中）');
+      lines.add('目标: 支持外部 MCP server 发现与调用');
+      lines.add('当前: 先通过 工具网关 + OpenCode 进行通用工具执行');
+      lines.add('后续: 在设置页提供 MCP 服务器配置与权限策略');
+      addGatewayStatus();
+      return lines.join('\n');
+    }
+
+    if (normalized == 'skills') {
+      lines.add('Skills（能力编排）');
+      lines.add('目标: 以 YAML/JSON 描述流程，组合多个工具调用');
+      lines.add('后续: 提供导入/启用/权限管理的 UI');
+      addGatewayStatus();
+      return lines.join('\n');
+    }
+
+    if (normalized == 'agents') {
+      lines.add('Agents（智能体）');
+      lines.add('目标: 支持外部平台 Agent 导入与调用');
+      lines.add('后续: 提供 Coze / Dify / OpenClaw 等接入模板');
+      addGatewayStatus();
+      return lines.join('\n');
+    }
+
+    lines.add('指令速查（/ 与 #）');
+    lines.add('注意: 指令与 # 标签仅在消息开头生效');
+    lines.add('/help 或 /commands 查看帮助');
+    lines.add('/tool <action> <query> 工具调用');
+    lines.add('/agent <目标> 通用 Agent');
+    lines.add('/research <目标> 深度研究');
+    lines.add('/summary <目标> 快速总结');
+    lines.add('/persona 查看当前人设');
+    lines.add('/motions 查看可用动作');
+    lines.add('/play <id> 触发动作');
+    lines.add('/stop 停止动作');
+    lines.add('#search / #crawl / #analyze / #summarize 作为快捷工具标签');
+    lines.add('#tool / #agent / #research / #help 快捷入口');
+    addGatewayStatus();
+    return lines.join('\n');
   }
 
   Future<void> _runUniversalAgent(_AgentCommand command) async {
@@ -533,6 +983,9 @@ class ChatEngine extends ChangeNotifier {
   }
 
   Future<void> toggleListening() async {
+    if (_isVoiceChannelMonitoring) {
+      await stopVoiceChannelMonitoring();
+    }
     if (_isListening) {
       await stopListening();
     } else {
@@ -541,6 +994,9 @@ class ChatEngine extends ChangeNotifier {
   }
 
   Future<void> startListening() async {
+    if (_isVoiceChannelMonitoring) {
+      await stopVoiceChannelMonitoring();
+    }
     await interrupt();
     if (!_isSystemSttEnabled()) {
       debugPrint('[STT] System STT disabled.');
@@ -551,10 +1007,12 @@ class ChatEngine extends ChangeNotifier {
         sttProvider.protocol != ProviderProtocol.deviceBuiltin) {
       debugPrint('[STT] Remote STT not wired yet. Falling back to system STT.');
     }
-    final available = await _speech.initialize();
+    final available = await _ensureSpeechReady();
     if (!available) {
       return;
     }
+
+    _sttLastError = '';
     _partialTranscript = '';
     _isListening = true;
     notifyListeners();
@@ -563,17 +1021,29 @@ class ChatEngine extends ChangeNotifier {
         _partialTranscript = result.recognizedWords;
         notifyListeners();
         if (result.finalResult) {
+          final finalText = result.recognizedWords.trim();
           _isListening = false;
-          notifyListeners();
-          _speech.stop();
-          sendText(_partialTranscript);
           _partialTranscript = '';
+          notifyListeners();
+          unawaited(_speech.stop());
+          if (finalText.isNotEmpty) {
+            unawaited(
+              sendText(
+                finalText,
+                sourceKind: ChatSourceKind.mic,
+                priority: ChatPriority.user,
+              ),
+            );
+          }
         }
       },
       listenOptions: SpeechListenOptions(
-        listenMode: ListenMode.confirmation,
+        listenMode: ListenMode.dictation,
         partialResults: true,
+        cancelOnError: false,
       ),
+      listenFor: const Duration(seconds: 35),
+      pauseFor: const Duration(milliseconds: 1200),
     );
   }
 
@@ -582,6 +1052,194 @@ class ChatEngine extends ChangeNotifier {
     _isListening = false;
     _partialTranscript = '';
     notifyListeners();
+  }
+
+  Future<void> toggleVoiceChannelMonitoring() async {
+    if (_isVoiceChannelMonitoring) {
+      await stopVoiceChannelMonitoring();
+    } else {
+      await startVoiceChannelMonitoring();
+    }
+  }
+
+  Future<void> startVoiceChannelMonitoring() async {
+    if (kIsWeb) {
+      return;
+    }
+    if (defaultTargetPlatform != TargetPlatform.windows) {
+      return;
+    }
+    if (!_settingsRepository.settings.voiceChannelEnabled) {
+      debugPrint('[VoiceCH] voiceChannelEnabled is off.');
+      return;
+    }
+    if (!_isSystemSttEnabled()) {
+      debugPrint('[VoiceCH] System STT disabled.');
+      return;
+    }
+
+    if (_isListening) {
+      await stopListening();
+    }
+
+    final available = await _ensureSpeechReady();
+    if (!available) {
+      return;
+    }
+
+    _voiceChannelRestartTimer?.cancel();
+    _voiceChannelRestartTimer = null;
+    _voiceChannelPartialTranscript = '';
+    _isVoiceChannelMonitoring = true;
+    notifyListeners();
+
+    await _startVoiceChannelListen();
+  }
+
+  Future<void> stopVoiceChannelMonitoring() async {
+    _voiceChannelRestartTimer?.cancel();
+    _voiceChannelRestartTimer = null;
+    _isVoiceChannelMonitoring = false;
+    _voiceChannelPartialTranscript = '';
+    _voiceChannelPending.clear();
+    notifyListeners();
+    if (_speech.isListening) {
+      await _speech.stop();
+    }
+  }
+
+  Future<void> _startVoiceChannelListen() async {
+    if (!_isVoiceChannelMonitoring) {
+      return;
+    }
+    try {
+      await _speech.listen(
+        onResult: (result) {
+          final text = result.recognizedWords.trim();
+          if (text != _voiceChannelPartialTranscript) {
+            _voiceChannelPartialTranscript = text;
+            notifyListeners();
+          }
+          if (!result.finalResult) {
+            return;
+          }
+          final finalText = result.recognizedWords.trim();
+          _voiceChannelPartialTranscript = '';
+          if (finalText.isNotEmpty) {
+            final event = VoiceTranscriptEvent(
+              id: DateTime.now().microsecondsSinceEpoch.toString(),
+              text: finalText,
+              createdAt: DateTime.now(),
+              sourceLabel: 'voice_channel',
+              isFinal: true,
+            );
+            _voiceChannelHistory.add(event);
+            if (_voiceChannelHistory.length > 50) {
+              _voiceChannelHistory.removeRange(
+                0,
+                _voiceChannelHistory.length - 50,
+              );
+            }
+            RuntimeHub.instance.bus.emitVoiceTranscript(event);
+            _voiceChannelPending.add(event);
+            unawaited(_maybeInjectVoiceChannelPending());
+          }
+          // Close this recognition session after we got a full utterance.
+          // We'll restart if monitoring is still enabled.
+          unawaited(_speech.stop());
+          notifyListeners();
+        },
+        listenOptions: SpeechListenOptions(
+          listenMode: ListenMode.dictation,
+          partialResults: true,
+          cancelOnError: false,
+        ),
+        listenFor: const Duration(minutes: 10),
+        pauseFor: const Duration(seconds: 2),
+      );
+    } catch (e) {
+      debugPrint('[VoiceCH] listen failed: $e');
+      _scheduleVoiceChannelRestart();
+    }
+  }
+
+  Future<void> _maybeInjectVoiceChannelPending() async {
+    if (_voiceChannelInjecting) {
+      return;
+    }
+    if (!_settingsRepository.settings.voiceChannelInjectEnabled) {
+      _voiceChannelPending.clear();
+      return;
+    }
+    _voiceChannelInjecting = true;
+    try {
+      while (_voiceChannelPending.isNotEmpty) {
+        if (!_isVoiceChannelMonitoring) {
+          _voiceChannelPending.clear();
+          break;
+        }
+        // Don't preempt user chats or TTS playback. Voice-channel should feel
+        // "background" and only inject when the assistant is idle.
+        if (_isStreaming || isSpeaking || _isCompressing || _isListening) {
+          await Future.delayed(const Duration(milliseconds: 400));
+          continue;
+        }
+        final next = _voiceChannelPending.removeFirst();
+        // Prefix keeps UI readable until we have proper message metadata.
+        await sendText(
+          next.text,
+          sourceKind: ChatSourceKind.voiceChannel,
+          priority: ChatPriority.voiceChannel,
+        );
+        // Small cooldown to avoid rapid-fire injections.
+        await Future.delayed(const Duration(milliseconds: 200));
+      }
+    } finally {
+      _voiceChannelInjecting = false;
+    }
+  }
+
+  void _scheduleVoiceChannelRestart() {
+    if (!_isVoiceChannelMonitoring) {
+      return;
+    }
+    _voiceChannelRestartTimer?.cancel();
+    _voiceChannelRestartTimer = Timer(const Duration(milliseconds: 350), () {
+      _voiceChannelRestartTimer = null;
+      if (!_isVoiceChannelMonitoring) {
+        return;
+      }
+      _startVoiceChannelListen();
+    });
+  }
+
+  Future<bool> _ensureSpeechReady() async {
+    if (_speechReady && _speech.isAvailable) {
+      return true;
+    }
+    _sttLastError = '';
+    _speechReady = await _speech.initialize(
+      onError: (error) {
+        debugPrint('[STT] error: ${error.errorMsg} (${error.permanent})');
+        _sttLastError = '${error.errorMsg}${error.permanent ? " (permanent)" : ""}';
+        notifyListeners();
+        if (_isVoiceChannelMonitoring) {
+          _scheduleVoiceChannelRestart();
+        }
+      },
+      onStatus: (status) {
+        if (_sttStatus != status) {
+          _sttStatus = status;
+          notifyListeners();
+        }
+        if (_isVoiceChannelMonitoring &&
+            (status == SpeechToText.doneStatus ||
+                status == SpeechToText.notListeningStatus)) {
+          _scheduleVoiceChannelRestart();
+        }
+      },
+    );
+    return _speechReady;
   }
 
   Future<void> _speak(String text) async {
@@ -1156,7 +1814,7 @@ class ChatEngine extends ChangeNotifier {
         .where((m) => m.role != ChatRole.system)
         .where((m) => m.content.trim().isNotEmpty)
         .where(
-          (m) => !(m.role == ChatRole.user && m.content.trim().startsWith('/')),
+          (m) => !(m.role == ChatRole.user && _isCommandMessage(m.content)),
         )
         .toList(growable: false);
     if (entries.isEmpty) {
@@ -1979,14 +2637,18 @@ $original
 
   @override
   void dispose() {
+    _voiceChannelRestartTimer?.cancel();
+    _voiceChannelRestartTimer = null;
     _streamSubscription?.cancel();
     _audioPlayingSubscription?.cancel();
     _lipSyncTimer?.cancel();
     _chatRepository.removeListener(_refreshTokenUsage);
     _memoryRepository.removeListener(_refreshTokenUsage);
     _settingsRepository.removeListener(_refreshTokenUsage);
-    _speech.stop();
-    _tts.stop();
+    // Best-effort teardown; don't block widget dispose.
+    unawaited(_speech.stop());
+    unawaited(_tts.stop());
+    unawaited(_audioPlayer.stop());
     unawaited(_audioPlayer.dispose());
     super.dispose();
   }
@@ -2002,6 +2664,60 @@ class _AgentCommand {
   final String goal;
   final ResearchDeliverable deliverable;
   final ResearchDepth depth;
+}
+
+class _ToolCommand {
+  const _ToolCommand({
+    required this.action,
+    required this.query,
+    this.showHelp = false,
+  });
+
+  final ToolAction action;
+  final String query;
+  final bool showHelp;
+}
+
+enum _TagCommandType { tool, agent, help, info }
+
+class _TagCommand {
+  const _TagCommand({
+    required this.type,
+    this.action,
+    this.payload = '',
+    this.deliverable,
+    this.depth,
+    this.topic,
+  });
+
+  const _TagCommand.tool({
+    required ToolAction action,
+    required String payload,
+  }) : this(type: _TagCommandType.tool, action: action, payload: payload);
+
+  const _TagCommand.agent({
+    required String payload,
+    required ResearchDeliverable deliverable,
+    required ResearchDepth depth,
+  }) : this(
+        type: _TagCommandType.agent,
+        payload: payload,
+        deliverable: deliverable,
+        depth: depth,
+      );
+
+  const _TagCommand.help({String topic = ''})
+    : this(type: _TagCommandType.help, topic: topic);
+
+  const _TagCommand.info({required String topic})
+    : this(type: _TagCommandType.info, topic: topic);
+
+  final _TagCommandType type;
+  final ToolAction? action;
+  final String payload;
+  final ResearchDeliverable? deliverable;
+  final ResearchDepth? depth;
+  final String? topic;
 }
 
 class _AsidePattern {

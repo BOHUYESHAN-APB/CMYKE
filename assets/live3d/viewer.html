@@ -49,6 +49,7 @@
     const __params = new URLSearchParams(window.location.search);
     const __transparent = __params.get('transparent') === '1';
     const __petStartup = __params.get('pet') === '1';
+    const __quality = (__params.get('quality') || 'balanced').toLowerCase();
     if (__transparent || __petStartup) {
       document.documentElement.style.background = 'transparent';
       document.body.style.background = 'transparent';
@@ -107,6 +108,20 @@
       const v = Number(zoom);
       if (!Number.isFinite(v)) return;
       window.__petZoom = Math.max(0.6, Math.min(2.2, v));
+    };
+    window.__renderQuality = __quality;
+    const __fpsRaw = Number(__params.get('fps') || '0');
+    window.__fpsCap = Number.isFinite(__fpsRaw) ? Math.max(0, Math.round(__fpsRaw)) : 0;
+    window.setFpsCap = (cap) => {
+      const n = Number(cap);
+      window.__fpsCap = Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0;
+    };
+    window.setRenderQuality = (quality) => {
+      const q = String(quality || '').toLowerCase();
+      window.__renderQuality = q || 'balanced';
+      if (typeof window.__applyRenderQuality === 'function') {
+        window.__applyRenderQuality(window.__renderQuality);
+      }
     };
     window.setCursorNdc = (x, y) => {
       const nx = Number(x);
@@ -255,7 +270,21 @@
 
       const canvas = document.getElementById('c');
       const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-      renderer.setPixelRatio(window.devicePixelRatio);
+      const QUALITY_PRESETS = {
+        low: { maxRatio: 1.0, pixelBudget: 900000, optimizeTextures: true },
+        balanced: { maxRatio: 1.25, pixelBudget: 1200000, optimizeTextures: true },
+        high: { maxRatio: 1.6, pixelBudget: 1800000, optimizeTextures: false },
+      };
+      let quality = QUALITY_PRESETS[window.__renderQuality] || QUALITY_PRESETS.balanced;
+      function applyRenderScale() {
+        const w = Math.max(1, canvas.clientWidth);
+        const h = Math.max(1, canvas.clientHeight);
+        const dpr = Math.min(window.devicePixelRatio || 1, quality.maxRatio);
+        const budgetRatio = Math.sqrt(quality.pixelBudget / Math.max(1, w * h));
+        const ratio = Math.max(0.5, Math.min(dpr, budgetRatio));
+        renderer.setPixelRatio(ratio);
+      }
+      applyRenderScale();
       if (__transparent || __petStartup) {
         renderer.setClearColor(0x000000, 0);
       }
@@ -309,6 +338,34 @@
       loader.crossOrigin = 'anonymous';
       loader.register((parser) => new VRMLoaderPlugin(parser));
       loader.register((parser) => new VRMAnimationLoaderPlugin(parser));
+
+      function optimizeTextures(root) {
+        if (!quality.optimizeTextures || !root) return;
+        root.traverse((obj) => {
+          const mats = obj?.material;
+          if (!mats) return;
+          const list = Array.isArray(mats) ? mats : [mats];
+          list.forEach((mat) => {
+            if (!mat || typeof mat !== 'object') return;
+            Object.values(mat).forEach((value) => {
+              if (value && value.isTexture) {
+                value.generateMipmaps = false;
+                value.minFilter = THREE.LinearFilter;
+                value.magFilter = THREE.LinearFilter;
+                value.anisotropy = 0;
+                value.needsUpdate = true;
+              }
+            });
+          });
+        });
+      }
+      window.__applyRenderQuality = (name) => {
+        quality = QUALITY_PRESETS[name] || QUALITY_PRESETS.balanced;
+        applyRenderScale();
+        if (currentVrm?.scene) {
+          optimizeTextures(currentVrm.scene);
+        }
+      };
 
       let currentVrm = null;
       let motionMode = null;
@@ -433,6 +490,7 @@
       const modelCenter = new THREE.Vector3(0, 1, 0);
       const tmpVec = new THREE.Vector3();
       const tmpVec2 = new THREE.Vector3();
+      const tmpHipPos = new THREE.Vector3();
       const tmpQuat = new THREE.Quaternion();
       const tmpQuat2 = new THREE.Quaternion();
       const tmpQuat3 = new THREE.Quaternion();
@@ -442,6 +500,8 @@
       let blinkController = null;
       let eyeSaccadeController = null;
       let emoteController = null;
+      let baseHipY = null;
+      let hipLockUntil = 0;
       const autoDrive = {
         nextBlink: 0,
         blinkDur: 0.12,
@@ -1248,6 +1308,7 @@
                 continue;
               }
               reAnchorRootPositionTrack(clip, currentVrm);
+              lockPositionTrackY(clip);
               action = vrmMixer.clipAction(clip);
               action.setLoop(THREE.LoopOnce, 1);
               action.clampWhenFinished = true;
@@ -1295,6 +1356,17 @@
               Number.isFinite(duration) && duration > 0.02
                 ? (duration + 0.05)
                 : 0.45;
+            if (baseHipY == null) {
+              const hipNode = currentVrm.humanoid?.getNormalizedBoneNode('hips');
+              if (hipNode) {
+                hipNode.getWorldPosition(tmpHipPos);
+                baseHipY = tmpHipPos.y;
+              }
+            }
+            hipLockUntil = Math.max(
+              hipLockUntil,
+              clock.getElapsedTime() + stopAfter + 0.2,
+            );
             vrmaMotionRestoreTimer = setTimeout(() => {
               if (activeVrmaMotionAction === action) {
                 stopActiveVrmaMotion();
@@ -1357,12 +1429,25 @@
           currentVrm.scene.position.set(0, 0, 0);
           currentVrm.scene.scale.set(1, 1, 1);
           scene.add(currentVrm.scene);
+          optimizeTextures(currentVrm.scene);
           frameVrm(currentVrm);
           ensureFacingCamera(currentVrm);
           updateLookAtAnchor();
           blinkController = createBlinkController();
           eyeSaccadeController = createIdleEyeSaccades();
           emoteController = createEmoteController(currentVrm);
+          // Lock hip height during the startup greeting to avoid vertical snapping.
+          try {
+            const hipNode = currentVrm.humanoid?.getNormalizedBoneNode('hips');
+            if (hipNode) {
+              hipNode.getWorldPosition(tmpHipPos);
+              baseHipY = tmpHipPos.y;
+              hipLockUntil = clock.getElapsedTime() + 2.0;
+            }
+          } catch (_) {
+            baseHipY = null;
+            hipLockUntil = 0;
+          }
 
           // Load idle VRM animation
           try {
@@ -1371,6 +1456,7 @@
             const clip = await clipFromVRMAnimation(currentVrm, anim);
             if (clip) {
               reAnchorRootPositionTrack(clip, currentVrm);
+              lockPositionTrackY(clip);
               idleAction = vrmMixer.clipAction(clip);
               if (window.__idleAnimationEnabled === true) {
                 idleAction.play();
@@ -1771,6 +1857,19 @@
               track.values[i + 1] -= animeDelta.y;
               track.values[i + 2] -= animeDelta.z;
             }
+          }
+        });
+      }
+
+      function lockPositionTrackY(clip) {
+        if (!clip) return;
+        clip.tracks.forEach((track) => {
+          if (!(track instanceof THREE.VectorKeyframeTrack)) return;
+          if (!track.name.endsWith('.position')) return;
+          if (!track.values || track.values.length < 2) return;
+          const firstY = track.values[1];
+          for (let i = 1; i < track.values.length; i += 3) {
+            track.values[i] = firstY;
           }
         });
       }
@@ -2498,6 +2597,7 @@
       function resize() {
         const w = canvas.clientWidth;
         const h = canvas.clientHeight;
+        applyRenderScale();
         renderer.setSize(w, h, false);
         camera.aspect = w / Math.max(h, 1);
         camera.updateProjectionMatrix();
@@ -2505,8 +2605,18 @@
       window.addEventListener('resize', resize);
       resize();
 
+      let lastFrameTs = 0;
       function animate() {
         requestAnimationFrame(animate);
+        const cap = window.__fpsCap || 0;
+        const nowTs = performance.now();
+        if (cap > 0) {
+          const minDelta = 1000 / cap;
+          if (nowTs - lastFrameTs < minDelta) {
+            return;
+          }
+        }
+        lastFrameTs = nowTs;
         let delta = clock.getDelta();
         if (!Number.isFinite(delta) || delta <= 0) {
           delta = 1 / 60;
@@ -2555,6 +2665,17 @@
               currentVrm.humanoid?.update?.();
             }
             currentVrm.springBoneManager?.update?.(delta);
+          }
+          if (baseHipY != null && clock.getElapsedTime() < hipLockUntil) {
+            const hipNode = currentVrm.humanoid?.getNormalizedBoneNode('hips');
+            if (hipNode) {
+              hipNode.getWorldPosition(tmpHipPos);
+              const dy = tmpHipPos.y - baseHipY;
+              if (Math.abs(dy) > 1e-4) {
+                currentVrm.scene.position.y -= dy;
+                currentVrm.scene.updateMatrixWorld(true);
+              }
+            }
           }
         }
         renderer.render(scene, camera);

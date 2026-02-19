@@ -17,6 +17,8 @@ class ToolIntent {
     this.context,
     this.urgency = IntentUrgency.normal,
     this.routing,
+    this.sessionId,
+    this.traceId,
   });
 
   final ToolAction action;
@@ -24,4 +26,6 @@ class ToolIntent {
   final String? context;
   final IntentUrgency urgency;
   final String? routing; // e.g. "standard" | "realtime"
+  final String? sessionId;
+  final String? traceId;
 }

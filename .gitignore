@@ -34,6 +34,7 @@ migrate_working_dir/
 /build/
 /local_models/
 /tools/_tmp_fonts/
+backend-rust/target/
 
 # Symbolication related
 app.*.symbols

@@ -1,11 +1,128 @@
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
+
 import '../models/tool_intent.dart';
 
+class ToolGatewayConfig {
+  const ToolGatewayConfig({
+    required this.enabled,
+    required this.baseUrl,
+    required this.pairingToken,
+  });
+
+  final bool enabled;
+  final String baseUrl;
+  final String pairingToken;
+
+  static const disabled = ToolGatewayConfig(
+    enabled: false,
+    baseUrl: '',
+    pairingToken: '',
+  );
+}
+
 class ToolRouter {
-  const ToolRouter();
+  ToolRouter({http.Client? client}) : _client = client ?? http.Client();
+
+  final http.Client _client;
+  ToolGatewayConfig _config = ToolGatewayConfig.disabled;
+
+  void updateGatewayConfig(ToolGatewayConfig config) {
+    _config = config;
+  }
+
+  Future<void> dispose() async {
+    _client.close();
+  }
 
   Future<String> dispatch(ToolIntent intent) async {
-    // TODO: implement MCP/skills/tool backends.
-    // Placeholder: echo intent action.
-    return 'Tool intent accepted: ${intent.action.name}';
+    if (!_config.enabled) {
+      return '工具网关未启用。';
+    }
+    if (_config.baseUrl.trim().isEmpty) {
+      return '工具网关地址未配置。';
+    }
+    if (_config.pairingToken.trim().isEmpty) {
+      return '工具网关 pairing token 未配置。';
+    }
+    switch (intent.action) {
+      case ToolAction.code:
+      case ToolAction.search:
+      case ToolAction.crawl:
+      case ToolAction.analyze:
+      case ToolAction.summarize:
+        return _dispatchViaOpenCode(intent);
+      case ToolAction.imageGen:
+      case ToolAction.imageAnalyze:
+        return '该工具类型尚未接入网关。';
+    }
+  }
+
+  Future<String> _dispatchViaOpenCode(ToolIntent intent) async {
+    final sessionId =
+        intent.sessionId?.trim().isNotEmpty == true ? intent.sessionId! : 'default';
+    final payload = <String, dynamic>{
+      'pairing_token': _config.pairingToken.trim(),
+      'session_id': sessionId,
+      'message': _buildMessage(intent),
+    };
+    if (intent.traceId != null && intent.traceId!.trim().isNotEmpty) {
+      payload['trace_id'] = intent.traceId!.trim();
+    }
+    final uri = _buildGatewayUri(_config.baseUrl, '/api/v1/opencode/run');
+    try {
+      final response = await _client.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
+      );
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        return '工具网关错误：HTTP ${response.statusCode}';
+      }
+      final data = jsonDecode(response.body);
+      if (data is! Map<String, dynamic>) {
+        return '工具网关响应异常。';
+      }
+      if (data['ok'] != true) {
+        final error = data['stderr']?.toString().trim();
+        return error == null || error.isEmpty ? '工具执行失败。' : '工具执行失败：$error';
+      }
+      final stdout = data['stdout']?.toString().trim() ?? '';
+      final stderr = data['stderr']?.toString().trim() ?? '';
+      if (stdout.isNotEmpty) {
+        return stdout;
+      }
+      if (stderr.isNotEmpty) {
+        return stderr;
+      }
+      return '工具执行完成。';
+    } catch (error) {
+      return '工具网关请求失败：$error';
+    }
+  }
+
+  Uri _buildGatewayUri(String baseUrl, String path) {
+    var normalized = baseUrl.trim();
+    if (!normalized.contains('://')) {
+      normalized = 'http://$normalized';
+    }
+    final uri = Uri.parse(normalized);
+    if (uri.path.isEmpty || uri.path == '/') {
+      return uri.replace(path: path);
+    }
+    return uri.replace(path: '${uri.path}$path');
+  }
+
+  String _buildMessage(ToolIntent intent) {
+    final primary = intent.query?.trim();
+    if (primary != null && primary.isNotEmpty) {
+      return primary;
+    }
+    final fallback = intent.context?.trim();
+    if (fallback != null && fallback.isNotEmpty) {
+      return fallback;
+    }
+    return 'Run tool action: ${intent.action.name}.';
   }
 }

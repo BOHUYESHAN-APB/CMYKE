@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 
 import '../../core/models/app_settings.dart';
 import '../../core/models/chat_message.dart';
@@ -11,10 +14,15 @@ import '../../core/repositories/memory_repository.dart';
 import '../../core/repositories/settings_repository.dart';
 import '../../core/services/chat_export_service.dart';
 import '../../core/services/chat_engine.dart';
+import '../../core/services/autonomy_service.dart';
+import '../../core/services/draft_service.dart';
+import '../../core/services/workspace_service.dart';
 import '../../ui/theme/cmyke_chrome.dart';
 import '../common/live3d_preview.dart';
 import '../memory/memory_tier_screen.dart';
 import '../settings/provider_config_screen.dart';
+import '../deep_research/deep_research_screen.dart';
+import '../autonomy/autonomy_screen.dart';
 import 'widgets/chat_composer.dart';
 import 'widgets/chat_header.dart';
 import 'widgets/message_bubble.dart';
@@ -26,12 +34,14 @@ class ChatScreen extends StatefulWidget {
     required this.chatRepository,
     required this.memoryRepository,
     required this.settingsRepository,
+    required this.workspaceService,
     this.embeddingConfigMissing = false,
   });
 
   final ChatRepository chatRepository;
   final MemoryRepository memoryRepository;
   final SettingsRepository settingsRepository;
+  final WorkspaceService workspaceService;
   final bool embeddingConfigMissing;
 
   @override
@@ -43,6 +53,14 @@ class _ChatScreenState extends State<ChatScreen> {
   final ScrollController _scrollController = ScrollController();
   final ChatExportService _exportService = ChatExportService();
   late final ChatEngine _chatEngine;
+  late final AutonomyService _autonomyService;
+  late final DraftService _draftService;
+  double _sidebarWidth = 280.0;
+  double _rightPanelWidth = 380.0;
+  bool _showRightPanel = true;
+  bool _layoutEditing = false;
+  LayoutPreset _layoutPreset = LayoutPreset.balanced;
+  Timer? _layoutPersistTimer;
 
   @override
   void initState() {
@@ -52,14 +70,96 @@ class _ChatScreenState extends State<ChatScreen> {
       memoryRepository: widget.memoryRepository,
       settingsRepository: widget.settingsRepository,
     );
+    _draftService = DraftService(workspaceService: widget.workspaceService);
+    _autonomyService = AutonomyService(
+      settingsRepository: widget.settingsRepository,
+      chatRepository: widget.chatRepository,
+      draftService: _draftService,
+      isBusy: () =>
+          _chatEngine.isStreaming ||
+          _chatEngine.isSpeaking ||
+          _chatEngine.isListening ||
+          _chatEngine.isCompressing,
+      onSpeak: (text) => _chatEngine.speakAssistant(text),
+    );
+    _autonomyService.start();
+    _composerController.addListener(_handleComposerChanged);
+    _syncLayoutFromSettings(widget.settingsRepository.settings, force: true);
+    widget.settingsRepository.addListener(_handleSettingsChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant ChatScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.settingsRepository != widget.settingsRepository) {
+      oldWidget.settingsRepository.removeListener(_handleSettingsChanged);
+      widget.settingsRepository.addListener(_handleSettingsChanged);
+      _syncLayoutFromSettings(widget.settingsRepository.settings, force: true);
+    }
   }
 
   @override
   void dispose() {
+    widget.settingsRepository.removeListener(_handleSettingsChanged);
+    _composerController.removeListener(_handleComposerChanged);
     _composerController.dispose();
     _scrollController.dispose();
+    _layoutPersistTimer?.cancel();
+    _autonomyService.dispose();
     _chatEngine.dispose();
     super.dispose();
+  }
+
+  void _handleComposerChanged() {
+    if (_composerController.text.trim().isEmpty) {
+      return;
+    }
+    _autonomyService.noteUserActivity();
+  }
+
+  void _handleSettingsChanged() {
+    if (!mounted) return;
+    _syncLayoutFromSettings(widget.settingsRepository.settings);
+  }
+
+  void _syncLayoutFromSettings(AppSettings settings, {bool force = false}) {
+    final presetChanged = _layoutPreset != settings.layoutPreset;
+    final sidebarChanged = _sidebarWidth != settings.layoutSidebarWidth;
+    final rightChanged = _rightPanelWidth != settings.layoutRightPanelWidth;
+    final showChanged = _showRightPanel != settings.layoutShowRightPanel;
+    if (!force &&
+        !presetChanged &&
+        !sidebarChanged &&
+        !rightChanged &&
+        !showChanged) {
+      return;
+    }
+    setState(() {
+      _layoutPreset = settings.layoutPreset;
+      _sidebarWidth = settings.layoutSidebarWidth;
+      _rightPanelWidth = settings.layoutRightPanelWidth;
+      _showRightPanel = settings.layoutShowRightPanel;
+    });
+  }
+
+  void _scheduleLayoutPersist() {
+    _layoutPersistTimer?.cancel();
+    _layoutPersistTimer = Timer(const Duration(milliseconds: 240), () {
+      if (!mounted) return;
+      final settings = widget.settingsRepository.settings;
+      if (settings.layoutSidebarWidth == _sidebarWidth &&
+          settings.layoutRightPanelWidth == _rightPanelWidth &&
+          settings.layoutShowRightPanel == _showRightPanel) {
+        return;
+      }
+      widget.settingsRepository.updateSettings(
+        settings.copyWith(
+          layoutSidebarWidth: _sidebarWidth,
+          layoutRightPanelWidth: _rightPanelWidth,
+          layoutShowRightPanel: _showRightPanel,
+        ),
+      );
+    });
   }
 
   Future<void> _handleSend() async {
@@ -68,6 +168,7 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     _composerController.clear();
+    _autonomyService.noteUserActivity();
     await _chatEngine.sendText(text);
     _scrollToBottom();
   }
@@ -100,6 +201,17 @@ class _ChatScreenState extends State<ChatScreen> {
         curve: Curves.easeOut,
       );
     });
+  }
+
+  void _resetLayout() {
+    final defaults = _layoutDefaultsForPreset(_layoutPreset);
+    setState(() {
+      _sidebarWidth = defaults.sidebar;
+      _rightPanelWidth = defaults.rightPanel;
+      _showRightPanel = defaults.showRightPanel;
+      _layoutEditing = false;
+    });
+    _scheduleLayoutPersist();
   }
 
   Future<void> _exportActiveSession() async {
@@ -339,6 +451,29 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  void _openDeepResearch() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => DeepResearchScreen(
+          settingsRepository: widget.settingsRepository,
+          memoryRepository: widget.memoryRepository,
+        ),
+      ),
+    );
+  }
+
+  void _openAutonomy() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => AutonomyScreen(
+          settingsRepository: widget.settingsRepository,
+          autonomyService: _autonomyService,
+          workspaceService: widget.workspaceService,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -352,9 +487,29 @@ class _ChatScreenState extends State<ChatScreen> {
         return LayoutBuilder(
           builder: (context, constraints) {
             final isWide = constraints.maxWidth >= 1000;
-            final rightPanelWidth = constraints.maxWidth >= 1200
-                ? 420.0
-                : 340.0;
+            final minSidebar = 240.0;
+            final maxSidebar = (constraints.maxWidth * 0.34).clamp(
+              240.0,
+              360.0,
+            );
+            final preset = widget.settingsRepository.settings.layoutPreset;
+            final minRight = 300.0;
+            final rightScale = preset == LayoutPreset.focusPresentation
+                ? 0.48
+                : 0.38;
+            final maxRight = (constraints.maxWidth * rightScale).clamp(
+              320.0,
+              620.0,
+            );
+            final sidebarWidth = _sidebarWidth.clamp(minSidebar, maxSidebar);
+            final rightPanelWidth = _rightPanelWidth.clamp(minRight, maxRight);
+            final showRightPanel =
+                isWide &&
+                (preset == LayoutPreset.focusChat
+                    ? false
+                    : preset == LayoutPreset.focusPresentation
+                    ? true
+                    : _showRightPanel);
             return Scaffold(
               drawer: isWide
                   ? null
@@ -374,6 +529,11 @@ class _ChatScreenState extends State<ChatScreen> {
               body: Builder(
                 builder: (context) {
                   final chrome = context.chrome;
+                  final settings = widget.settingsRepository.settings;
+                  final showVoiceChannel =
+                      !kIsWeb &&
+                      defaultTargetPlatform == TargetPlatform.windows &&
+                      settings.voiceChannelEnabled;
                   final accentGlow = chrome.accent.withValues(
                     alpha: Theme.of(context).brightness == Brightness.dark
                         ? 0.12
@@ -405,12 +565,28 @@ class _ChatScreenState extends State<ChatScreen> {
                           ),
                         ),
                       ),
+                      Positioned(
+                        top: -160,
+                        right: -120,
+                        child: _GlowOrb(
+                          size: 280,
+                          color: chrome.accent.withValues(alpha: 0.16),
+                        ),
+                      ),
+                      Positioned(
+                        bottom: -180,
+                        left: -140,
+                        child: _GlowOrb(
+                          size: 320,
+                          color: chrome.accent.withValues(alpha: 0.12),
+                        ),
+                      ),
                       SafeArea(
                         child: Row(
                           children: [
                             if (isWide)
                               SizedBox(
-                                width: 280,
+                                width: sidebarWidth,
                                 child: SessionSidebar(
                                   chatRepository: widget.chatRepository,
                                   memoryRepository: widget.memoryRepository,
@@ -422,6 +598,16 @@ class _ChatScreenState extends State<ChatScreen> {
                                       _createSessionForRoute(),
                                 ),
                               ),
+                            if (isWide && _layoutEditing)
+                              _ResizeHandle(
+                                onDrag: (delta) {
+                                  setState(() {
+                                    _sidebarWidth = (_sidebarWidth + delta)
+                                        .clamp(minSidebar, maxSidebar);
+                                  });
+                                  _scheduleLayoutPersist();
+                                },
+                              ),
                             Expanded(
                               child: Column(
                                 children: [
@@ -432,11 +618,36 @@ class _ChatScreenState extends State<ChatScreen> {
                                     onExportAll: () => _exportAllSessions(),
                                     onCreateSession: () =>
                                         _createSessionForRoute(),
+                                    onOpenDeepResearch: _openDeepResearch,
+                                    onOpenAutonomy: _openAutonomy,
                                     showMenuButton: !isWide,
                                     estimatedTokens:
                                         _chatEngine.estimatedTokens,
                                     tokenLimit: _chatEngine.tokenLimit,
                                     isCompressing: _chatEngine.isCompressing,
+                                    onToggleLayout: isWide
+                                        ? () {
+                                            setState(() {
+                                              _layoutEditing = !_layoutEditing;
+                                            });
+                                          }
+                                        : null,
+                                    onResetLayout: isWide ? _resetLayout : null,
+                                    onToggleRightPanel:
+                                        (isWide &&
+                                            preset != LayoutPreset.focusChat &&
+                                            preset !=
+                                                LayoutPreset.focusPresentation)
+                                        ? () {
+                                            setState(() {
+                                              _showRightPanel =
+                                                  !_showRightPanel;
+                                            });
+                                            _scheduleLayoutPersist();
+                                          }
+                                        : null,
+                                    layoutEditing: _layoutEditing,
+                                    rightPanelVisible: showRightPanel,
                                   ),
                                   if (widget.embeddingConfigMissing)
                                     Padding(
@@ -469,6 +680,113 @@ class _ChatScreenState extends State<ChatScreen> {
                                         ),
                                       ),
                                     ),
+                                  if (_chatEngine.sttLastError.isNotEmpty)
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 24,
+                                        vertical: 2,
+                                      ),
+                                      child: Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: Text(
+                                          'STT 错误: ${_chatEngine.sttLastError}',
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .labelMedium
+                                              ?.copyWith(
+                                                color: Theme.of(
+                                                  context,
+                                                ).colorScheme.error,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                        ),
+                                      ),
+                                    ),
+                                  if (showVoiceChannel &&
+                                      _chatEngine
+                                          .voiceChannelPartialTranscript
+                                          .isNotEmpty)
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 24,
+                                        vertical: 2,
+                                      ),
+                                      child: Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: Text(
+                                          '🎧 ${_chatEngine.voiceChannelPartialTranscript}',
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .labelLarge
+                                              ?.copyWith(
+                                                color: chrome.textSecondary,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                        ),
+                                      ),
+                                    ),
+                                  if (showVoiceChannel &&
+                                      _chatEngine
+                                          .voiceChannelHistory
+                                          .isNotEmpty)
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 24,
+                                        vertical: 4,
+                                      ),
+                                      child: Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: Wrap(
+                                          spacing: 10,
+                                          runSpacing: 6,
+                                          children: _chatEngine
+                                              .voiceChannelHistory
+                                              .reversed
+                                              .take(3)
+                                              .map(
+                                                (e) => Container(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                        horizontal: 10,
+                                                        vertical: 6,
+                                                      ),
+                                                  decoration: BoxDecoration(
+                                                    color: Theme.of(context)
+                                                        .colorScheme
+                                                        .surfaceContainerHighest
+                                                        .withValues(
+                                                          alpha: 0.55,
+                                                        ),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          999,
+                                                        ),
+                                                    border: Border.all(
+                                                      color: Theme.of(context)
+                                                          .dividerColor
+                                                          .withValues(
+                                                            alpha: 0.35,
+                                                          ),
+                                                    ),
+                                                  ),
+                                                  child: Text(
+                                                    '🎧 ${e.text}',
+                                                    style: Theme.of(context)
+                                                        .textTheme
+                                                        .labelMedium
+                                                        ?.copyWith(
+                                                          color: chrome
+                                                              .textSecondary,
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                        ),
+                                                  ),
+                                                ),
+                                              )
+                                              .toList(),
+                                        ),
+                                      ),
+                                    ),
                                   Expanded(
                                     child: session == null
                                         ? const Center(child: Text('暂无会话'))
@@ -495,16 +813,34 @@ class _ChatScreenState extends State<ChatScreen> {
                                     onSend: _handleSend,
                                     onToggleListening:
                                         _chatEngine.toggleListening,
+                                    onToggleVoiceChannelMonitoring: _chatEngine
+                                        .toggleVoiceChannelMonitoring,
                                     isListening: _chatEngine.isListening,
+                                    isVoiceChannelMonitoring:
+                                        _chatEngine.isVoiceChannelMonitoring,
                                     isStreaming: _chatEngine.isStreaming,
                                     partialTranscript:
                                         _chatEngine.partialTranscript,
+                                    showVoiceChannelButton: showVoiceChannel,
                                     onOpenAgent: _openUniversalAgentDialog,
                                   ),
                                 ],
                               ),
                             ),
-                            if (isWide)
+                            if (showRightPanel && _layoutEditing)
+                              _ResizeHandle(
+                                onDrag: (delta) {
+                                  setState(() {
+                                    _rightPanelWidth =
+                                        (_rightPanelWidth - delta).clamp(
+                                          minRight,
+                                          maxRight,
+                                        );
+                                  });
+                                  _scheduleLayoutPersist();
+                                },
+                              ),
+                            if (showRightPanel)
                               SizedBox(
                                 width: rightPanelWidth,
                                 child: Padding(
@@ -515,14 +851,29 @@ class _ChatScreenState extends State<ChatScreen> {
                                           constraints.maxHeight.isFinite
                                           ? constraints.maxHeight
                                           : 360.0;
+                                      final bubbleText =
+                                          preset ==
+                                              LayoutPreset.focusPresentation
+                                          ? _latestAssistantText(session)
+                                          : null;
                                       return Live3DPreview(
                                         height: height,
                                         settingsRepository:
                                             widget.settingsRepository,
+                                        speechText: bubbleText,
                                       );
                                     },
                                   ),
                                 ),
+                              ),
+                            if (isWide &&
+                                !showRightPanel &&
+                                preset != LayoutPreset.focusChat)
+                              _RightPanelRestoreStrip(
+                                onTap: () {
+                                  setState(() => _showRightPanel = true);
+                                  _scheduleLayoutPersist();
+                                },
                               ),
                           ],
                         ),
@@ -546,7 +897,6 @@ class _EmbeddingWarning extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final chrome = context.chrome;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bg = isDark
         ? const Color(0xFF2A2316).withValues(alpha: 0.72)
@@ -584,6 +934,155 @@ class _EmbeddingWarning extends StatelessWidget {
       ),
     );
   }
+}
+
+class _GlowOrb extends StatelessWidget {
+  const _GlowOrb({required this.size, required this.color});
+
+  final double size;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: RadialGradient(colors: [color, color.withValues(alpha: 0)]),
+        ),
+      ),
+    );
+  }
+}
+
+class _ResizeHandle extends StatelessWidget {
+  const _ResizeHandle({required this.onDrag});
+
+  final ValueChanged<double> onDrag;
+
+  @override
+  Widget build(BuildContext context) {
+    final chrome = context.chrome;
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeColumn,
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onHorizontalDragUpdate: (details) => onDrag(details.delta.dx),
+        child: SizedBox(
+          width: 8,
+          child: Center(
+            child: Container(
+              width: 2,
+              height: 36,
+              decoration: BoxDecoration(
+                color: chrome.separatorStrong.withValues(alpha: 0.5),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RightPanelRestoreStrip extends StatelessWidget {
+  const _RightPanelRestoreStrip({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final chrome = context.chrome;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          width: 30,
+          decoration: BoxDecoration(
+            color: chrome.surfaceElevated,
+            border: Border(left: BorderSide(color: chrome.separatorStrong)),
+          ),
+          child: Column(
+            children: [
+              const SizedBox(height: 12),
+              Icon(
+                Icons.face_retouching_natural_outlined,
+                size: 18,
+                color: chrome.accent,
+              ),
+              const Spacer(),
+              RotatedBox(
+                quarterTurns: 3,
+                child: Text(
+                  'Avatar',
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: chrome.textSecondary,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LayoutDefaults {
+  const _LayoutDefaults({
+    required this.sidebar,
+    required this.rightPanel,
+    required this.showRightPanel,
+  });
+
+  final double sidebar;
+  final double rightPanel;
+  final bool showRightPanel;
+}
+
+_LayoutDefaults _layoutDefaultsForPreset(LayoutPreset preset) {
+  switch (preset) {
+    case LayoutPreset.focusChat:
+      return const _LayoutDefaults(
+        sidebar: 260.0,
+        rightPanel: 380.0,
+        showRightPanel: false,
+      );
+    case LayoutPreset.focusPresentation:
+      return const _LayoutDefaults(
+        sidebar: 220.0,
+        rightPanel: 520.0,
+        showRightPanel: true,
+      );
+    case LayoutPreset.balanced:
+      return const _LayoutDefaults(
+        sidebar: 280.0,
+        rightPanel: 380.0,
+        showRightPanel: true,
+      );
+  }
+}
+
+String? _latestAssistantText(ChatSession? session) {
+  if (session == null) {
+    return null;
+  }
+  for (final message in session.messages.reversed) {
+    if (message.role != ChatRole.assistant) {
+      continue;
+    }
+    final trimmed = message.content.trim();
+    if (trimmed.isNotEmpty) {
+      return trimmed;
+    }
+  }
+  return null;
 }
 
 String _deliverableLabel(ResearchDeliverable deliverable) {

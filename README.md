@@ -27,6 +27,7 @@ Python 作为可选扩展层（HTTP/MCP 等方式对接）。
 - [Rust 后端（REST）/ Rust Backend (REST)](#rust-后端rest-rust-backend-rest)
 - [模型与语音接入（当前）/ Providers](#模型与语音接入当前--providers)
 - [路线图 / Roadmap](#路线图--roadmap)
+- [第三方组件与许可 / Third-Party Attributions](#第三方组件与许可--third-party-attributions)
 - [许可证 / License](#许可证--license)
 
 ## 核心能力 / Core Capabilities
@@ -91,6 +92,15 @@ cargo run
 - Rust 微内核作为实时总线，Flutter 负责交互与渲染。
 - Python 作为可选插件/模型服务，通过 MCP 或统一协议注册。
 - 记忆系统持续增强：向量检索 + 关键词召回 + 去重/合并/归档工具链。
+
+## 第三方组件与许可 / Third-Party Attributions
+
+为保证工程与合规信息可追溯，CMYKE 对第三方依赖做了编号化登记（含路径、用途、上游来源、许可证）：
+
+- 运行时直接使用：three.js / @pixiv/three-vrm / @pixiv/three-vrm-animation / ES Module Shims / 字体资源 / VRMA 动作包 / OpenCode CLI。
+- 学习与引用项目（设计参考）：`Studying/deep_research/openclaw`、`Studying/deep_research/openclaw-skills`、`Studying/deep_research/free-OKC` 等。
+
+完整清单见：`docs/THIRD_PARTY_ATTRIBUTIONS.md`
 
 ## 许可证 / License
 

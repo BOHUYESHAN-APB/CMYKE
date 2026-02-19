@@ -180,6 +180,9 @@ class SettingsRepository extends ChangeNotifier {
         providersByKind(ProviderKind.omni).isNotEmpty) {
       _settings.omniProviderId = providersByKind(ProviderKind.omni).first.id;
     }
+    if (_settings.toolGatewayBaseUrl.trim().isEmpty) {
+      _settings.toolGatewayBaseUrl = 'http://127.0.0.1:4891';
+    }
   }
 
   void _sanitizeSelections() {
@@ -383,6 +386,56 @@ class SettingsRepository extends ChangeNotifier {
       memoryAgentProviderId: row['memory_agent_provider_id'] as String?,
       memoryAgentCooldownSeconds:
           row['memory_agent_cooldown_seconds'] as int? ?? 20,
+      live3dRenderQuality: Live3dRenderQuality.values.firstWhere(
+        (quality) => quality.name == row['live3d_quality'],
+        orElse: () => Live3dRenderQuality.balanced,
+      ),
+      live3dFpsCap: Live3dFpsCap.values.firstWhere(
+        (cap) => cap.name == row['live3d_fps_cap'],
+        orElse: () => Live3dFpsCap.fps60,
+      ),
+      autonomyEnabled: _toBool(row['autonomy_enabled']) ?? false,
+      autonomyProactiveEnabled:
+          _toBool(row['autonomy_proactive_enabled']) ?? false,
+      autonomyProactiveIntervalMinutes:
+          (row['autonomy_proactive_interval_minutes'] as num?)?.toInt() ?? 20,
+      autonomyExploreEnabled: _toBool(row['autonomy_explore_enabled']) ?? false,
+      autonomyExploreIntervalMinutes:
+          (row['autonomy_explore_interval_minutes'] as num?)?.toInt() ?? 60,
+      autonomyPlatforms: _parseAutonomyPlatforms(row['autonomy_platforms']),
+      draftFormatStrategy: DraftFormatStrategy.values.firstWhere(
+        (strategy) => strategy.name == row['draft_format_strategy'],
+        orElse: () => DraftFormatStrategy.platformDefault,
+      ),
+      toolGatewayEnabled: _toBool(row['tool_gateway_enabled']) ?? false,
+      toolGatewayBaseUrl:
+          (row['tool_gateway_base_url'] as String?)?.trim().isNotEmpty == true
+              ? (row['tool_gateway_base_url'] as String)
+              : 'http://127.0.0.1:4891',
+      toolGatewayPairingToken:
+          row['tool_gateway_pairing_token'] as String? ?? '',
+      voiceChannelEnabled: _toBool(row['voice_channel_enabled']) ?? false,
+      voiceChannelInjectEnabled:
+          _toBool(row['voice_channel_inject_enabled']) ?? true,
+      voiceChannelDeviceId: row['voice_channel_device_id'] as String?,
+      voiceChannelDeviceLabel: row['voice_channel_device_label'] as String?,
+      uiPalette: UiPalette.values.firstWhere(
+        (palette) => palette.name == row['ui_palette'],
+        orElse: () => UiPalette.jade,
+      ),
+      uiGlass: UiGlass.values.firstWhere(
+        (glass) => glass.name == row['ui_glass'],
+        orElse: () => UiGlass.standard,
+      ),
+      layoutPreset: LayoutPreset.values.firstWhere(
+        (preset) => preset.name == row['layout_preset'],
+        orElse: () => LayoutPreset.balanced,
+      ),
+      layoutSidebarWidth:
+          (row['layout_sidebar_width'] as num?)?.toDouble() ?? 280.0,
+      layoutRightPanelWidth:
+          (row['layout_right_panel_width'] as num?)?.toDouble() ?? 380.0,
+      layoutShowRightPanel: _toBool(row['layout_show_right_panel']) ?? true,
     );
   }
 
@@ -413,6 +466,31 @@ class SettingsRepository extends ChangeNotifier {
       'memory_agent_enabled': settings.memoryAgentEnabled ? 1 : 0,
       'memory_agent_provider_id': settings.memoryAgentProviderId,
       'memory_agent_cooldown_seconds': settings.memoryAgentCooldownSeconds,
+      'live3d_quality': settings.live3dRenderQuality.name,
+      'live3d_fps_cap': settings.live3dFpsCap.name,
+      'autonomy_enabled': settings.autonomyEnabled ? 1 : 0,
+      'autonomy_proactive_enabled': settings.autonomyProactiveEnabled ? 1 : 0,
+      'autonomy_proactive_interval_minutes':
+          settings.autonomyProactiveIntervalMinutes,
+      'autonomy_explore_enabled': settings.autonomyExploreEnabled ? 1 : 0,
+      'autonomy_explore_interval_minutes':
+          settings.autonomyExploreIntervalMinutes,
+      'autonomy_platforms': _autonomyPlatformsToRow(settings.autonomyPlatforms),
+      'draft_format_strategy': settings.draftFormatStrategy.name,
+      'tool_gateway_enabled': settings.toolGatewayEnabled ? 1 : 0,
+      'tool_gateway_base_url': settings.toolGatewayBaseUrl,
+      'tool_gateway_pairing_token': settings.toolGatewayPairingToken,
+      'voice_channel_enabled': settings.voiceChannelEnabled ? 1 : 0,
+      'voice_channel_inject_enabled':
+          settings.voiceChannelInjectEnabled ? 1 : 0,
+      'voice_channel_device_id': settings.voiceChannelDeviceId,
+      'voice_channel_device_label': settings.voiceChannelDeviceLabel,
+      'ui_palette': settings.uiPalette.name,
+      'ui_glass': settings.uiGlass.name,
+      'layout_preset': settings.layoutPreset.name,
+      'layout_sidebar_width': settings.layoutSidebarWidth,
+      'layout_right_panel_width': settings.layoutRightPanelWidth,
+      'layout_show_right_panel': settings.layoutShowRightPanel ? 1 : 0,
     };
   }
 
@@ -427,6 +505,35 @@ class SettingsRepository extends ChangeNotifier {
       return value;
     }
     return null;
+  }
+
+  List<AutonomyPlatform> _parseAutonomyPlatforms(Object? raw) {
+    if (raw is String) {
+      final trimmed = raw.trim();
+      if (trimmed.isEmpty) {
+        return const [AutonomyPlatform.x];
+      }
+      return trimmed
+          .split(',')
+          .map((e) => e.trim())
+          .where((e) => e.isNotEmpty)
+          .map(
+            (name) => AutonomyPlatform.values.firstWhere(
+              (platform) => platform.name == name,
+              orElse: () => AutonomyPlatform.x,
+            ),
+          )
+          .toSet()
+          .toList();
+    }
+    return const [AutonomyPlatform.x];
+  }
+
+  String _autonomyPlatformsToRow(List<AutonomyPlatform> platforms) {
+    if (platforms.isEmpty) {
+      return AutonomyPlatform.x.name;
+    }
+    return platforms.map((p) => p.name).join(',');
   }
 
   List<ProviderConfig> _defaultProviders() {

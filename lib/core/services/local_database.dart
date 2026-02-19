@@ -57,7 +57,7 @@ class LocalDatabase {
       return ffi.databaseFactoryFfi.openDatabase(
         dbPath,
         options: OpenDatabaseOptions(
-          version: 13,
+          version: 21,
           onConfigure: (db) async {
             await db.execute('PRAGMA foreign_keys = ON');
           },
@@ -68,7 +68,7 @@ class LocalDatabase {
     }
     return openDatabase(
       dbPath,
-      version: 13,
+      version: 21,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
       },
@@ -103,6 +103,9 @@ class LocalDatabase {
         role TEXT NOT NULL,
         content TEXT NOT NULL,
         created_at TEXT NOT NULL,
+        source_kind TEXT,
+        source_id TEXT,
+        priority TEXT NOT NULL DEFAULT 'normal',
         FOREIGN KEY(session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
       )
     ''');
@@ -203,7 +206,29 @@ class LocalDatabase {
         motion_agent_cooldown_seconds INTEGER NOT NULL DEFAULT 12,
         memory_agent_enabled INTEGER NOT NULL DEFAULT 0,
         memory_agent_provider_id TEXT,
-        memory_agent_cooldown_seconds INTEGER NOT NULL DEFAULT 20
+        memory_agent_cooldown_seconds INTEGER NOT NULL DEFAULT 20,
+        live3d_quality TEXT,
+        live3d_fps_cap TEXT,
+        autonomy_enabled INTEGER NOT NULL DEFAULT 0,
+        autonomy_proactive_enabled INTEGER NOT NULL DEFAULT 0,
+        autonomy_proactive_interval_minutes INTEGER NOT NULL DEFAULT 20,
+        autonomy_explore_enabled INTEGER NOT NULL DEFAULT 0,
+        autonomy_explore_interval_minutes INTEGER NOT NULL DEFAULT 60,
+        autonomy_platforms TEXT,
+        draft_format_strategy TEXT,
+        tool_gateway_enabled INTEGER NOT NULL DEFAULT 0,
+        tool_gateway_base_url TEXT,
+        tool_gateway_pairing_token TEXT,
+        voice_channel_enabled INTEGER NOT NULL DEFAULT 0,
+        voice_channel_inject_enabled INTEGER NOT NULL DEFAULT 1,
+        voice_channel_device_id TEXT,
+        voice_channel_device_label TEXT,
+        ui_palette TEXT,
+        ui_glass TEXT,
+        layout_preset TEXT,
+        layout_sidebar_width REAL,
+        layout_right_panel_width REAL,
+        layout_show_right_panel INTEGER NOT NULL DEFAULT 1
       )
     ''');
   }
@@ -298,6 +323,83 @@ class LocalDatabase {
     if (oldVersion < 13) {
       await db.execute(
         'ALTER TABLE app_settings ADD COLUMN embedding_provider_id TEXT',
+      );
+    }
+    if (oldVersion < 14) {
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN voice_channel_enabled INTEGER NOT NULL DEFAULT 0',
+      );
+    }
+    if (oldVersion < 15) {
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN voice_channel_inject_enabled INTEGER NOT NULL DEFAULT 1',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN voice_channel_device_id TEXT',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN voice_channel_device_label TEXT',
+      );
+    }
+    if (oldVersion < 16) {
+      await db.execute('ALTER TABLE app_settings ADD COLUMN ui_palette TEXT');
+      await db.execute('ALTER TABLE app_settings ADD COLUMN ui_glass TEXT');
+    }
+    if (oldVersion < 17) {
+      await db.execute('ALTER TABLE app_settings ADD COLUMN layout_preset TEXT');
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN layout_sidebar_width REAL',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN layout_right_panel_width REAL',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN layout_show_right_panel INTEGER NOT NULL DEFAULT 1',
+      );
+    }
+    if (oldVersion < 18) {
+      await db.execute('ALTER TABLE app_settings ADD COLUMN live3d_quality TEXT');
+      await db.execute('ALTER TABLE app_settings ADD COLUMN live3d_fps_cap TEXT');
+    }
+    if (oldVersion < 19) {
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN autonomy_enabled INTEGER NOT NULL DEFAULT 0',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN autonomy_proactive_enabled INTEGER NOT NULL DEFAULT 0',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN autonomy_proactive_interval_minutes INTEGER NOT NULL DEFAULT 20',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN autonomy_explore_enabled INTEGER NOT NULL DEFAULT 0',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN autonomy_explore_interval_minutes INTEGER NOT NULL DEFAULT 60',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN autonomy_platforms TEXT',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN draft_format_strategy TEXT',
+      );
+    }
+    if (oldVersion < 20) {
+      await db.execute('ALTER TABLE chat_messages ADD COLUMN source_kind TEXT');
+      await db.execute('ALTER TABLE chat_messages ADD COLUMN source_id TEXT');
+      await db.execute(
+        "ALTER TABLE chat_messages ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'",
+      );
+    }
+    if (oldVersion < 21) {
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN tool_gateway_enabled INTEGER NOT NULL DEFAULT 0',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN tool_gateway_base_url TEXT',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN tool_gateway_pairing_token TEXT',
       );
     }
   }

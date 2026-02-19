@@ -10,14 +10,20 @@ import '../models/chat_message.dart';
 import '../models/chat_session.dart';
 import '../services/local_database.dart';
 import '../services/local_storage.dart';
+import '../services/workspace_service.dart';
 
 class ChatRepository extends ChangeNotifier {
-  ChatRepository({required LocalDatabase database, LocalStorage? legacyStorage})
-    : _database = database,
-      _legacyStorage = legacyStorage ?? LocalStorage();
+  ChatRepository({
+    required LocalDatabase database,
+    LocalStorage? legacyStorage,
+    WorkspaceService? workspaceService,
+  }) : _database = database,
+       _legacyStorage = legacyStorage ?? LocalStorage(),
+       _workspaceService = workspaceService;
 
   final LocalDatabase _database;
   final LocalStorage _legacyStorage;
+  final WorkspaceService? _workspaceService;
   final List<ChatSession> _sessions = [];
   String? _activeSessionId;
 
@@ -51,6 +57,7 @@ class ChatRepository extends ChangeNotifier {
       _activeSessionId = session.id;
       await _insertSession(db, session);
       await _insertMessages(db, session);
+      await _workspaceService?.sessionDirectory(session.id);
       notifyListeners();
       return;
     }
@@ -73,6 +80,9 @@ class ChatRepository extends ChangeNotifier {
               ),
               content: row['content'] as String,
               createdAt: DateTime.parse(row['created_at'] as String),
+              sourceKind: _parseSourceKind(row['source_kind']),
+              sourceId: row['source_id'] as String?,
+              priority: _parsePriority(row['priority']),
             ),
           );
     }
@@ -114,6 +124,7 @@ class ChatRepository extends ChangeNotifier {
     }
     notifyListeners();
     await _insertSession(db, session);
+    await _workspaceService?.sessionDirectory(session.id);
     return session;
   }
 
@@ -121,11 +132,13 @@ class ChatRepository extends ChangeNotifier {
     final db = await _database.database;
     _sessions.removeWhere((session) => session.id == sessionId);
     await db.delete(_sessionsTable, where: 'id = ?', whereArgs: [sessionId]);
+    await _workspaceService?.deleteSessionWorkspace(sessionId);
     if (_sessions.isEmpty) {
       final session = _createDefaultSession();
       _sessions.add(session);
       await _insertSession(db, session);
       await _insertMessages(db, session);
+      await _workspaceService?.sessionDirectory(session.id);
     }
     _activeSessionId = _sessions.first.id;
     notifyListeners();
@@ -136,12 +149,20 @@ class ChatRepository extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> sendUserMessage(String content) async {
+  Future<void> sendUserMessage(
+    String content, {
+    ChatSourceKind? sourceKind,
+    String? sourceId,
+    ChatPriority priority = ChatPriority.user,
+  }) async {
     final message = ChatMessage(
       id: _newId(),
       role: ChatRole.user,
       content: content,
       createdAt: DateTime.now(),
+      sourceKind: sourceKind ?? ChatSourceKind.user,
+      sourceId: sourceId,
+      priority: priority,
     );
     await addMessage(message);
   }
@@ -149,12 +170,16 @@ class ChatRepository extends ChangeNotifier {
   Future<void> addAssistantMessage(
     String content, {
     bool persist = true,
+    ChatSourceKind? sourceKind,
+    ChatPriority priority = ChatPriority.normal,
   }) async {
     final message = ChatMessage(
       id: _newId(),
       role: ChatRole.assistant,
       content: content,
       createdAt: DateTime.now(),
+      sourceKind: sourceKind,
+      priority: priority,
     );
     await addMessage(message, persist: persist);
   }
@@ -207,6 +232,9 @@ class ChatRepository extends ChangeNotifier {
       role: session.messages[index].role,
       content: content,
       createdAt: session.messages[index].createdAt,
+      sourceKind: session.messages[index].sourceKind,
+      sourceId: session.messages[index].sourceId,
+      priority: session.messages[index].priority,
     );
     session.updatedAt = DateTime.now();
     notifyListeners();
@@ -259,6 +287,7 @@ class ChatRepository extends ChangeNotifier {
           role: ChatRole.assistant,
           content: '你好，我是 Lumi（露米）。现在是 UI 原型阶段，模型接入后会在这里回复。',
           createdAt: DateTime.now(),
+          sourceKind: ChatSourceKind.system,
         ),
       ],
     );
@@ -321,8 +350,10 @@ class ChatRepository extends ChangeNotifier {
     buffer.writeln('');
     buffer.writeln('## Messages');
     for (final message in session.messages) {
+      final source =
+          message.sourceKind == null ? '' : ' · ${message.sourceKind!.name}';
       buffer.writeln(
-        '### ${message.role.name} · ${message.createdAt.toIso8601String()}',
+        '### ${message.role.name}$source · ${message.createdAt.toIso8601String()}',
       );
       buffer.writeln(message.content);
       buffer.writeln('');
@@ -344,6 +375,9 @@ class ChatRepository extends ChangeNotifier {
     'role': message.role.name,
     'content': message.content,
     'created_at': message.createdAt.toIso8601String(),
+    'source_kind': message.sourceKind?.name,
+    'source_id': message.sourceId,
+    'priority': message.priority.name,
   };
 
   Future<void> _importLegacy(Database db) async {
@@ -373,6 +407,24 @@ class ChatRepository extends ChangeNotifier {
   }
 
   String _newId() => DateTime.now().microsecondsSinceEpoch.toString();
+
+  ChatSourceKind? _parseSourceKind(Object? value) {
+    if (value is String) {
+      for (final kind in ChatSourceKind.values) {
+        if (kind.name == value) return kind;
+      }
+    }
+    return null;
+  }
+
+  ChatPriority _parsePriority(Object? value) {
+    if (value is String) {
+      for (final priority in ChatPriority.values) {
+        if (priority.name == value) return priority;
+      }
+    }
+    return ChatPriority.normal;
+  }
 
   ChatSessionMode _parseMode(Object? value) {
     if (value is String) {

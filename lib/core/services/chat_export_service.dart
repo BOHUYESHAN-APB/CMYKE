@@ -6,8 +6,12 @@ import 'package:path_provider/path_provider.dart';
 import '../models/chat_session.dart';
 import '../models/memory_collection.dart';
 import '../models/memory_tier.dart';
+import 'deep_research_export_service.dart';
 
 class ChatExportService {
+  final DeepResearchExportService _deepResearchExportService =
+      const DeepResearchExportService();
+
   Future<String> exportSession(
     ChatSession session, {
     List<MemoryCollection>? memoryCollections,
@@ -38,6 +42,20 @@ class ChatExportService {
       ),
     );
     return jsonPath;
+  }
+
+  Future<DeepResearchExportResult> exportDeepResearchHtml({
+    required String html,
+    required Map<String, dynamic> metadata,
+    required DeepResearchExportFormat format,
+    String filenamePrefix = 'cmyke_deep_research',
+  }) {
+    return _deepResearchExportService.exportHtml(
+      html: html,
+      metadata: metadata,
+      format: format,
+      filenamePrefix: filenamePrefix,
+    );
   }
 
   Future<String> exportAll(

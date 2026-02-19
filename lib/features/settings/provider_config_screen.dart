@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../core/models/app_settings.dart';
@@ -10,6 +12,7 @@ import '../../core/models/stage_action.dart';
 import '../../core/repositories/settings_repository.dart';
 import '../../core/services/runtime_hub.dart';
 import '../../ui/theme/cmyke_chrome.dart';
+import '../../ui/windows/audio_device_bridge.dart';
 import '../chat/widgets/avatar_stage.dart';
 
 class ProviderConfigScreen extends StatelessWidget {
@@ -102,6 +105,11 @@ class _ModeTab extends StatelessWidget {
         const SizedBox(height: 12),
         const _VrmCard(),
         const SizedBox(height: 12),
+        _Live3DPerformanceCard(
+          settingsRepository: settingsRepository,
+          settings: settings,
+        ),
+        const SizedBox(height: 12),
         _PetModeCard(
           settingsRepository: settingsRepository,
           settings: settings,
@@ -118,6 +126,16 @@ class _ModeTab extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         _MotionAgentCard(
+          settingsRepository: settingsRepository,
+          settings: settings,
+        ),
+        const SizedBox(height: 24),
+        _AppearanceCard(
+          settingsRepository: settingsRepository,
+          settings: settings,
+        ),
+        const SizedBox(height: 12),
+        _LayoutPresetCard(
           settingsRepository: settingsRepository,
           settings: settings,
         ),
@@ -202,6 +220,18 @@ class _ModeTab extends StatelessWidget {
                 settings.copyWith(enableSystemStt: value),
               );
             },
+          ),
+          if (Platform.isWindows) ...[
+            const SizedBox(height: 4),
+            _VoiceChannelCard(
+              settingsRepository: settingsRepository,
+              settings: settings,
+            ),
+            const SizedBox(height: 12),
+          ],
+          _ToolGatewayCard(
+            settingsRepository: settingsRepository,
+            settings: settings,
           ),
           const SizedBox(height: 24),
         ],
@@ -782,6 +812,112 @@ class _VrmCard extends StatelessWidget {
   }
 }
 
+class _Live3DPerformanceCard extends StatelessWidget {
+  const _Live3DPerformanceCard({
+    required this.settingsRepository,
+    required this.settings,
+  });
+
+  final SettingsRepository settingsRepository;
+  final AppSettings settings;
+
+  String _qualityLabel(Live3dRenderQuality quality) {
+    switch (quality) {
+      case Live3dRenderQuality.low:
+        return '低（更省内存）';
+      case Live3dRenderQuality.balanced:
+        return '均衡';
+      case Live3dRenderQuality.high:
+        return '高（更清晰）';
+    }
+  }
+
+  String _fpsLabel(Live3dFpsCap cap) {
+    switch (cap) {
+      case Live3dFpsCap.fps30:
+        return '30 FPS';
+      case Live3dFpsCap.fps60:
+        return '60 FPS';
+      case Live3dFpsCap.unlimited:
+        return '不限制';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Live3D 渲染性能',
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '在高分辨率屏幕上可以适当降低质量或帧率，减少内存和功耗。',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: const Color(0xFF5E636F),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<Live3dRenderQuality>(
+              value: settings.live3dRenderQuality,
+              decoration: const InputDecoration(
+                labelText: '渲染质量',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              items: Live3dRenderQuality.values
+                  .map(
+                    (quality) => DropdownMenuItem(
+                      value: quality,
+                      child: Text(_qualityLabel(quality)),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) {
+                if (value == null) return;
+                settingsRepository.updateSettings(
+                  settings.copyWith(live3dRenderQuality: value),
+                );
+              },
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<Live3dFpsCap>(
+              value: settings.live3dFpsCap,
+              decoration: const InputDecoration(
+                labelText: '帧率上限',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              items: Live3dFpsCap.values
+                  .map(
+                    (cap) => DropdownMenuItem(
+                      value: cap,
+                      child: Text(_fpsLabel(cap)),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) {
+                if (value == null) return;
+                settingsRepository.updateSettings(
+                  settings.copyWith(live3dFpsCap: value),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _PetModeCard extends StatelessWidget {
   const _PetModeCard({
     required this.settingsRepository,
@@ -1112,6 +1248,188 @@ class _MotionAgentCard extends StatelessWidget {
   }
 }
 
+class _AppearanceCard extends StatelessWidget {
+  const _AppearanceCard({
+    required this.settingsRepository,
+    required this.settings,
+  });
+
+  final SettingsRepository settingsRepository;
+  final AppSettings settings;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '界面外观',
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '切换配色与毛玻璃强度（支持深色/浅色自动适配）。',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: const Color(0xFF5E636F),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: DropdownButtonFormField<UiPalette>(
+                    value: settings.uiPalette,
+                    decoration: const InputDecoration(labelText: '配色方案'),
+                    items: UiPalette.values
+                        .map(
+                          (palette) => DropdownMenuItem(
+                            value: palette,
+                            child: Text(_paletteLabel(palette)),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      settingsRepository.updateSettings(
+                        settings.copyWith(uiPalette: value),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: DropdownButtonFormField<UiGlass>(
+                    value: settings.uiGlass,
+                    decoration: const InputDecoration(labelText: '毛玻璃强度'),
+                    items: UiGlass.values
+                        .map(
+                          (glass) => DropdownMenuItem(
+                            value: glass,
+                            child: Text(_glassLabel(glass)),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      settingsRepository.updateSettings(
+                        settings.copyWith(uiGlass: value),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LayoutPresetCard extends StatelessWidget {
+  const _LayoutPresetCard({
+    required this.settingsRepository,
+    required this.settings,
+  });
+
+  final SettingsRepository settingsRepository;
+  final AppSettings settings;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '布局模式',
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '选择聊天/演示优先的布局预设，可随时在聊天页进入布局编辑微调。',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: const Color(0xFF5E636F),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 12),
+            SegmentedButton<LayoutPreset>(
+              segments: const [
+                ButtonSegment(
+                  value: LayoutPreset.balanced,
+                  label: Text('综合'),
+                  icon: Icon(Icons.dashboard_outlined),
+                ),
+                ButtonSegment(
+                  value: LayoutPreset.focusChat,
+                  label: Text('专注对话'),
+                  icon: Icon(Icons.chat_bubble_outline),
+                ),
+                ButtonSegment(
+                  value: LayoutPreset.focusPresentation,
+                  label: Text('专注演示'),
+                  icon: Icon(Icons.slideshow_outlined),
+                ),
+              ],
+              selected: {settings.layoutPreset},
+              onSelectionChanged: (value) {
+                final preset = value.first;
+                final next = _applyLayoutPreset(settings, preset);
+                settingsRepository.updateSettings(next);
+              },
+            ),
+            const SizedBox(height: 10),
+            Text(
+              _layoutPresetHint(settings.layoutPreset),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: const Color(0xFF5E636F),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  AppSettings _applyLayoutPreset(AppSettings settings, LayoutPreset preset) {
+    switch (preset) {
+      case LayoutPreset.focusChat:
+        return settings.copyWith(
+          layoutPreset: preset,
+          layoutSidebarWidth: 260.0,
+          layoutRightPanelWidth: 380.0,
+          layoutShowRightPanel: false,
+        );
+      case LayoutPreset.focusPresentation:
+        return settings.copyWith(
+          layoutPreset: preset,
+          layoutSidebarWidth: 220.0,
+          layoutRightPanelWidth: 520.0,
+          layoutShowRightPanel: true,
+        );
+      case LayoutPreset.balanced:
+        return settings.copyWith(
+          layoutPreset: preset,
+          layoutSidebarWidth: 280.0,
+          layoutRightPanelWidth: 380.0,
+          layoutShowRightPanel: true,
+        );
+    }
+  }
+}
+
 class _MemoryAgentCard extends StatelessWidget {
   const _MemoryAgentCard({
     required this.settingsRepository,
@@ -1195,15 +1513,504 @@ class _MemoryAgentCard extends StatelessWidget {
   }
 }
 
+class _VoiceChannelCard extends StatefulWidget {
+  const _VoiceChannelCard({
+    required this.settingsRepository,
+    required this.settings,
+  });
+
+  final SettingsRepository settingsRepository;
+  final AppSettings settings;
+
+  @override
+  State<_VoiceChannelCard> createState() => _VoiceChannelCardState();
+}
+
+class _VoiceChannelCardState extends State<_VoiceChannelCard> {
+  Future<List<AudioInputDeviceInfo>>? _devicesFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _reloadDevices();
+  }
+
+  void _reloadDevices() {
+    setState(() {
+      _devicesFuture = WindowsAudioDeviceBridge.listInputDevices();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final chrome = context.chrome;
+    final settingsRepository = widget.settingsRepository;
+    final settings = widget.settings;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const _SectionHeader(
+              title: '语音频道（Windows）',
+              subtitle: '虚拟声卡监听与注入控制',
+            ),
+            const SizedBox(height: 12),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('启用语音频道监听'),
+              subtitle: const Text('通过虚拟声卡把语音频道音频接入系统 STT'),
+              value: settings.voiceChannelEnabled,
+              onChanged: (value) {
+                settingsRepository.updateSettings(
+                  settings.copyWith(voiceChannelEnabled: value),
+                );
+              },
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('语音频道注入主对话'),
+              subtitle: const Text('关闭后仅保留监听记录，不自动发送到对话'),
+              value: settings.voiceChannelInjectEnabled,
+              onChanged: (value) {
+                settingsRepository.updateSettings(
+                  settings.copyWith(voiceChannelInjectEnabled: value),
+                );
+              },
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '选择虚拟声卡输入设备',
+              style: Theme.of(
+                context,
+              ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            FutureBuilder<List<AudioInputDeviceInfo>>(
+              future: _devicesFuture,
+              builder: (context, snapshot) {
+                final devices = snapshot.data ?? const [];
+                final items = <DropdownMenuItem<String>>[
+                  const DropdownMenuItem(value: '', child: Text('跟随系统默认输入设备')),
+                  ...devices.map(
+                    (device) => DropdownMenuItem(
+                      value: device.id,
+                      child: Text(device.name),
+                    ),
+                  ),
+                ];
+                final selectedId = settings.voiceChannelDeviceId ?? '';
+                final hasSelected =
+                    selectedId.isEmpty ||
+                    devices.any((d) => d.id == selectedId);
+                final effectiveValue = hasSelected ? selectedId : '';
+
+                AudioInputDeviceInfo? defaultDevice;
+                for (final device in devices) {
+                  if (device.isDefault) {
+                    defaultDevice = device;
+                    break;
+                  }
+                }
+
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            value: effectiveValue,
+                            items: items,
+                            onChanged: (value) {
+                              final id = value ?? '';
+                              final label = devices
+                                  .firstWhere(
+                                    (d) => d.id == id,
+                                    orElse: () => const AudioInputDeviceInfo(
+                                      id: '',
+                                      name: '',
+                                      isDefault: false,
+                                    ),
+                                  )
+                                  .name;
+                              settingsRepository.updateSettings(
+                                settings.copyWith(
+                                  voiceChannelDeviceId: id.isEmpty ? null : id,
+                                  voiceChannelDeviceLabel: id.isEmpty
+                                      ? null
+                                      : label,
+                                ),
+                              );
+                            },
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          tooltip: '刷新设备列表',
+                          onPressed: _reloadDevices,
+                          icon: const Icon(Icons.refresh),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      defaultDevice == null
+                          ? '当前系统默认输入设备：未识别'
+                          : '当前系统默认输入设备：${defaultDevice.name}',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: chrome.textSecondary,
+                      ),
+                    ),
+                    if (effectiveValue.isNotEmpty &&
+                        defaultDevice != null &&
+                        effectiveValue != defaultDevice.id)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Text(
+                          '提示：已选择的设备与系统默认不一致，请在系统声音设置中手动切换。',
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: Theme.of(context).colorScheme.error,
+                                fontWeight: FontWeight.w700,
+                              ),
+                        ),
+                      ),
+                    const SizedBox(height: 8),
+                    TextButton.icon(
+                      onPressed: WindowsAudioDeviceBridge.openSoundSettings,
+                      icon: const Icon(Icons.settings_outlined),
+                      label: const Text('打开系统声音设置'),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '使用方式：把 Discord/KOOK 的输出设备改为虚拟声卡（如 VB-CABLE 输出），'
+                      '再把该虚拟声卡设为 Windows 默认录音设备。CMYKE 中用 🎧 按钮开始/停止监听。',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: chrome.textSecondary,
+                        height: 1.25,
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ToolGatewayCard extends StatefulWidget {
+  const _ToolGatewayCard({
+    required this.settingsRepository,
+    required this.settings,
+  });
+
+  final SettingsRepository settingsRepository;
+  final AppSettings settings;
+
+  @override
+  State<_ToolGatewayCard> createState() => _ToolGatewayCardState();
+}
+
+class _ToolGatewayCardState extends State<_ToolGatewayCard> {
+  late final TextEditingController _baseUrlController;
+  late final TextEditingController _tokenController;
+  final FocusNode _baseUrlFocus = FocusNode();
+  final FocusNode _tokenFocus = FocusNode();
+  bool _checking = false;
+  String? _status;
+  bool _showToken = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _baseUrlController = TextEditingController(
+      text: widget.settings.toolGatewayBaseUrl,
+    );
+    _tokenController = TextEditingController(
+      text: widget.settings.toolGatewayPairingToken,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _ToolGatewayCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_baseUrlFocus.hasFocus &&
+        widget.settings.toolGatewayBaseUrl != _baseUrlController.text) {
+      _baseUrlController.text = widget.settings.toolGatewayBaseUrl;
+    }
+    if (!_tokenFocus.hasFocus &&
+        widget.settings.toolGatewayPairingToken != _tokenController.text) {
+      _tokenController.text = widget.settings.toolGatewayPairingToken;
+    }
+  }
+
+  @override
+  void dispose() {
+    _baseUrlController.dispose();
+    _tokenController.dispose();
+    _baseUrlFocus.dispose();
+    _tokenFocus.dispose();
+    super.dispose();
+  }
+
+  Future<void> _checkGateway() async {
+    final baseUrl = _baseUrlController.text.trim();
+    if (baseUrl.isEmpty) {
+      _setStatus('请先填写网关地址。');
+      return;
+    }
+    setState(() {
+      _checking = true;
+      _status = null;
+    });
+    try {
+      final uri = _buildHealthUri(baseUrl);
+      final response = await http.get(uri).timeout(const Duration(seconds: 6));
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        _setStatus('连接成功：${response.statusCode}');
+      } else {
+        _setStatus('连接失败：HTTP ${response.statusCode}');
+      }
+    } catch (error) {
+      _setStatus('连接失败：$error');
+    } finally {
+      if (mounted) {
+        setState(() => _checking = false);
+      }
+    }
+  }
+
+  Future<void> _createPairing() async {
+    final baseUrl = _baseUrlController.text.trim();
+    if (baseUrl.isEmpty) {
+      _setStatus('请先填写网关地址。');
+      return;
+    }
+    setState(() {
+      _checking = true;
+      _status = null;
+    });
+    try {
+      final uri = _buildGatewayUri(baseUrl, '/api/v1/gateway/pairing/create');
+      final response = await http
+          .post(
+            uri,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'mode': 'local',
+              'label': 'flutter-ui',
+              'expires_in_sec': 3600,
+            }),
+          )
+          .timeout(const Duration(seconds: 6));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        _setStatus('创建配对失败：HTTP ${response.statusCode}');
+        return;
+      }
+      final data = jsonDecode(response.body);
+      if (data is! Map<String, dynamic>) {
+        _setStatus('配对响应异常。');
+        return;
+      }
+      final pairing = data['pairing'];
+      final token = pairing is Map<String, dynamic>
+          ? pairing['token']?.toString()
+          : null;
+      if (token == null || token.isEmpty) {
+        _setStatus('配对响应缺少 token。');
+        return;
+      }
+      _tokenController.text = token;
+      _updateSettings(widget.settings.copyWith(toolGatewayPairingToken: token));
+      _setStatus('已创建配对 token。');
+    } catch (error) {
+      _setStatus('创建配对失败：$error');
+    } finally {
+      if (mounted) {
+        setState(() => _checking = false);
+      }
+    }
+  }
+
+  Uri _buildHealthUri(String baseUrl) {
+    var normalized = baseUrl.trim();
+    if (!normalized.contains('://')) {
+      normalized = 'http://$normalized';
+    }
+    final uri = Uri.parse(normalized);
+    if (uri.path.isEmpty || uri.path == '/') {
+      return uri.replace(path: '/api/v1/health');
+    }
+    return uri.replace(path: '${uri.path}/api/v1/health');
+  }
+
+  Uri _buildGatewayUri(String baseUrl, String path) {
+    var normalized = baseUrl.trim();
+    if (!normalized.contains('://')) {
+      normalized = 'http://$normalized';
+    }
+    final uri = Uri.parse(normalized);
+    if (uri.path.isEmpty || uri.path == '/') {
+      return uri.replace(path: path);
+    }
+    return uri.replace(path: '${uri.path}$path');
+  }
+
+  void _setStatus(String message) {
+    if (!mounted) return;
+    setState(() => _status = message);
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void _updateSettings(AppSettings next) {
+    widget.settingsRepository.updateSettings(next);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final chrome = context.chrome;
+    final settings = widget.settings;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const _SectionHeader(
+              title: '工具网关（SAP / OpenCode）',
+              subtitle: '连接本地 Rust 后端，用于 MCP/技能/沙箱调用',
+            ),
+            const SizedBox(height: 12),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('启用工具网关'),
+              subtitle: const Text('开启后 ToolRouter 会走 Rust Gateway'),
+              value: settings.toolGatewayEnabled,
+              onChanged: (value) {
+                _updateSettings(settings.copyWith(toolGatewayEnabled: value));
+              },
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _baseUrlController,
+              focusNode: _baseUrlFocus,
+              decoration: const InputDecoration(
+                labelText: '网关地址',
+                hintText: 'http://127.0.0.1:4891',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              onChanged: (value) {
+                _updateSettings(
+                  settings.copyWith(toolGatewayBaseUrl: value.trim()),
+                );
+              },
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _tokenController,
+              focusNode: _tokenFocus,
+              obscureText: !_showToken,
+              decoration: InputDecoration(
+                labelText: 'Pairing Token',
+                hintText: '在网关创建配对后填入',
+                border: const OutlineInputBorder(),
+                isDense: true,
+                suffixIcon: IconButton(
+                  tooltip: _showToken ? '隐藏' : '显示',
+                  onPressed: () {
+                    setState(() => _showToken = !_showToken);
+                  },
+                  icon: Icon(
+                    _showToken ? Icons.visibility_off : Icons.visibility,
+                  ),
+                ),
+              ),
+              onChanged: (value) {
+                _updateSettings(
+                  settings.copyWith(toolGatewayPairingToken: value.trim()),
+                );
+              },
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                FilledButton.icon(
+                  onPressed: _checking ? null : _checkGateway,
+                  icon: _checking
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.link),
+                  label: const Text('测试连接'),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: _checking ? null : _createPairing,
+                  icon: const Icon(Icons.vpn_key),
+                  label: const Text('创建配对'),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  '网关健康检查：/api/v1/health',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: chrome.textSecondary),
+                ),
+              ],
+            ),
+            if (_status != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _status!,
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: chrome.textSecondary),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _AppInfoSection extends StatelessWidget {
   const _AppInfoSection();
 
   static const String _repoUrl = 'https://github.com/BOHUYESHAN-APB/CMYKE';
   static const String _feedback =
       'https://github.com/BOHUYESHAN-APB/CMYKE/issues';
-  static const String _license = 'Apache-2.0 (planned)';
+  static const String _license = 'Apache-2.0';
   static const String _fonts = 'MiSans / HarmonyOS Sans SC';
   static const String _fontSource = 'https://hyperos.mi.com/font/download';
+  static const String _attributionDoc = 'docs/THIRD_PARTY_ATTRIBUTIONS.md';
+  static const List<String> _runtimeThirdParty = [
+    'TP-RUN-001 three.js + addons（MIT）',
+    'TP-RUN-002 @pixiv/three-vrm（MIT）',
+    'TP-RUN-003 @pixiv/three-vrm-animation（MIT）',
+    'TP-RUN-004 es-module-shims（MIT）',
+    'TP-RUN-008 OpenCode CLI / opencode-ai（MIT）',
+  ];
+  static const List<String> _studyReferences = [
+    'TP-REF-001 free-OKC（MIT）',
+    'TP-REF-002 openclaw（MIT）',
+    'TP-REF-003 openclaw-skills（MIT）',
+  ];
 
   @override
   Widget build(BuildContext context) {
@@ -1232,11 +2039,48 @@ class _AppInfoSection extends StatelessWidget {
                 const SizedBox(height: 8),
                 const _InfoRow(label: '字体来源', value: _fontSource),
                 const SizedBox(height: 12),
+                const _InfoRow(label: '第三方声明', value: _attributionDoc),
+                const SizedBox(height: 12),
                 Text(
                   '本软件特别注明：界面排版使用了 MiSans 字体。',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: context.chrome.textSecondary,
                     fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  '运行时第三方（节选）',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                ..._runtimeThirdParty.map(
+                  (entry) => Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: SelectableText(entry),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  '学习/引用项目（节选）',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                ..._studyReferences.map(
+                  (entry) => Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: SelectableText(entry),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '完整编号、路径、来源与许可证请查看 $_attributionDoc',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: context.chrome.textSecondary,
                   ),
                 ),
               ],
@@ -1998,6 +2842,43 @@ String _personaStyleLabel(PersonaStyle style) {
       return '毒舌';
     case PersonaStyle.cute:
       return '软萌';
+  }
+}
+
+String _paletteLabel(UiPalette palette) {
+  switch (palette) {
+    case UiPalette.jade:
+      return '翡翠绿';
+    case UiPalette.ocean:
+      return '深海蓝';
+    case UiPalette.ember:
+      return '琥珀橙';
+    case UiPalette.rose:
+      return '玫瑰粉';
+    case UiPalette.slate:
+      return '石板灰';
+  }
+}
+
+String _glassLabel(UiGlass glass) {
+  switch (glass) {
+    case UiGlass.soft:
+      return '柔和';
+    case UiGlass.standard:
+      return '标准';
+    case UiGlass.strong:
+      return '强烈';
+  }
+}
+
+String _layoutPresetHint(LayoutPreset preset) {
+  switch (preset) {
+    case LayoutPreset.balanced:
+      return '综合模式：会话列表 + 对话区 + 3D 模型同屏显示。';
+    case LayoutPreset.focusChat:
+      return '专注对话：隐藏 3D 模型，聚焦聊天内容。';
+    case LayoutPreset.focusPresentation:
+      return '专注演示：扩大 3D 模型区域，并在模型上方显示气泡。';
   }
 }
 

@@ -1,8 +1,6 @@
 import 'dart:async';
 import 'dart:io' show Platform;
-import 'dart:ui';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter_acrylic/flutter_acrylic.dart';
 import 'package:tray_manager/tray_manager.dart';
 

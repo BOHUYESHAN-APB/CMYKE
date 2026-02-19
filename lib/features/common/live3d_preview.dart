@@ -8,6 +8,7 @@ import 'package:webview_windows/webview_windows.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../../core/models/app_settings.dart';
 import '../../core/repositories/settings_repository.dart';
 import '../../core/services/runtime_hub.dart';
 import '../../ui/theme/cmyke_chrome.dart';
@@ -26,6 +27,7 @@ class Live3DPreview extends StatefulWidget {
     this.transparentBackground = false,
     this.petMode = false,
     this.settingsRepository,
+    this.speechText,
   });
 
   final double height;
@@ -34,6 +36,7 @@ class Live3DPreview extends StatefulWidget {
   final bool transparentBackground;
   final bool petMode;
   final SettingsRepository? settingsRepository;
+  final String? speechText;
 
   @override
   State<Live3DPreview> createState() => _Live3DPreviewState();
@@ -60,6 +63,8 @@ class _Live3DPreviewState extends State<Live3DPreview> {
   Map<String, dynamic>? _vrmaCatalog;
   bool _autoEnabledCursorFollow = false;
   bool _petMode = false;
+  String? _renderQuality;
+  int? _fpsCap;
 
   void _handleHoverEnter() {
     if (!mounted) return;
@@ -120,6 +125,7 @@ class _Live3DPreviewState extends State<Live3DPreview> {
       return;
     }
     _syncPetModeFlag(force: true);
+    _syncRenderSettings(force: true);
     widget.settingsRepository?.addListener(_handleSettingsChanged);
     _prepareBundle().then((_) {
       if (!mounted) return;
@@ -145,6 +151,7 @@ class _Live3DPreviewState extends State<Live3DPreview> {
 
   void _handleSettingsChanged() {
     _syncPetModeFlag();
+    _syncRenderSettings();
   }
 
   void _syncPetModeFlag({bool force = false}) {
@@ -154,6 +161,31 @@ class _Live3DPreviewState extends State<Live3DPreview> {
     }
     _petMode = next;
     _hub.live3dBridge.setPetMode(_petMode);
+  }
+
+  int _fpsCapValue(Live3dFpsCap cap) {
+    switch (cap) {
+      case Live3dFpsCap.fps30:
+        return 30;
+      case Live3dFpsCap.fps60:
+        return 60;
+      case Live3dFpsCap.unlimited:
+        return 0;
+    }
+  }
+
+  void _syncRenderSettings({bool force = false}) {
+    final settings = widget.settingsRepository?.settings;
+    if (settings == null) return;
+    final nextQuality = settings.live3dRenderQuality.name;
+    final nextFps = _fpsCapValue(settings.live3dFpsCap);
+    if (!force && nextQuality == _renderQuality && nextFps == _fpsCap) {
+      return;
+    }
+    _renderQuality = nextQuality;
+    _fpsCap = nextFps;
+    _hub.live3dBridge.setRenderQuality(nextQuality);
+    _hub.live3dBridge.setFpsCap(nextFps);
   }
 
   Future<void> _prepareBundle() async {
@@ -545,14 +577,19 @@ class _Live3DPreviewState extends State<Live3DPreview> {
         }
         _setStatus('viewer: $message');
       });
-      if (widget.transparentBackground || widget.petMode) {
-        final params = <String, String>{};
-        if (widget.transparentBackground) {
-          params['transparent'] = '1';
-        }
-        if (widget.petMode) {
-          params['pet'] = '1';
-        }
+      final params = <String, String>{};
+      if (widget.transparentBackground) {
+        params['transparent'] = '1';
+      }
+      if (widget.petMode) {
+        params['pet'] = '1';
+      }
+      final settings = widget.settingsRepository?.settings;
+      if (settings != null) {
+        params['quality'] = settings.live3dRenderQuality.name;
+        params['fps'] = _fpsCapValue(settings.live3dFpsCap).toString();
+      }
+      if (params.isNotEmpty) {
         final query = params.entries
             .map((e) => '${e.key}=${Uri.encodeComponent(e.value)}')
             .join('&');
@@ -563,6 +600,7 @@ class _Live3DPreviewState extends State<Live3DPreview> {
       _hub.live3dBridge.attachJsInvoker(
         (script) => controller.executeScript(script),
       );
+      _syncRenderSettings(force: true);
       setState(() {
         _winController = controller;
         _winReady = true;
@@ -755,6 +793,20 @@ class _Live3DPreviewState extends State<Live3DPreview> {
               child: viewer,
             ),
           ),
+          if (widget.speechText != null &&
+              widget.speechText!.trim().isNotEmpty)
+            Positioned(
+              top: 14,
+              left: 12,
+              right: 12,
+              child: IgnorePointer(
+                child: Center(
+                  child: _SpeechBubble(
+                    text: widget.speechText!.trim(),
+                  ),
+                ),
+              ),
+            ),
           if (widget.debug) ...[
             Positioned(
               left: 12,
@@ -822,6 +874,54 @@ class _Live3DPreviewState extends State<Live3DPreview> {
       onEnter: (_) => _handleHoverEnter(),
       onExit: (_) => _handleHoverExit(),
       child: content,
+    );
+  }
+}
+
+class _SpeechBubble extends StatelessWidget {
+  const _SpeechBubble({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final chrome = context.chrome;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        FrostedSurface(
+          blurSigma: chrome.blurSigma * 0.8,
+          shadows: const [],
+          highlight: true,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          borderRadius: BorderRadius.circular(16),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 320),
+            child: Text(
+              text,
+              maxLines: 4,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Transform.rotate(
+          angle: 0.785398, // 45deg
+          child: Container(
+            width: 12,
+            height: 12,
+            decoration: BoxDecoration(
+              color: chrome.frostedTint,
+              border: Border.all(color: chrome.frostedBorder),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

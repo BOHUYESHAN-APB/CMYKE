@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../core/models/app_settings.dart';
+
 @immutable
 class CmykeChrome extends ThemeExtension<CmykeChrome> {
   const CmykeChrome({
@@ -47,59 +49,131 @@ class CmykeChrome extends ThemeExtension<CmykeChrome> {
 
   final List<BoxShadow> elevationShadow;
 
-  static CmykeChrome light() => const CmykeChrome(
-    accent: Color(0xFF20B58F),
-    textPrimary: Color(0xFF14171D),
-    textSecondary: Color(0xFF5C6372),
-    separator: Color(0x1A1B2A3A),
-    separatorStrong: Color(0x331B2A3A),
-    background0: Color(0xFFF7F6F3),
-    background1: Color(0xFFF1F4F7),
-    surface: Color(0xFFFDFCF9),
-    surfaceElevated: Color(0xFFFFFFFF),
-    frostedTint: Color(0xC8FFFFFF),
-    frostedBorder: Color(0x33FFFFFF),
-    frostedHighlight: Color(0x40FFFFFF),
-    radiusM: 14,
-    radiusL: 18,
-    radiusXL: 26,
-    blurSigma: 18,
-    elevationShadow: [
-      BoxShadow(
-        color: Color(0x14000000),
-        blurRadius: 24,
-        offset: Offset(0, 10),
-      ),
-      BoxShadow(color: Color(0x0A000000), blurRadius: 6, offset: Offset(0, 2)),
-    ],
-  );
+  static CmykeChrome light({
+    UiPalette palette = UiPalette.jade,
+    UiGlass glass = UiGlass.standard,
+  }) {
+    final tokens = _paletteTokens[palette] ?? _paletteTokens[UiPalette.jade]!;
+    final accent = tokens.accentLight;
 
-  static CmykeChrome dark() => const CmykeChrome(
-    accent: Color(0xFF32D2A5),
-    textPrimary: Color(0xFFEAF0F7),
-    textSecondary: Color(0xFFB2BDCC),
-    separator: Color(0x1AFFFFFF),
-    separatorStrong: Color(0x33FFFFFF),
-    background0: Color(0xFF0B0D10),
-    background1: Color(0xFF121722),
-    surface: Color(0xFF12161C),
-    surfaceElevated: Color(0xFF171D26),
-    frostedTint: Color(0x66161C26),
-    frostedBorder: Color(0x33FFFFFF),
-    frostedHighlight: Color(0x14FFFFFF),
-    radiusM: 14,
-    radiusL: 18,
-    radiusXL: 26,
-    blurSigma: 22,
-    elevationShadow: [
-      BoxShadow(
-        color: Color(0x80000000),
-        blurRadius: 28,
-        offset: Offset(0, 14),
-      ),
-      BoxShadow(color: Color(0x40000000), blurRadius: 8, offset: Offset(0, 3)),
-    ],
-  );
+    const baseBackground0 = Color(0xFFF7F6F3);
+    const baseBackground1 = Color(0xFFF1F4F7);
+    const baseSurface = Color(0xFFFDFCF9);
+    const baseSurfaceElevated = Color(0xFFFFFFFF);
+
+    final background0 = _tint(baseBackground0, tokens.tintLight, 0.18);
+    final background1 = _tint(baseBackground1, tokens.tintLight, 0.34);
+    final surface = _tint(baseSurface, tokens.tintLight, 0.12);
+    final surfaceElevated = _tint(baseSurfaceElevated, tokens.tintLight, 0.08);
+
+    final blurSigma = 18 * _glassBlur(glass);
+    final frostedTint = _withOpacity(
+      _tint(const Color(0xFFFFFFFF), tokens.tintLight, 0.18),
+      _glassAlpha(glass, base: 0.78),
+    );
+    final frostedBorder = _withOpacity(
+      _tint(const Color(0xFFFFFFFF), tokens.tintLight, 0.12),
+      _glassBorderAlpha(glass, base: 0.2),
+    );
+    final frostedHighlight = _withOpacity(
+      _tint(const Color(0xFFFFFFFF), tokens.tintLight, 0.22),
+      _glassHighlightAlpha(glass, base: 0.25),
+    );
+
+    return CmykeChrome(
+      accent: accent,
+      textPrimary: const Color(0xFF14171D),
+      textSecondary: const Color(0xFF5C6372),
+      separator: const Color(0x1A1B2A3A),
+      separatorStrong: const Color(0x331B2A3A),
+      background0: background0,
+      background1: background1,
+      surface: surface,
+      surfaceElevated: surfaceElevated,
+      frostedTint: frostedTint,
+      frostedBorder: frostedBorder,
+      frostedHighlight: frostedHighlight,
+      radiusM: 14,
+      radiusL: 18,
+      radiusXL: 26,
+      blurSigma: blurSigma,
+      elevationShadow: const [
+        BoxShadow(
+          color: Color(0x14000000),
+          blurRadius: 24,
+          offset: Offset(0, 10),
+        ),
+        BoxShadow(
+          color: Color(0x0A000000),
+          blurRadius: 6,
+          offset: Offset(0, 2),
+        ),
+      ],
+    );
+  }
+
+  static CmykeChrome dark({
+    UiPalette palette = UiPalette.jade,
+    UiGlass glass = UiGlass.standard,
+  }) {
+    final tokens = _paletteTokens[palette] ?? _paletteTokens[UiPalette.jade]!;
+    final accent = tokens.accentDark;
+
+    const baseBackground0 = Color(0xFF0B0D10);
+    const baseBackground1 = Color(0xFF121722);
+    const baseSurface = Color(0xFF12161C);
+    const baseSurfaceElevated = Color(0xFF171D26);
+
+    final background0 = _tint(baseBackground0, tokens.tintDark, 0.16);
+    final background1 = _tint(baseBackground1, tokens.tintDark, 0.24);
+    final surface = _tint(baseSurface, tokens.tintDark, 0.14);
+    final surfaceElevated = _tint(baseSurfaceElevated, tokens.tintDark, 0.12);
+
+    final blurSigma = 22 * _glassBlur(glass);
+    final frostedTint = _withOpacity(
+      _tint(const Color(0xFF161C26), tokens.tintDark, 0.28),
+      _glassAlpha(glass, base: 0.4),
+    );
+    final frostedBorder = _withOpacity(
+      _tint(const Color(0xFFFFFFFF), tokens.tintDark, 0.08),
+      _glassBorderAlpha(glass, base: 0.2),
+    );
+    final frostedHighlight = _withOpacity(
+      _tint(const Color(0xFFFFFFFF), tokens.tintDark, 0.1),
+      _glassHighlightAlpha(glass, base: 0.08),
+    );
+
+    return CmykeChrome(
+      accent: accent,
+      textPrimary: const Color(0xFFEAF0F7),
+      textSecondary: const Color(0xFFB2BDCC),
+      separator: const Color(0x1AFFFFFF),
+      separatorStrong: const Color(0x33FFFFFF),
+      background0: background0,
+      background1: background1,
+      surface: surface,
+      surfaceElevated: surfaceElevated,
+      frostedTint: frostedTint,
+      frostedBorder: frostedBorder,
+      frostedHighlight: frostedHighlight,
+      radiusM: 14,
+      radiusL: 18,
+      radiusXL: 26,
+      blurSigma: blurSigma,
+      elevationShadow: const [
+        BoxShadow(
+          color: Color(0x80000000),
+          blurRadius: 28,
+          offset: Offset(0, 14),
+        ),
+        BoxShadow(
+          color: Color(0x40000000),
+          blurRadius: 8,
+          offset: Offset(0, 3),
+        ),
+      ],
+    );
+  }
 
   @override
   CmykeChrome copyWith({
@@ -173,6 +247,106 @@ class CmykeChrome extends ThemeExtension<CmykeChrome> {
   }
 
   static double lerpDouble(double a, double b, double t) => a + (b - a) * t;
+}
+
+class _PaletteTokens {
+  const _PaletteTokens({
+    required this.accentLight,
+    required this.accentDark,
+    required this.tintLight,
+    required this.tintDark,
+  });
+
+  final Color accentLight;
+  final Color accentDark;
+  final Color tintLight;
+  final Color tintDark;
+}
+
+const Map<UiPalette, _PaletteTokens> _paletteTokens = {
+  UiPalette.jade: _PaletteTokens(
+    accentLight: Color(0xFF20B58F),
+    accentDark: Color(0xFF32D2A5),
+    tintLight: Color(0xFFDAF4EC),
+    tintDark: Color(0xFF0F2A25),
+  ),
+  UiPalette.ocean: _PaletteTokens(
+    accentLight: Color(0xFF3AA0FF),
+    accentDark: Color(0xFF5BB6FF),
+    tintLight: Color(0xFFDCEBFF),
+    tintDark: Color(0xFF132238),
+  ),
+  UiPalette.ember: _PaletteTokens(
+    accentLight: Color(0xFFFF8A3D),
+    accentDark: Color(0xFFFFA05C),
+    tintLight: Color(0xFFFFE8D7),
+    tintDark: Color(0xFF2B1A12),
+  ),
+  UiPalette.rose: _PaletteTokens(
+    accentLight: Color(0xFFFF5C8A),
+    accentDark: Color(0xFFFF78A5),
+    tintLight: Color(0xFFFFDCE6),
+    tintDark: Color(0xFF2E1621),
+  ),
+  UiPalette.slate: _PaletteTokens(
+    accentLight: Color(0xFF5C748A),
+    accentDark: Color(0xFF8DA2B5),
+    tintLight: Color(0xFFE6ECEF),
+    tintDark: Color(0xFF141C24),
+  ),
+};
+
+Color _tint(Color base, Color tint, double amount) {
+  return Color.lerp(base, tint, amount) ?? base;
+}
+
+Color _withOpacity(Color color, double opacity) {
+  final value = opacity.clamp(0.0, 1.0);
+  return color.withOpacity(value);
+}
+
+double _glassBlur(UiGlass glass) {
+  switch (glass) {
+    case UiGlass.soft:
+      return 0.82;
+    case UiGlass.standard:
+      return 1.0;
+    case UiGlass.strong:
+      return 1.22;
+  }
+}
+
+double _glassAlpha(UiGlass glass, {required double base}) {
+  switch (glass) {
+    case UiGlass.soft:
+      return (base * 0.85).clamp(0.0, 1.0);
+    case UiGlass.standard:
+      return base;
+    case UiGlass.strong:
+      return (base * 1.1).clamp(0.0, 1.0);
+  }
+}
+
+double _glassBorderAlpha(UiGlass glass, {required double base}) {
+  switch (glass) {
+    case UiGlass.soft:
+      return (base * 0.7).clamp(0.0, 1.0);
+    case UiGlass.standard:
+      return base;
+    case UiGlass.strong:
+      return (base * 1.05).clamp(0.0, 1.0);
+  }
+}
+
+double _glassHighlightAlpha(UiGlass glass, {required double base}) {
+  switch (glass) {
+    case UiGlass.soft:
+      return (base * 0.7).clamp(0.0, 1.0);
+    case UiGlass.standard:
+      return base;
+    case UiGlass.strong:
+      return (base * 1.15).clamp(0.0, 1.0);
+  }
 }
 
 extension CmykeChromeContext on BuildContext {

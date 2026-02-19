@@ -10,6 +10,7 @@ import 'core/repositories/settings_repository.dart';
 import 'core/services/local_database.dart';
 import 'core/services/local_storage.dart';
 import 'core/services/runtime_hub.dart';
+import 'core/services/workspace_service.dart';
 import 'features/chat/chat_screen.dart';
 import 'features/pet/pet_screen.dart';
 import 'ui/theme/cmyke_theme.dart';
@@ -28,6 +29,7 @@ class _CMYKEAppState extends State<CMYKEApp> {
   late final ChatRepository _chatRepository;
   late final MemoryRepository _memoryRepository;
   late final SettingsRepository _settingsRepository;
+  late final WorkspaceService _workspaceService;
   bool _ready = false;
   bool _embeddingConfigMissing = false;
   String? _error;
@@ -37,6 +39,7 @@ class _CMYKEAppState extends State<CMYKEApp> {
     super.initState();
     _database = LocalDatabase();
     _legacyStorage = LocalStorage();
+    _workspaceService = WorkspaceService();
     _settingsRepository = SettingsRepository(
       database: _database,
       legacyStorage: _legacyStorage,
@@ -44,6 +47,7 @@ class _CMYKEAppState extends State<CMYKEApp> {
     _chatRepository = ChatRepository(
       database: _database,
       legacyStorage: _legacyStorage,
+      workspaceService: _workspaceService,
     );
     _memoryRepository = MemoryRepository(
       database: _database,
@@ -71,6 +75,7 @@ class _CMYKEAppState extends State<CMYKEApp> {
         _memoryRepository.load(),
         _settingsRepository.load(),
       ]);
+      RuntimeHub.instance.configureToolGateway(_settingsRepository.settings);
       final savedModelPath = _settingsRepository.settings.live3dModelPath
           ?.trim();
       if (savedModelPath != null && savedModelPath.isNotEmpty) {
@@ -102,13 +107,25 @@ class _CMYKEAppState extends State<CMYKEApp> {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'CMYKE',
-      debugShowCheckedModeBanner: false,
-      theme: CmykeTheme.light(),
-      darkTheme: CmykeTheme.dark(),
-      themeMode: ThemeMode.system,
-      home: _buildHome(),
+    return AnimatedBuilder(
+      animation: _settingsRepository,
+      builder: (context, _) {
+        final settings = _settingsRepository.settings;
+        return MaterialApp(
+          title: 'CMYKE',
+          debugShowCheckedModeBanner: false,
+          theme: CmykeTheme.light(
+            palette: settings.uiPalette,
+            glass: settings.uiGlass,
+          ),
+          darkTheme: CmykeTheme.dark(
+            palette: settings.uiPalette,
+            glass: settings.uiGlass,
+          ),
+          themeMode: ThemeMode.system,
+          home: _buildHome(),
+        );
+      },
     );
   }
 
@@ -130,6 +147,7 @@ class _CMYKEAppState extends State<CMYKEApp> {
       chatRepository: _chatRepository,
       memoryRepository: _memoryRepository,
       settingsRepository: _settingsRepository,
+      workspaceService: _workspaceService,
       embeddingConfigMissing: _embeddingConfigMissing,
     );
   }
@@ -177,6 +195,7 @@ class _CMYKEAppState extends State<CMYKEApp> {
     if (!_ready || !mounted) {
       return;
     }
+    RuntimeHub.instance.configureToolGateway(_settingsRepository.settings);
     setState(() {
       _embeddingConfigMissing = _isEmbeddingMissing();
     });

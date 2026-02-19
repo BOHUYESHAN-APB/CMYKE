@@ -110,6 +110,8 @@ class Live3DBridge {
   bool _cursorFollowEnabled = false;
   bool _petMode = false;
   double _petZoom = 1.0;
+  String _renderQuality = 'balanced';
+  int _fpsCap = 60;
   late final StreamSubscription<ExpressionEvent> _expressionSub;
   late final StreamSubscription<StageAction> _stageSub;
   late final StreamSubscription<LipSyncFrame> _lipSub;
@@ -133,6 +135,8 @@ class Live3DBridge {
     setCursorFollow(_cursorFollowEnabled);
     setPetMode(_petMode);
     setPetZoom(_petZoom);
+    setRenderQuality(_renderQuality);
+    setFpsCap(_fpsCap);
   }
 
   void detachJsInvoker() {
@@ -205,6 +209,20 @@ class Live3DBridge {
     _runJs(
       'window.setPetZoom && window.setPetZoom(${next.toStringAsFixed(3)});',
     );
+  }
+
+  void setRenderQuality(String quality) {
+    final trimmed = quality.trim();
+    if (trimmed.isEmpty) return;
+    _renderQuality = trimmed;
+    _runJs(
+      'window.setRenderQuality && window.setRenderQuality(${jsonEncode(trimmed)});',
+    );
+  }
+
+  void setFpsCap(int fps) {
+    _fpsCap = fps < 0 ? 0 : fps;
+    _runJs('window.setFpsCap && window.setFpsCap(${_fpsCap});');
   }
 
   /// Play a named motion (VRMA catalog id / file name / url / procedural id).

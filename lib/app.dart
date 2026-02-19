@@ -1,6 +1,7 @@
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 
 import 'core/models/app_settings.dart';
 import 'core/models/provider_config.dart';
@@ -10,6 +11,7 @@ import 'core/repositories/settings_repository.dart';
 import 'core/services/local_database.dart';
 import 'core/services/local_storage.dart';
 import 'core/services/runtime_hub.dart';
+import 'core/services/tool_gateway_bootstrapper.dart';
 import 'core/services/workspace_service.dart';
 import 'features/chat/chat_screen.dart';
 import 'features/pet/pet_screen.dart';
@@ -30,6 +32,7 @@ class _CMYKEAppState extends State<CMYKEApp> {
   late final MemoryRepository _memoryRepository;
   late final SettingsRepository _settingsRepository;
   late final WorkspaceService _workspaceService;
+  late final ToolGatewayBootstrapper _toolGatewayBootstrapper;
   bool _ready = false;
   bool _embeddingConfigMissing = false;
   String? _error;
@@ -44,6 +47,7 @@ class _CMYKEAppState extends State<CMYKEApp> {
       database: _database,
       legacyStorage: _legacyStorage,
     );
+    _toolGatewayBootstrapper = ToolGatewayBootstrapper();
     _chatRepository = ChatRepository(
       database: _database,
       legacyStorage: _legacyStorage,
@@ -76,6 +80,18 @@ class _CMYKEAppState extends State<CMYKEApp> {
         _settingsRepository.load(),
       ]);
       RuntimeHub.instance.configureToolGateway(_settingsRepository.settings);
+      // Desktop release target: bundle backend + auto-start when enabled, and
+      // best-effort auto-pair for a smoother out-of-box experience.
+      if (!Platform.environment.containsKey('FLUTTER_TEST')) {
+        final settings = _settingsRepository.settings;
+        final allowAutoStartLocal = kReleaseMode && shouldAutoStartToolGateway(settings);
+        await _toolGatewayBootstrapper.ensureReady(
+          settingsRepository: _settingsRepository,
+          allowAutoStartLocal: allowAutoStartLocal,
+          allowAutoPairing: Platform.isWindows || Platform.isMacOS || Platform.isLinux,
+        );
+        RuntimeHub.instance.configureToolGateway(_settingsRepository.settings);
+      }
       final savedModelPath = _settingsRepository.settings.live3dModelPath
           ?.trim();
       if (savedModelPath != null && savedModelPath.isNotEmpty) {
@@ -101,6 +117,7 @@ class _CMYKEAppState extends State<CMYKEApp> {
     _settingsRepository.removeListener(_handleSettingsChanged);
     PetDesktopController.instance.detach(_settingsRepository);
     _settingsRepository.dispose();
+    _toolGatewayBootstrapper.dispose();
     _database.close();
     super.dispose();
   }

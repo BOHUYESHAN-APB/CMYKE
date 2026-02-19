@@ -49,12 +49,14 @@ class ChatExportService {
     required Map<String, dynamic> metadata,
     required DeepResearchExportFormat format,
     String filenamePrefix = 'cmyke_deep_research',
+    Directory? outputDir,
   }) {
     return _deepResearchExportService.exportHtml(
       html: html,
       metadata: metadata,
       format: format,
       filenamePrefix: filenamePrefix,
+      outputDir: outputDir,
     );
   }
 

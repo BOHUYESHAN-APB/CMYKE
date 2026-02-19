@@ -12,6 +12,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use std::io;
 use tokio::{
     fs,
     io::{AsyncReadExt, AsyncWriteExt},
@@ -141,6 +142,56 @@ struct OpencodeRunResponse {
     trace_id: Option<String>,
     files_written: Vec<String>,
     duration_ms: u128,
+    workspace_root: String,
+    log_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OpencodeSkillsInstalledRequest {
+    pairing_token: Option<String>,
+    workspace: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OpencodeSkillsInstalledResponse {
+    ok: bool,
+    skills: Vec<String>,
+    opencode_root: String,
+    config_path: String,
+    config_dir: String,
+    skill_dir: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+enum OpencodeSkillSource {
+    /// Clone a repo, then scan for SKILL.md under `root` (default: "skills").
+    Git {
+        url: String,
+        #[serde(rename = "ref")]
+        r#ref: Option<String>,
+        root: Option<String>,
+    },
+    /// Scan a local directory for SKILL.md under `root` (default: ".").
+    Local { path: String, root: Option<String> },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OpencodeSkillsInstallRequest {
+    pairing_token: Option<String>,
+    workspace: Option<String>,
+    source: OpencodeSkillSource,
+    overwrite: Option<bool>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OpencodeSkillsInstallResponse {
+    ok: bool,
+    installed: Vec<String>,
+    skipped: Vec<String>,
+    errors: Vec<String>,
+    skill_dir: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -302,8 +353,8 @@ async fn opencode_run(
     })?;
 
     let timeout_ms = clamp_timeout_ms(payload.timeout_ms);
-    let workspace_root =
-        resolve_workspace_root(payload.workspace.as_deref(), session_id).map_err(|err| {
+    let workspace_container =
+        resolve_workspace_container_root(payload.workspace.as_deref()).map_err(|err| {
             (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
@@ -312,6 +363,7 @@ async fn opencode_run(
                 }),
             )
         })?;
+    let workspace_root = workspace_container.join(session_id);
     ensure_workspace_dirs(&workspace_root)
         .await
         .map_err(|err| {
@@ -350,6 +402,8 @@ async fn opencode_run(
     tracing::info!(
         trace_id = %trace_id,
         session_id = %session_id,
+        workspace_root = %workspace_root.to_string_lossy(),
+        log_path = %opencode_log_path.to_string_lossy(),
         "opencode run started"
     );
 
@@ -387,12 +441,25 @@ async fn opencode_run(
         ));
     }
 
-    let mut cmd = Command::new("opencode");
+    let mut cmd = Command::new(resolve_opencode_bin());
     cmd.arg("run");
     cmd.arg(message);
     cmd.current_dir(&cwd);
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
+
+    // Ensure a shared OpenCode config/skill store exists for this workspace container
+    // so that skills are reusable across sessions while keeping per-session sandboxes.
+    //
+    // Layout:
+    //   <workspace_container>/_shared/opencode/opencode.jsonc
+    //   <workspace_container>/_shared/opencode/.opencode/skill/<skill>/SKILL.md
+    let opencode_root = workspace_container.join("_shared").join("opencode");
+    if let Ok((config_path, config_dir)) = ensure_opencode_project_config(&opencode_root).await {
+        cmd.env("OPENCODE_CONFIG", config_path);
+        cmd.env("OPENCODE_CONFIG_DIR", config_dir);
+        cmd.env("OPENCODE_DISABLE_AUTOUPDATE", "true");
+    }
 
     if let Some(command) = payload.command.as_deref() {
         cmd.arg("--command").arg(command);
@@ -455,6 +522,8 @@ async fn opencode_run(
                 trace_id: Some(trace_id.clone()),
                 files_written: Vec::new(),
                 duration_ms: start.elapsed().as_millis(),
+                workspace_root: workspace_root.to_string_lossy().to_string(),
+                log_path: opencode_log_path.to_string_lossy().to_string(),
             };
             if let Err(log_err) = append_jsonl_log(
                 &opencode_log_path,
@@ -521,6 +590,8 @@ async fn opencode_run(
                     trace_id: Some(trace_id.clone()),
                     files_written: Vec::new(),
                     duration_ms: start.elapsed().as_millis(),
+                    workspace_root: workspace_root.to_string_lossy().to_string(),
+                    log_path: opencode_log_path.to_string_lossy().to_string(),
                 };
                 if let Err(log_err) = append_jsonl_log(
                     &opencode_log_path,
@@ -599,6 +670,8 @@ async fn opencode_run(
         trace_id: Some(trace_id.clone()),
         files_written: Vec::new(),
         duration_ms: start.elapsed().as_millis(),
+        workspace_root: workspace_root.to_string_lossy().to_string(),
+        log_path: opencode_log_path.to_string_lossy().to_string(),
     };
     if let Err(log_err) = append_jsonl_log(
         &opencode_log_path,
@@ -624,6 +697,7 @@ async fn opencode_run(
         ok = response.ok,
         exit_code = response.exit_code,
         duration_ms = response.duration_ms,
+        log_path = %response.log_path,
         "opencode run finished"
     );
 
@@ -638,6 +712,35 @@ fn trim_log<T>(log: &mut VecDeque<T>, max: usize) {
 
 fn extract_pairing_token(headers: &HeaderMap, payload: &OpencodeRunRequest) -> Option<String> {
     if let Some(token) = payload.pairing_token.as_ref() {
+        let trimmed = token.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    if let Some(value) = headers.get("x-pairing-token") {
+        if let Ok(token) = value.to_str() {
+            let trimmed = token.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    if let Some(value) = headers.get("authorization") {
+        if let Ok(auth) = value.to_str() {
+            let auth = auth.trim();
+            if let Some(token) = auth.strip_prefix("Bearer ") {
+                let trimmed = token.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn extract_pairing_token_raw(headers: &HeaderMap, payload_token: Option<&str>) -> Option<String> {
+    if let Some(token) = payload_token {
         let trimmed = token.trim();
         if !trimmed.is_empty() {
             return Some(trimmed.to_string());
@@ -722,7 +825,7 @@ fn clamp_timeout_ms(timeout_ms: Option<u64>) -> u64 {
     timeout_ms.unwrap_or(default_ms).clamp(min_ms, max_ms)
 }
 
-fn resolve_workspace_root(workspace: Option<&str>, session_id: &str) -> Result<PathBuf, String> {
+fn resolve_workspace_container_root(workspace: Option<&str>) -> Result<PathBuf, String> {
     let base_root =
         std::env::var("CMYKE_WORKSPACE_ROOT").unwrap_or_else(|_| "workspace".to_string());
     let mut root = PathBuf::from(base_root);
@@ -736,7 +839,7 @@ fn resolve_workspace_root(workspace: Option<&str>, session_id: &str) -> Result<P
         }
         root = root.join(trimmed);
     }
-    Ok(root.join(session_id))
+    Ok(root)
 }
 
 fn resolve_workspace_path(root: &Path, rel: &str) -> Result<PathBuf, String> {
@@ -867,6 +970,633 @@ fn resolve_listen_addr() -> SocketAddr {
         .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], 4891)))
 }
 
+fn resolve_opencode_bin() -> PathBuf {
+    if let Ok(raw) = std::env::var("CMYKE_OPENCODE_BIN") {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidates: Vec<PathBuf> = if cfg!(windows) {
+                vec![
+                    dir.join("opencode.exe"),
+                    dir.join("opencode"),
+                    dir.join("tools").join("opencode.exe"),
+                ]
+            } else {
+                vec![dir.join("opencode"), dir.join("tools").join("opencode")]
+            };
+            for path in candidates {
+                if path.is_file() {
+                    return path;
+                }
+            }
+        }
+    }
+
+    PathBuf::from("opencode")
+}
+
+async fn ensure_opencode_project_config(
+    opencode_root: &Path,
+) -> Result<(PathBuf, PathBuf), String> {
+    let config_path = opencode_root.join("opencode.jsonc");
+    let config_dir = opencode_root.join(".opencode");
+    let skill_dir = config_dir.join("skill");
+
+    if let Err(err) = fs::create_dir_all(&skill_dir).await {
+        return Err(err.to_string());
+    }
+
+    // Only seed files if they don't exist, so the user/agent can edit freely.
+    if fs::metadata(&config_path).await.is_err() {
+        let seed = r#"{
+  // OpenCode project config (seeded by CMYKE gateway).
+  // Edit this file to control OpenCode behavior for this workspace (shared config/skills).
+  "$schema": "https://opencode.ai/config.json",
+  "autoupdate": false
+}
+"#;
+        if let Err(err) = fs::write(&config_path, seed).await {
+            return Err(err.to_string());
+        }
+    }
+
+    let skill_cmyke_policy = skill_dir.join("cmyke_policy").join("SKILL.md");
+    if fs::metadata(&skill_cmyke_policy).await.is_err() {
+        if let Some(parent) = skill_cmyke_policy.parent() {
+            let _ = fs::create_dir_all(parent).await;
+        }
+        let seed = r#"# CMYKE Policy
+
+You are running inside CMYKE's OpenCode tool gateway.
+
+Hard rules:
+- Do not output `[SPLIT]`.
+- Do not use Markdown code fences (no ```).
+- Prefer verifiable sources and include URLs when you cite facts.
+- Only read/write files inside the current session workspace.
+
+If you need to change OpenCode behavior, edit `opencode.jsonc` or files under `.opencode/` (stored under `workspace/_shared/opencode/`).
+"#;
+        let _ = fs::write(&skill_cmyke_policy, seed).await;
+    }
+
+    let skill_web_research = skill_dir.join("cmyke_web_research").join("SKILL.md");
+    if fs::metadata(&skill_web_research).await.is_err() {
+        if let Some(parent) = skill_web_research.parent() {
+            let _ = fs::create_dir_all(parent).await;
+        }
+        let seed = r#"# CMYKE Web Research
+
+When asked to research a topic:
+1) Run multiple complementary web searches (official docs, reputable media, comparison, and academic/papers if relevant).
+2) Extract key facts and list sources with URL + title + date if available.
+3) Mark anything you cannot verify as \"unverified\".
+4) Keep the output plain text (no Markdown code fences).
+"#;
+        let _ = fs::write(&skill_web_research, seed).await;
+    }
+
+    Ok((config_path, config_dir))
+}
+
+async fn require_valid_pairing(
+    state: &SharedState,
+    headers: &HeaderMap,
+    payload_token: Option<&str>,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    let token = extract_pairing_token_raw(headers, payload_token).ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorResponse {
+                ok: false,
+                error: "pairing token required".to_string(),
+            }),
+        )
+    })?;
+
+    let pairing_ok = {
+        let mut guard = state.lock().await;
+        cleanup_pairings(&mut guard);
+        guard.pairings.values().any(|p| p.token == token)
+    };
+    if !pairing_ok {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorResponse {
+                ok: false,
+                error: "invalid or expired pairing token".to_string(),
+            }),
+        ));
+    }
+    Ok(())
+}
+
+fn sanitize_skill_name(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for c in raw.chars() {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+            out.push(c);
+        } else {
+            out.push('_');
+        }
+    }
+    let trimmed = out.trim_matches('_').to_string();
+    if trimmed.is_empty() {
+        "skill".to_string()
+    } else {
+        trimmed
+    }
+}
+
+fn parse_github_owner_repo(url: &str) -> Option<(String, String)> {
+    let mut s = url.trim();
+    if s.is_empty() {
+        return None;
+    }
+    while s.ends_with('/') {
+        s = &s[..s.len() - 1];
+    }
+    if let Some(stripped) = s.strip_suffix(".git") {
+        s = stripped;
+    }
+    let idx = s.find("github.com")?;
+    let mut tail = &s[idx + "github.com".len()..];
+    // Handles formats:
+    // - https://github.com/owner/repo
+    // - git@github.com:owner/repo
+    tail = tail.trim_start_matches(['/', ':']);
+    let tail = tail.replace(':', "/");
+    let mut parts = tail
+        .split('/')
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .take(2);
+    let owner = parts.next()?.to_string();
+    let repo = parts.next()?.to_string();
+    Some((owner, repo))
+}
+
+fn derive_skill_name(repo_root: &Path, skill_dir: &Path) -> String {
+    if let Ok(rel) = skill_dir.strip_prefix(repo_root) {
+        let parts = rel
+            .components()
+            .filter_map(|c| match c {
+                Component::Normal(s) => s.to_str(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if parts.len() >= 3 && parts[0].eq_ignore_ascii_case("skills") {
+            return sanitize_skill_name(&format!("{}__{}", parts[1], parts[2]));
+        }
+    }
+    skill_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(sanitize_skill_name)
+        .unwrap_or_else(|| "skill".to_string())
+}
+
+fn contains_skill_md(dir: &Path) -> bool {
+    if dir.join("SKILL.md").is_file() {
+        return true;
+    }
+    dir.join("skill.md").is_file()
+}
+
+fn collect_skill_dirs(root: &Path, limit: usize) -> Result<Vec<PathBuf>, String> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        if contains_skill_md(&dir) {
+            out.push(dir.clone());
+            if out.len() >= limit {
+                break;
+            }
+            continue;
+        }
+        let read_dir = std::fs::read_dir(&dir).map_err(|e| e.to_string())?;
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                    if name == ".git" || name == "node_modules" || name == "target" {
+                        continue;
+                    }
+                }
+                stack.push(path);
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy();
+        if name == ".git" || name == "node_modules" || name == "target" {
+            continue;
+        }
+        let dst_path = dst.join(file_name);
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_recursive(&path, &dst_path)?;
+        } else if ty.is_file() {
+            if let Some(parent) = dst_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(&path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
+async fn opencode_skills_installed(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(payload): Json<OpencodeSkillsInstalledRequest>,
+) -> Result<Json<OpencodeSkillsInstalledResponse>, (StatusCode, Json<ErrorResponse>)> {
+    require_valid_pairing(&state, &headers, payload.pairing_token.as_deref()).await?;
+
+    let container =
+        resolve_workspace_container_root(payload.workspace.as_deref()).map_err(|err| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    ok: false,
+                    error: err,
+                }),
+            )
+        })?;
+    let opencode_root = container.join("_shared").join("opencode");
+
+    let (config_path, config_dir) = ensure_opencode_project_config(&opencode_root)
+        .await
+        .map_err(|err| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    ok: false,
+                    error: err,
+                }),
+            )
+        })?;
+    let skill_dir = config_dir.join("skill");
+
+    let mut skills = Vec::new();
+    if let Ok(mut rd) = fs::read_dir(&skill_dir).await {
+        while let Ok(Some(entry)) = rd.next_entry().await {
+            if let Ok(ft) = entry.file_type().await {
+                if ft.is_dir() {
+                    if let Some(name) = entry.file_name().to_str() {
+                        skills.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    skills.sort();
+
+    Ok(Json(OpencodeSkillsInstalledResponse {
+        ok: true,
+        skills,
+        opencode_root: opencode_root.to_string_lossy().to_string(),
+        config_path: config_path.to_string_lossy().to_string(),
+        config_dir: config_dir.to_string_lossy().to_string(),
+        skill_dir: skill_dir.to_string_lossy().to_string(),
+    }))
+}
+
+async fn opencode_skills_install(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(payload): Json<OpencodeSkillsInstallRequest>,
+) -> Result<Json<OpencodeSkillsInstallResponse>, (StatusCode, Json<ErrorResponse>)> {
+    require_valid_pairing(&state, &headers, payload.pairing_token.as_deref()).await?;
+
+    let container =
+        resolve_workspace_container_root(payload.workspace.as_deref()).map_err(|err| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    ok: false,
+                    error: err,
+                }),
+            )
+        })?;
+    let opencode_root = container.join("_shared").join("opencode");
+    let (_config_path, config_dir) = ensure_opencode_project_config(&opencode_root)
+        .await
+        .map_err(|err| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    ok: false,
+                    error: err,
+                }),
+            )
+        })?;
+    let skill_dir = config_dir.join("skill");
+
+    let trace_id = Uuid::new_v4().to_string();
+    let skills_log_path = opencode_root.join("logs").join("opencode_skills.jsonl");
+    let _ = fs::create_dir_all(opencode_root.join("logs")).await;
+    let _ = append_jsonl_log(
+        &skills_log_path,
+        serde_json::json!({
+            "event": "opencode_skills_install_start",
+            "at": now_ts(),
+            "trace_id": trace_id.as_str(),
+            "skill_dir": skill_dir.to_string_lossy(),
+            "overwrite": payload.overwrite.unwrap_or(false),
+            "limit": payload.limit.unwrap_or(500),
+        }),
+    )
+    .await;
+
+    let overwrite = payload.overwrite.unwrap_or(false);
+    let limit = payload.limit.unwrap_or(500).clamp(1, 5000);
+
+    let mut installed = Vec::new();
+    let mut skipped = Vec::new();
+    let mut errors = Vec::new();
+
+    match payload.source {
+        OpencodeSkillSource::Local { path, root } => {
+            let base = PathBuf::from(path.trim());
+            let base = if base.is_absolute() {
+                base
+            } else {
+                std::env::current_dir()
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join(base)
+            };
+            let scan_root = if let Some(r) = root.as_deref() {
+                base.join(r.trim())
+            } else {
+                base.clone()
+            };
+            if !scan_root.is_dir() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        ok: false,
+                        error: format!("local path not found: {}", scan_root.to_string_lossy()),
+                    }),
+                ));
+            }
+
+            let scan_root_for_worker = scan_root.clone();
+            let dirs = tokio::task::spawn_blocking(move || {
+                collect_skill_dirs(&scan_root_for_worker, limit)
+            })
+            .await
+            .map_err(|err| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        ok: false,
+                        error: err.to_string(),
+                    }),
+                )
+            })?
+            .map_err(|err| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        ok: false,
+                        error: err,
+                    }),
+                )
+            })?;
+
+            if dirs.is_empty() {
+                errors.push(format!(
+                    "no SKILL.md/skill.md found under local path: {}",
+                    scan_root.to_string_lossy()
+                ));
+            }
+
+            for dir in dirs {
+                let name = derive_skill_name(&base, &dir);
+                let dest = skill_dir.join(&name);
+                if dest.exists() && !overwrite {
+                    skipped.push(name);
+                    continue;
+                }
+                if dest.exists() && overwrite {
+                    let _ = fs::remove_dir_all(&dest).await;
+                }
+                let src = dir.clone();
+                let dst = dest.clone();
+                let res = tokio::task::spawn_blocking(move || copy_dir_recursive(&src, &dst)).await;
+                match res {
+                    Ok(Ok(())) => installed.push(name),
+                    Ok(Err(e)) => errors.push(format!("{}: {}", name, e)),
+                    Err(e) => errors.push(format!("{}: {}", name, e)),
+                }
+            }
+        }
+        OpencodeSkillSource::Git { url, r#ref, root } => {
+            let url = url.trim().to_string();
+            if url.is_empty() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        ok: false,
+                        error: "git url required".to_string(),
+                    }),
+                ));
+            }
+            let git_ref = r#ref.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty());
+            let scan_root_rel = root
+                .as_deref()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "skills".to_string());
+
+            let tmp_root = opencode_root.join("tmp");
+            let clone_dir = tmp_root.join(format!("skillrepo_{}", Uuid::new_v4()));
+            if let Err(err) = fs::create_dir_all(&clone_dir).await {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        ok: false,
+                        error: err.to_string(),
+                    }),
+                ));
+            }
+
+            let mut cmd = Command::new("git");
+            cmd.env("GIT_TERMINAL_PROMPT", "0");
+            cmd.arg("clone")
+                .arg("--depth")
+                .arg("1")
+                .arg("--no-tags")
+                .arg("--single-branch");
+            if let Some(r) = git_ref {
+                cmd.arg("--branch").arg(r);
+            }
+            cmd.arg(&url).arg(&clone_dir);
+            cmd.stdout(std::process::Stdio::piped());
+            cmd.stderr(std::process::Stdio::piped());
+
+            let clone_timeout_ms = std::env::var("CMYKE_SKILL_INSTALL_GIT_TIMEOUT_MS")
+                .ok()
+                .and_then(|raw| raw.parse::<u64>().ok())
+                .unwrap_or(600_000);
+            let started = Instant::now();
+            let output = timeout(Duration::from_millis(clone_timeout_ms), cmd.output())
+                .await
+                .map_err(|_| {
+                    (
+                        StatusCode::REQUEST_TIMEOUT,
+                        Json(ErrorResponse {
+                            ok: false,
+                            error: "git clone timeout".to_string(),
+                        }),
+                    )
+                })?
+                .map_err(|err| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            ok: false,
+                            error: err.to_string(),
+                        }),
+                    )
+                })?;
+            if !output.status.success() {
+                let _ = fs::remove_dir_all(&clone_dir).await;
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        ok: false,
+                        error: format!(
+                            "git clone failed: {}",
+                            String::from_utf8_lossy(&output.stderr)
+                        ),
+                    }),
+                ));
+            }
+            tracing::info!(
+                url = %url,
+                ref_name = %git_ref.unwrap_or(""),
+                duration_ms = started.elapsed().as_millis(),
+                "skill repo cloned"
+            );
+
+            let repo_root = clone_dir.clone();
+            let scan_root = clone_dir.join(&scan_root_rel);
+            if !scan_root.is_dir() {
+                let _ = fs::remove_dir_all(&clone_dir).await;
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        ok: false,
+                        error: format!("scan root not found in repo: {}", scan_root_rel),
+                    }),
+                ));
+            }
+
+            let repo_hint_name = parse_github_owner_repo(&url).map(|(owner, repo)| {
+                sanitize_skill_name(&format!("{owner}__{repo}"))
+            });
+
+            let scan_root_for_worker = scan_root.clone();
+            let dirs = tokio::task::spawn_blocking(move || {
+                collect_skill_dirs(&scan_root_for_worker, limit)
+            })
+            .await
+            .map_err(|err| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        ok: false,
+                        error: err.to_string(),
+                    }),
+                )
+            })?
+            .map_err(|err| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        ok: false,
+                        error: err,
+                    }),
+                )
+            })?;
+
+            if dirs.is_empty() {
+                errors.push(format!(
+                    "no SKILL.md/skill.md found under repo scan root: {}",
+                    scan_root_rel
+                ));
+            }
+
+            for dir in dirs {
+                let mut name = derive_skill_name(&repo_root, &dir);
+                // If the SKILL.md is at the repo root (or scan root), prefer a stable name
+                // derived from the repo URL (owner__repo) instead of the temp folder name.
+                if (dir == repo_root || dir == scan_root) && repo_hint_name.is_some() {
+                    name = repo_hint_name.clone().unwrap();
+                }
+                let dest = skill_dir.join(&name);
+                if dest.exists() && !overwrite {
+                    skipped.push(name);
+                    continue;
+                }
+                if dest.exists() && overwrite {
+                    let _ = fs::remove_dir_all(&dest).await;
+                }
+                let src = dir.clone();
+                let dst = dest.clone();
+                let res = tokio::task::spawn_blocking(move || copy_dir_recursive(&src, &dst)).await;
+                match res {
+                    Ok(Ok(())) => installed.push(name),
+                    Ok(Err(e)) => errors.push(format!("{}: {}", name, e)),
+                    Err(e) => errors.push(format!("{}: {}", name, e)),
+                }
+            }
+
+            let _ = fs::remove_dir_all(&clone_dir).await;
+        }
+    }
+
+    installed.sort();
+    skipped.sort();
+    errors.sort();
+
+    let _ = append_jsonl_log(
+        &skills_log_path,
+        serde_json::json!({
+            "event": "opencode_skills_install_finish",
+            "at": now_ts(),
+            "trace_id": trace_id.as_str(),
+            "installed": installed.len(),
+            "skipped": skipped.len(),
+            "errors": errors.len(),
+        }),
+    )
+    .await;
+
+    Ok(Json(OpencodeSkillsInstallResponse {
+        ok: errors.is_empty(),
+        installed,
+        skipped,
+        errors,
+        skill_dir: skill_dir.to_string_lossy().to_string(),
+    }))
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::registry()
@@ -886,6 +1616,11 @@ async fn main() {
         .route("/api/v1/gateway/inbound", post(inbound_message))
         .route("/api/v1/gateway/outbound", post(outbound_message))
         .route("/api/v1/opencode/run", post(opencode_run))
+        .route(
+            "/api/v1/opencode/skills/installed",
+            post(opencode_skills_installed),
+        )
+        .route("/api/v1/opencode/skills/install", post(opencode_skills_install))
         .with_state(shared_state);
 
     let addr = resolve_listen_addr();

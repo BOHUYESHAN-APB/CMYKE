@@ -25,21 +25,21 @@
 
 这些目录主要用于方案研究、协议对齐与迁移分析。默认不作为 CMYKE 发布包的直接运行时依赖。
 
-| ID | 项目 | 本地路径 | 用途边界 | 许可证 |
-|---|---|---|---|---|
-| TP-REF-001 | free-OKC | `Studying/deep_research/free-OKC` | 研究工具契约、VM 沙箱与工具注册机制 | MIT |
-| TP-REF-002 | openclaw | `Studying/deep_research/openclaw` | 研究网关守护进程、onboarding、通道接入设计 | MIT |
-| TP-REF-003 | openclaw-skills | `Studying/deep_research/openclaw-skills` | 研究 SKILL 工件结构与技能仓库组织 | MIT |
-| TP-REF-004 | nanobot-cn | `Studying/deep_research/nanobot-cn` | 研究代理流程与工程组织 | MIT |
-| TP-REF-005 | coze-studio | `Studying/deep_research/coze-studio` | 研究多资源编排与平台化 UI 组织 | Apache-2.0（见上游 README 徽标/仓库声明） |
+| ID | 项目 | 本地路径 | 用途边界 | 上游来源 | 许可证 |
+|---|---|---|---|---|---|
+| TP-REF-001 | free-OKC | `Studying/deep_research/free-OKC` | 研究工具契约、VM 沙箱与工具注册机制 | https://github.com/kexinoh/free-OKC | MIT |
+| TP-REF-002 | openclaw | `Studying/deep_research/openclaw` | 研究网关守护进程、onboarding、通道接入设计 | https://github.com/openclaw/openclaw | MIT |
+| TP-REF-003 | openclaw-skills | `Studying/deep_research/openclaw-skills` | 研究 SKILL 工件结构与技能仓库组织 | https://clawdhub.com（skills backup） | MIT |
+| TP-REF-004 | nanobot-cn | `Studying/deep_research/nanobot-cn` | 研究代理流程与工程组织 | https://github.com/HKUDS/nanobot | MIT |
+| TP-REF-005 | coze-studio | `Studying/deep_research/coze-studio` | 研究多资源编排与平台化 UI 组织 | https://github.com/coze-dev/coze-studio | Apache-2.0（见 `Studying/deep_research/coze-studio/LICENSE-APACHE`） |
+| TP-REF-006 | zeroclaw | `Studying/deep_research/zeroclaw` | 研究代理系统提示词、工具循环与工程组织 | https://github.com/zeroclaw-labs/zeroclaw | MIT |
+| TP-REF-007 | OpenManus | `Studying/universal-agent/openmanus/OpenManus-main` | Manus-like sandbox/flow、工具与技能工作流参考 | https://github.com/FoundationAgents/OpenManus | MIT |
+| TP-REF-008 | OpenCowork | `Studying/universal-agent/opencowork/opencowork-main` | 深度研究工作流与协作式编排参考 | （上游链接待确认；README 示例为占位 `yourusername/opencowork`） | MIT |
+| TP-REF-009 | DeepResearchAgent | `Studying/universal-agent/deepresearchagent/DeepResearchAgent-main` | 研究代理流程、browser/terminal/file 工具集参考 | https://github.com/SkyworkAI/DeepResearchAgent | Public Domain / The Unlicense（见上游 LICENSE） |
+| TP-REF-010 | Skywork Super Agents | `Studying/universal-agent/skywork-super-agents/Skywork-Super-Agents-main` | 多智能体分工与任务编排参考 | https://github.com/Skywork-ai/Skywork-Super-Agents | MIT |
+| TP-REF-011 | Ultimate Agent Skills Collection | （不克隆入仓库） | skills 仓库集合索引，用于挑选并导入可用 skills | https://github.com/ZhanlinCui/Ultimate-Agent-Skills-Collection | （以其仓库 LICENSE 为准，待确认） |
 
-## 3) 安全软件误报相关说明（与学习目录有关）
-
-- 部分学习目录包含“攻防测试、扫描器、脚本样例、模式库”等文本与代码片段，容易触发杀软启发式规则。
-- 这类命中常见于：`openclaw-skills` 的安全类 skill、以及本机 shell 历史/下载缓存等路径。
-- 建议发布时将学习目录与正式产物分离，并保留本清单用于合规说明。
-
-## 4) 维护规则
+## 3) 维护规则
 
 - 新增第三方代码/资源后，必须在本文件追加一条 `TP-*` 记录。
 - 记录至少包含：用途、路径、来源、许可证。

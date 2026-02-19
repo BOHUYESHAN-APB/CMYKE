@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 
@@ -14,6 +16,7 @@ import '../../core/services/runtime_hub.dart';
 import '../../ui/theme/cmyke_chrome.dart';
 import '../../ui/windows/audio_device_bridge.dart';
 import '../chat/widgets/avatar_stage.dart';
+import 'opencode_skills_screen.dart';
 
 class ProviderConfigScreen extends StatelessWidget {
   const ProviderConfigScreen({super.key, required this.settingsRepository});
@@ -97,6 +100,23 @@ class _ModeTab extends StatelessWidget {
             '需要向量检索时：在 Provider 中填写 Embedding Model，并选择 Embedding Provider。',
           ],
         ),
+        const SizedBox(height: 24),
+        const _SectionHeader(
+          title: '联网搜索与工具',
+          subtitle: '统一配置基础模式/深度研究模式的联网能力',
+        ),
+        const SizedBox(height: 12),
+        _WebSearchCapabilityCard(
+          settingsRepository: settingsRepository,
+          settings: settings,
+        ),
+        const SizedBox(height: 12),
+        _ToolGatewayCard(
+          settingsRepository: settingsRepository,
+          settings: settings,
+        ),
+        const SizedBox(height: 24),
+        const _SectionHeader(title: '人设与交互', subtitle: '角色风格、Live3D 与交互表现'),
         const SizedBox(height: 12),
         _PersonaCard(
           settingsRepository: settingsRepository,
@@ -119,6 +139,8 @@ class _ModeTab extends StatelessWidget {
           settingsRepository: settingsRepository,
           settings: settings,
         ),
+        const SizedBox(height: 24),
+        const _SectionHeader(title: '记忆与动作', subtitle: '后台记忆抽取与动作执行策略'),
         const SizedBox(height: 12),
         _MemoryAgentCard(
           settingsRepository: settingsRepository,
@@ -130,6 +152,8 @@ class _ModeTab extends StatelessWidget {
           settings: settings,
         ),
         const SizedBox(height: 24),
+        const _SectionHeader(title: '界面与布局', subtitle: '主题、玻璃强度和面板布局'),
+        const SizedBox(height: 12),
         _AppearanceCard(
           settingsRepository: settingsRepository,
           settings: settings,
@@ -229,10 +253,6 @@ class _ModeTab extends StatelessWidget {
             ),
             const SizedBox(height: 12),
           ],
-          _ToolGatewayCard(
-            settingsRepository: settingsRepository,
-            settings: settings,
-          ),
           const SizedBox(height: 24),
         ],
         if (settings.route == ModelRoute.realtime) ...[
@@ -1708,6 +1728,114 @@ class _VoiceChannelCardState extends State<_VoiceChannelCard> {
   }
 }
 
+class _WebSearchCapabilityCard extends StatelessWidget {
+  const _WebSearchCapabilityCard({
+    required this.settingsRepository,
+    required this.settings,
+  });
+
+  final SettingsRepository settingsRepository;
+  final AppSettings settings;
+
+  @override
+  Widget build(BuildContext context) {
+    final chrome = context.chrome;
+    final hasBaseUrl = settings.toolGatewayBaseUrl.trim().isNotEmpty;
+    final hasToken = settings.toolGatewayPairingToken.trim().isNotEmpty;
+    final gatewayReady = settings.toolGatewayEnabled && hasBaseUrl && hasToken;
+    final standardState = settings.standardWebSearchEnabled ? '开启' : '关闭';
+    final deepState = settings.deepResearchWebSearchEnabled ? '开启' : '关闭';
+    final deepVisionState = settings.deepResearchWebImageVisionEnabled
+        ? '开启'
+        : '关闭';
+    final gatewayState = gatewayReady ? '可用' : '未就绪';
+    final requiresGateway =
+        settings.standardWebSearchEnabled ||
+        settings.deepResearchWebSearchEnabled;
+    final visionReady = settings.visionProviderId?.trim().isNotEmpty == true;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '联网搜索能力',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '当前状态：基础模式 $standardState · 深度研究 $deepState · 图片理解 $deepVisionState · 网关 $gatewayState',
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: chrome.textSecondary),
+            ),
+            const SizedBox(height: 10),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('基础模式自动联网搜索'),
+              subtitle: const Text('普通对话自动触发检索并注入上下文'),
+              value: settings.standardWebSearchEnabled,
+              onChanged: (value) {
+                settingsRepository.updateSettings(
+                  settings.copyWith(standardWebSearchEnabled: value),
+                );
+              },
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('深度研究联网搜索'),
+              subtitle: const Text('研究流程会先走网关检索，再进入分析与产出'),
+              value: settings.deepResearchWebSearchEnabled,
+              onChanged: (value) {
+                settingsRepository.updateSettings(
+                  settings.copyWith(deepResearchWebSearchEnabled: value),
+                );
+              },
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('深度研究网页图片理解（实验）'),
+              subtitle: const Text('在抓取网页后挑选“正文关键图”并进行视觉解读（会增加耗时与费用）'),
+              value: settings.deepResearchWebImageVisionEnabled,
+              onChanged: (value) {
+                settingsRepository.updateSettings(
+                  settings.copyWith(deepResearchWebImageVisionEnabled: value),
+                );
+              },
+            ),
+            if (settings.deepResearchWebImageVisionEnabled && !visionReady)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  '提示：已开启网页图片理解，但尚未配置 Vision Provider（或主模型未声明 vision 能力），可能无法生效。',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.error,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            if (requiresGateway && !gatewayReady)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  '提示：至少有一个模式已开启联网搜索，但工具网关尚未就绪，请继续完成下方网关配置。',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.error,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _ToolGatewayCard extends StatefulWidget {
   const _ToolGatewayCard({
     required this.settingsRepository,
@@ -1842,6 +1970,18 @@ class _ToolGatewayCardState extends State<_ToolGatewayCard> {
     }
   }
 
+  Future<void> _copyMobileConfig() async {
+    final baseUrl = _baseUrlController.text.trim();
+    final token = _tokenController.text.trim();
+    if (baseUrl.isEmpty || token.isEmpty) {
+      _setStatus('请先填写网关地址与 Pairing Token。');
+      return;
+    }
+    final payload = jsonEncode({'base_url': baseUrl, 'pairing_token': token});
+    await Clipboard.setData(ClipboardData(text: payload));
+    _setStatus('已复制移动端连接配置（JSON）。');
+  }
+
   Uri _buildHealthUri(String baseUrl) {
     var normalized = baseUrl.trim();
     if (!normalized.contains('://')) {
@@ -1890,26 +2030,36 @@ class _ToolGatewayCardState extends State<_ToolGatewayCard> {
           children: [
             const _SectionHeader(
               title: '工具网关（SAP / OpenCode）',
-              subtitle: '连接本地 Rust 后端，用于 MCP/技能/沙箱调用',
+              subtitle: '为基础模式/深度研究提供联网检索与工具调用',
             ),
             const SizedBox(height: 12),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text('启用工具网关'),
-              subtitle: const Text('开启后 ToolRouter 会走 Rust Gateway'),
+              subtitle: const Text('开启后基础模式与深度研究都可通过网关执行搜索/工具'),
               value: settings.toolGatewayEnabled,
               onChanged: (value) {
-                _updateSettings(settings.copyWith(toolGatewayEnabled: value));
+                var next = settings.copyWith(toolGatewayEnabled: value);
+                if (value &&
+                    Platform.isAndroid &&
+                    kDebugMode &&
+                    settings.toolGatewayBaseUrl.trim() == 'http://127.0.0.1:4891') {
+                  next = next.copyWith(toolGatewayBaseUrl: 'http://10.0.2.2:4891');
+                  _baseUrlController.text = next.toolGatewayBaseUrl;
+                }
+                _updateSettings(next);
               },
             ),
             const SizedBox(height: 8),
             TextField(
               controller: _baseUrlController,
               focusNode: _baseUrlFocus,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: '网关地址',
-                hintText: 'http://127.0.0.1:4891',
-                border: OutlineInputBorder(),
+                hintText: Platform.isAndroid
+                    ? 'http://<PC局域网IP>:4891（真机） / http://10.0.2.2:4891（模拟器）'
+                    : 'http://127.0.0.1:4891',
+                border: const OutlineInputBorder(),
                 isDense: true,
               ),
               onChanged: (value) {
@@ -1918,6 +2068,16 @@ class _ToolGatewayCardState extends State<_ToolGatewayCard> {
                 );
               },
             ),
+            if (Platform.isAndroid) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Android 端不会在本机启动后端或 OpenCode。请把网关部署在 PC 上（同一局域网），并填写 PC 的 IP:4891。\n'
+                '在 Android 模拟器中，访问宿主机可使用 http://10.0.2.2:4891。',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: chrome.textSecondary,
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             TextField(
               controller: _tokenController,
@@ -1960,9 +2120,16 @@ class _ToolGatewayCardState extends State<_ToolGatewayCard> {
                 ),
                 const SizedBox(width: 8),
                 OutlinedButton.icon(
-                  onPressed: _checking ? null : _createPairing,
+                  onPressed:
+                      (Platform.isAndroid || Platform.isIOS) ? null : (_checking ? null : _createPairing),
                   icon: const Icon(Icons.vpn_key),
                   label: const Text('创建配对'),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: _checking ? null : _copyMobileConfig,
+                  icon: const Icon(Icons.copy),
+                  label: const Text('复制手机配置'),
                 ),
                 const SizedBox(width: 12),
                 Text(
@@ -1982,6 +2149,26 @@ class _ToolGatewayCardState extends State<_ToolGatewayCard> {
                 ).textTheme.bodySmall?.copyWith(color: chrome.textSecondary),
               ),
             ],
+            const SizedBox(height: 12),
+            const Divider(height: 1),
+            const SizedBox(height: 8),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('OpenCode Skills'),
+              subtitle: const Text('安装/管理 OpenCode skills（共享给所有会话）'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: settings.toolGatewayEnabled
+                  ? () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (context) => OpenCodeSkillsScreen(
+                            settingsRepository: widget.settingsRepository,
+                          ),
+                        ),
+                      );
+                    }
+                  : null,
+            ),
           ],
         ),
       ),
@@ -2010,6 +2197,7 @@ class _AppInfoSection extends StatelessWidget {
     'TP-REF-001 free-OKC（MIT）',
     'TP-REF-002 openclaw（MIT）',
     'TP-REF-003 openclaw-skills（MIT）',
+    'TP-REF-006 zeroclaw（MIT）',
   ];
 
   @override

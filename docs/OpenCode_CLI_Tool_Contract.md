@@ -8,6 +8,13 @@ All OpenCode executions are sandbox-only. The Tool Gateway must enforce the per-
 
 ```
 workspace/
+  _shared/
+    opencode/
+      opencode.jsonc
+      .opencode/
+        skill/
+          <skill>/
+            SKILL.md
   <session_id>/
     inputs/
     scratch/
@@ -20,6 +27,10 @@ Rules:
 - `files[]` must resolve under `workspace/<session_id>/`.
 - Absolute paths are rejected unless they are mapped to the workspace root.
 - The Tool Gateway performs path normalization and denies `..` escapes.
+
+Notes:
+- OpenCode config/skills are stored under `workspace/_shared/opencode/` so they can be reused across sessions.
+- Tool execution (cwd/files) remains strictly scoped to `workspace/<session_id>/`.
 
 ## 2) tool.opencode.run Schema
 
@@ -124,6 +135,9 @@ For Deep Research, the Rust Tool Gateway must **delegate MCP and tool execution 
 Notes:
 - `opencode serve` provides a headless server to avoid MCP cold starts.
 - `opencode run` supports `--attach` for server reuse and `--format json` for structured event output.
+- The gateway sets `OPENCODE_CONFIG` and `OPENCODE_CONFIG_DIR` to the workspace-shared
+  `workspace/_shared/opencode/opencode.jsonc` and `workspace/_shared/opencode/.opencode/` so that
+  skills/agents can be managed once and reused across sessions.
 
 ## 4) Error Semantics
 

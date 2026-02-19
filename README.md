@@ -55,6 +55,12 @@ flutter pub get
 flutter run
 ```
 
+Windows 打包（开发用简化脚本）：
+
+```powershell
+.\tools\package_windows.ps1 -OpenCodePath C:\path\to\opencode.exe
+```
+
 ## Rust 后端（REST）/ Rust Backend (REST)
 
 仓库已包含最小 Rust REST 后端骨架：`backend-rust/`（先以健康检查与部署形态为主）。
@@ -73,6 +79,7 @@ cargo run
 ## 模型与语音接入（当前）/ Providers
 
 - 在应用内点击右上角“调参”进入 **模型与能力配置**。
+- 在“工具网关（SAP / OpenCode）”卡片可进入 **OpenCode Skills** 管理页，用于导入/管理 skills（用于工具链与深度研究）。
 - 普通/Realtime/Omni 路由均基于 OpenAI-compatible `/v1/chat/completions`。
 - Omni/Realtime 若返回音频分片（`delta.audio.data`），会在前端边收边播。
 - TTS Provider 使用 OpenAI-compatible `/v1/audio/speech`（支持 SiliconFlow 等）。
@@ -92,6 +99,12 @@ cargo run
 - Rust 微内核作为实时总线，Flutter 负责交互与渲染。
 - Python 作为可选插件/模型服务，通过 MCP 或统一协议注册。
 - 记忆系统持续增强：向量检索 + 关键词召回 + 去重/合并/归档工具链。
+- 多开互联（远期）：同一台机器或同一局域网中多实例 CMYKE 之间可进行受控通信与协作（实例间消息/任务转交/共享研究证据）。
+- 深度研究专家模式（远期）：引入 2 个及以上不同模型/Provider，按“讨论-互相质疑-再统一结论”的方式完成研究，提高严谨性（代价是更高 token 消耗）。
+- 工具全流程调用（持续）：不论普通模式还是深度研究模式，所有模型在统一策略下都能可靠调用工具链（检索/抓取/分析/执行）。
+- OpenCode 生态优先（持续）：尽可能复用 OpenCode CLI 与其组件来连接工具与 MCP，减少重复造轮子，并逐步扩展可用的 OpenCode 组件组合。
+- PC 端打包（近期）：前端 + Rust gateway sidecar + OpenCode 作为一体化分发，自动识别开发/非开发环境并自动连接（见 `docs/DESKTOP_PACKAGING_PLAN.md`）。
+- Android 联网与工具（规划）：移动端作为 thin client 连接 PC 网关执行工具链（见 `docs/MOBILE_GATEWAY_PLAN.md`）。
 
 ## 第三方组件与许可 / Third-Party Attributions
 

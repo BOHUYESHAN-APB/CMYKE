@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
+import '../../../core/models/chat_attachment.dart';
 import '../../../core/models/chat_message.dart';
 import '../../../core/models/memory_tier.dart';
 import '../../../ui/theme/cmyke_chrome.dart';
@@ -94,15 +97,60 @@ class _BubbleBody extends StatelessWidget {
     final isUser = message.role == ChatRole.user;
     final sourceLabel = _sourceLabel(message);
     final sourceColor = _sourceColor(context, message);
+    final extracted = _extractImageTokens(message.content);
+    final displayText = _stripImageTokens(message.content).trimRight();
+    final allImageItems = <_ImageItem>[
+      ...message.attachments
+          .where((a) => a.kind == ChatAttachmentKind.image)
+          .map(
+            (a) => _ImageItem(
+              label: a.caption?.trim().isNotEmpty == true ? a.caption : null,
+              uri: Uri.file(a.localPath),
+            ),
+          ),
+      ...extracted,
+    ];
+    final fileAttachments = message.attachments
+        .where((a) => a.kind == ChatAttachmentKind.file)
+        .toList(growable: false);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          message.content,
-          style: Theme.of(
-            context,
-          ).textTheme.bodyMedium?.copyWith(color: textColor, height: 1.5),
-        ),
+        if (displayText.isNotEmpty)
+          Text(
+            displayText,
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: textColor, height: 1.5),
+          ),
+        if (allImageItems.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: allImageItems
+                .take(6)
+                .map((item) => _ImageThumb(item: item))
+                .toList(growable: false),
+          ),
+        ],
+        if (fileAttachments.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: fileAttachments
+                .take(8)
+                .map(
+                  (a) => Chip(
+                    label: Text(a.fileName),
+                    avatar: const Icon(Icons.insert_drive_file_outlined),
+                  ),
+                )
+                .toList(growable: false),
+          ),
+        ],
         if (sourceLabel != null) ...[
           const SizedBox(height: 6),
           Align(
@@ -237,4 +285,143 @@ class _Avatar extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ImageItem {
+  const _ImageItem({required this.uri, this.label});
+
+  final Uri uri;
+  final String? label;
+}
+
+class _ImageThumb extends StatelessWidget {
+  const _ImageThumb({required this.item});
+
+  final _ImageItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final chrome = context.chrome;
+    final uri = item.uri;
+    final image = switch (uri.scheme) {
+      'http' || 'https' => Image.network(
+        uri.toString(),
+        width: 160,
+        height: 160,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => _ImageError(uri: uri),
+      ),
+      'file' => Image.file(
+        File(uri.toFilePath()),
+        width: 160,
+        height: 160,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => _ImageError(uri: uri),
+      ),
+      _ => _ImageError(uri: uri),
+    };
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(chrome.radiusL),
+      onTap: () {
+        showDialog<void>(
+          context: context,
+          builder: (context) => Dialog(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 920, maxHeight: 720),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Container(
+                      color: Colors.black,
+                      child: Center(
+                        child: switch (uri.scheme) {
+                          'http' || 'https' => Image.network(
+                            uri.toString(),
+                            fit: BoxFit.contain,
+                            errorBuilder: (_, __, ___) => _ImageError(uri: uri),
+                          ),
+                          'file' => Image.file(
+                            File(uri.toFilePath()),
+                            fit: BoxFit.contain,
+                            errorBuilder: (_, __, ___) => _ImageError(uri: uri),
+                          ),
+                          _ => _ImageError(uri: uri),
+                        },
+                      ),
+                    ),
+                  ),
+                  if (item.label != null && item.label!.trim().isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Text(
+                        item.label!,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(chrome.radiusL),
+        child: Container(
+          decoration: BoxDecoration(
+            border: Border.all(color: chrome.separatorStrong),
+            borderRadius: BorderRadius.circular(chrome.radiusL),
+          ),
+          child: image,
+        ),
+      ),
+    );
+  }
+}
+
+class _ImageError extends StatelessWidget {
+  const _ImageError({required this.uri});
+
+  final Uri uri;
+
+  @override
+  Widget build(BuildContext context) {
+    final chrome = context.chrome;
+    return Container(
+      width: 160,
+      height: 160,
+      color: chrome.surfaceElevated,
+      alignment: Alignment.center,
+      child: Icon(Icons.broken_image_outlined, color: chrome.textSecondary),
+    );
+  }
+}
+
+List<_ImageItem> _extractImageTokens(String text) {
+  final reg = RegExp(r'\[IMAGE:\s*([^\]]+)\]', caseSensitive: false);
+  final out = <_ImageItem>[];
+  final seen = <String>{};
+  for (final match in reg.allMatches(text)) {
+    final raw = match.group(1)?.trim();
+    if (raw == null || raw.isEmpty) continue;
+    final key = raw.toLowerCase();
+    if (seen.contains(key)) continue;
+    seen.add(key);
+    Uri? uri;
+    try {
+      uri = Uri.parse(raw);
+    } catch (_) {
+      continue;
+    }
+    if (uri.scheme.isEmpty) {
+      uri = Uri.file(raw);
+    }
+    out.add(_ImageItem(uri: uri));
+  }
+  return out;
+}
+
+String _stripImageTokens(String text) {
+  return text.replaceAll(RegExp(r'\[IMAGE:\s*[^\]]+\]'), '');
 }

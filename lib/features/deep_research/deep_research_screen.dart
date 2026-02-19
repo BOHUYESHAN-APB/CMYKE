@@ -1,21 +1,33 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 
+import '../../core/models/app_settings.dart';
+import '../../core/models/chat_attachment.dart';
+import '../../core/models/chat_message.dart';
 import '../../core/models/deep_research_message.dart';
 import '../../core/models/deep_research_session.dart';
+import '../../core/models/provider_config.dart';
 import '../../core/models/research_job.dart';
 import '../../core/models/tool_intent.dart';
 import '../../core/repositories/deep_research_repository.dart';
 import '../../core/repositories/memory_repository.dart';
 import '../../core/repositories/settings_repository.dart';
+import '../../core/services/attachment_ingest_service.dart';
 import '../../core/services/chat_export_service.dart';
 import '../../core/services/deep_research_export_service.dart';
+import '../../core/services/llm_client.dart';
 import '../../core/services/runtime_hub.dart';
 import '../../core/services/universal_agent.dart';
+import '../../core/services/web_search_orchestrator.dart';
+import '../../core/services/workspace_service.dart';
 import '../../ui/theme/cmyke_chrome.dart';
 import '../../ui/widgets/frosted_surface.dart';
 
@@ -24,10 +36,12 @@ class DeepResearchScreen extends StatefulWidget {
     super.key,
     required this.settingsRepository,
     required this.memoryRepository,
+    required this.workspaceService,
   });
 
   final SettingsRepository settingsRepository;
   final MemoryRepository memoryRepository;
+  final WorkspaceService workspaceService;
 
   @override
   State<DeepResearchScreen> createState() => _DeepResearchScreenState();
@@ -37,7 +51,10 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
   final DeepResearchRepository _repository = DeepResearchRepository();
   final ChatExportService _exportService = ChatExportService();
   final TextEditingController _inputController = TextEditingController();
+  final LlmClient _llmClient = LlmClient();
   late final UniversalAgent _universalAgent;
+  late final AttachmentIngestService _attachmentIngest;
+  static const Duration _questionnaireTimeout = Duration(seconds: 90);
   bool _ready = false;
   bool _previewVisible = true;
   double _previewWidth = 520;
@@ -57,6 +74,7 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
   final Map<String, Timer> _questionnaireTimers = {};
   final Map<String, Map<String, String>> _questionnaireAnswersBySession = {};
   final Map<String, String> _pendingQueryBySession = {};
+  final Map<String, List<ChatAttachment>> _pendingAttachmentsBySession = {};
   final List<_ResearchSection> _sectionOrder = [
     _ResearchSection.progress,
     _ResearchSection.messages,
@@ -68,6 +86,9 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
     _universalAgent = UniversalAgent(
       settingsRepository: widget.settingsRepository,
       memoryRepository: widget.memoryRepository,
+    );
+    _attachmentIngest = AttachmentIngestService(
+      workspaceService: widget.workspaceService,
     );
     _bootstrap();
   }
@@ -148,19 +169,41 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
 
   Future<void> _handleSend() async {
     final text = _inputController.text.trim();
-    if (text.isEmpty || _isBusy) return;
+    if (_isBusy) return;
     _inputController.clear();
-    _applyOutputHeuristics(text);
+    _resetResearchOptionsForNewRun();
     setState(() => _isBusy = true);
 
     var session = _activeSession;
     session ??= await _repository.createSession(title: _deriveTitle(text));
+    final pendingAttachments =
+        List<ChatAttachment>.from(_pendingAttachmentsBySession[session.id] ?? []);
+    if (text.isEmpty) {
+      if (pendingAttachments.isNotEmpty) {
+        await _repository.addMessage(
+          DeepResearchMessage(
+            id: _newId(),
+            role: DeepResearchRole.system,
+            content: '已收到附件，请再输入本次研究目标（文本）。',
+            createdAt: DateTime.now(),
+          ),
+        );
+      }
+      setState(() => _isBusy = false);
+      return;
+    }
+
+    final resolvedAttachments = pendingAttachments.isEmpty
+        ? const <ChatAttachment>[]
+        : await _maybeAnalyzeUserAttachments(text, pendingAttachments);
+    _pendingAttachmentsBySession.remove(session.id);
     await _repository.addMessage(
       DeepResearchMessage(
         id: _newId(),
         role: DeepResearchRole.user,
         content: text,
         createdAt: DateTime.now(),
+        attachments: resolvedAttachments,
       ),
     );
 
@@ -183,6 +226,226 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
 
     await _startResearch(session.id, text, announced: true);
     setState(() => _isBusy = false);
+  }
+
+  Future<void> _pickAttachments() async {
+    if (_isBusy) return;
+    var session = _activeSession;
+    session ??= await _repository.createSession(title: '未命名研究');
+    final sessionId = session.id;
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        allowMultiple: true,
+        withData: true,
+      );
+      if (result == null) {
+        return;
+      }
+      final inputs = result.files
+          .where((f) => f.name.trim().isNotEmpty)
+          .map((f) => IngestFileInput(fileName: f.name, path: f.path, bytes: f.bytes))
+          .toList(growable: false);
+      final ingested = await _attachmentIngest.ingestToLibraryAndWorkspace(
+        sessionId: sessionId,
+        inputs: inputs,
+      );
+      if (ingested.isEmpty) {
+        await _repository.addMessage(
+          DeepResearchMessage(
+            id: _newId(),
+            role: DeepResearchRole.system,
+            content: '未读取到可用附件。',
+            createdAt: DateTime.now(),
+          ),
+        );
+        return;
+      }
+      setState(() {
+        _pendingAttachmentsBySession.putIfAbsent(sessionId, () => []).addAll(
+          ingested,
+        );
+      });
+    } catch (e) {
+      await _repository.addMessage(
+        DeepResearchMessage(
+          id: _newId(),
+          role: DeepResearchRole.system,
+          content: '选择附件失败：$e',
+          createdAt: DateTime.now(),
+        ),
+      );
+    }
+  }
+
+  void _removePendingAttachment(String attachmentId) {
+    final session = _activeSession;
+    if (session == null) return;
+    setState(() {
+      _pendingAttachmentsBySession[session.id]?.removeWhere(
+        (a) => a.id == attachmentId,
+      );
+    });
+  }
+
+  ProviderConfig? _resolveVisionProvider() {
+    final settings = widget.settingsRepository.settings;
+    final explicit = settings.visionProviderId?.trim();
+    if (explicit != null && explicit.isNotEmpty) {
+      return widget.settingsRepository.findProvider(explicit);
+    }
+    final mainId = settings.llmProviderId?.trim();
+    if (mainId != null && mainId.isNotEmpty) {
+      final provider = widget.settingsRepository.findProvider(mainId);
+      if (provider != null &&
+          provider.capabilities.contains(ProviderCapability.vision)) {
+        return provider;
+      }
+    }
+    return null;
+  }
+
+  Future<List<ChatAttachment>> _maybeAnalyzeUserAttachments(
+    String userText,
+    List<ChatAttachment> attachments,
+  ) async {
+    final images = attachments
+        .where((a) => a.kind == ChatAttachmentKind.image)
+        .toList(growable: false);
+    if (images.isEmpty) return attachments;
+    final provider = _resolveVisionProvider();
+    if (provider == null) return attachments;
+
+    final prepared = <LlmImageInput>[];
+    final idByIndex = <int, String>{};
+    final limited = images.take(6).toList(growable: false);
+    for (final attachment in limited) {
+      final bytes = await _readFileBytesSafe(attachment.localPath);
+      if (bytes == null || bytes.isEmpty) continue;
+      final resized = _resizeForVision(bytes);
+      if (resized == null || resized.isEmpty) continue;
+      prepared.add(LlmImageInput(bytes: resized, mimeType: 'image/jpeg'));
+      idByIndex[prepared.length] = attachment.id;
+    }
+    if (prepared.isEmpty) return attachments;
+
+    const systemPrompt = '''
+你是“图片归类与说明”助手。只输出 JSON 数组。
+每个元素包含：index(从1开始)、type、caption、tags(数组)、has_text(布尔)。
+type 只能取：sticker,meme,screenshot,photo,chart,document,other。
+''';
+    final prompt = '用户目标：$userText\n请逐张图输出结构化结果。';
+
+    String raw;
+    try {
+      raw = await _llmClient
+          .analyzeImageBytes(
+            provider: provider,
+            prompt: prompt,
+            images: prepared,
+            systemPrompt: systemPrompt,
+          )
+          .timeout(const Duration(seconds: 25));
+    } catch (_) {
+      return attachments;
+    }
+    final parsed = _parseVisionJson(raw);
+    if (parsed.isEmpty) return attachments;
+
+    final updatedById = <String, ChatAttachment>{};
+    for (final entry in parsed) {
+      final id = idByIndex[entry.index];
+      if (id == null) continue;
+      final original = attachments.firstWhere((a) => a.id == id);
+      updatedById[id] = ChatAttachment(
+        id: original.id,
+        kind: original.kind,
+        localPath: original.localPath,
+        fileName: original.fileName,
+        createdAt: original.createdAt,
+        mimeType: original.mimeType,
+        bytes: original.bytes,
+        width: original.width,
+        height: original.height,
+        sha256: original.sha256,
+        caption: entry.caption,
+        tags: entry.tags,
+      );
+    }
+    if (updatedById.isEmpty) return attachments;
+    return attachments.map((a) => updatedById[a.id] ?? a).toList(growable: false);
+  }
+
+  Future<Uint8List?> _readFileBytesSafe(String path) async {
+    try {
+      return await File(path).readAsBytes();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Uint8List? _resizeForVision(Uint8List bytes) {
+    try {
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return null;
+      final maxSide = decoded.width > decoded.height
+          ? decoded.width
+          : decoded.height;
+      var working = decoded;
+      if (maxSide > 1280) {
+        final scale = 1280 / maxSide;
+        working = img.copyResize(
+          decoded,
+          width: (decoded.width * scale).round(),
+          height: (decoded.height * scale).round(),
+          interpolation: img.Interpolation.average,
+        );
+      }
+      var jpg = img.encodeJpg(working, quality: 85);
+      if (jpg.length > 1400 * 1024) {
+        jpg = img.encodeJpg(working, quality: 70);
+      }
+      return Uint8List.fromList(jpg);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  List<_VisionJsonEntry> _parseVisionJson(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return const [];
+    dynamic decoded;
+    try {
+      decoded = jsonDecode(trimmed);
+    } catch (_) {
+      final start = trimmed.indexOf('[');
+      final end = trimmed.lastIndexOf(']');
+      if (start >= 0 && end > start) {
+        try {
+          decoded = jsonDecode(trimmed.substring(start, end + 1));
+        } catch (_) {
+          return const [];
+        }
+      } else {
+        return const [];
+      }
+    }
+    if (decoded is! List) return const [];
+    final out = <_VisionJsonEntry>[];
+    for (final item in decoded) {
+      if (item is! Map) continue;
+      final idx = (item['index'] as num?)?.toInt() ?? 0;
+      final type = (item['type'] ?? '').toString().trim();
+      final caption = (item['caption'] ?? '').toString().trim();
+      final tags = (item['tags'] is List)
+          ? (item['tags'] as List)
+              .map((e) => e.toString().trim())
+              .where((e) => e.isNotEmpty)
+              .toList(growable: false)
+          : const <String>[];
+      if (idx <= 0 || caption.isEmpty) continue;
+      out.add(_VisionJsonEntry(index: idx, type: type, caption: caption, tags: tags));
+    }
+    return out;
   }
 
   void _seedSessionState(String sessionId, String query) {
@@ -314,51 +577,658 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
     return normalized;
   }
 
+  DeepResearchSession? _sessionById(String sessionId) {
+    for (final session in _repository.sessions) {
+      if (session.id == sessionId) {
+        return session;
+      }
+    }
+    return null;
+  }
+
+  String _buildLatestUserAttachmentsContext(String sessionId) {
+    final session = _sessionById(sessionId);
+    if (session == null) return '';
+
+    DeepResearchMessage? lastUser;
+    for (var i = session.messages.length - 1; i >= 0; i -= 1) {
+      final msg = session.messages[i];
+      if (msg.role == DeepResearchRole.user && msg.attachments.isNotEmpty) {
+        lastUser = msg;
+        break;
+      }
+    }
+    if (lastUser == null) return '';
+    final attachments = lastUser.attachments;
+    if (attachments.isEmpty) return '';
+
+    final buffer = StringBuffer();
+    for (var i = 0; i < attachments.length; i += 1) {
+      final a = attachments[i];
+      final idx = i + 1;
+      final name = a.fileName.trim().isEmpty ? 'attachment_$idx' : a.fileName;
+      if (a.kind == ChatAttachmentKind.image) {
+        final tags = a.tags.isEmpty ? '' : ' tags=${a.tags.join(",")}';
+        final caption = (a.caption ?? '').trim();
+        final captionPart = caption.isEmpty ? '' : ' caption=$caption';
+        final token = Uri.file(a.localPath).toString();
+        buffer.writeln(
+          '- [Image $idx] $name$captionPart$tags [IMAGE: $token]',
+        );
+      } else {
+        final mime = (a.mimeType ?? '').trim();
+        final mimePart = mime.isEmpty ? '' : ' mime=$mime';
+        final sha = (a.sha256 ?? '').trim();
+        final shaPart = sha.isEmpty ? '' : ' sha256=$sha';
+        buffer.writeln(
+          '- [File $idx] $name path=${a.localPath}$mimePart$shaPart',
+        );
+      }
+    }
+    return buffer.toString().trim();
+  }
+
   Future<_GatewaySearchResult> _tryGatewaySearch({
     required String sessionId,
     required String query,
   }) async {
     final settings = widget.settingsRepository.settings;
-    if (!settings.toolGatewayEnabled) {
+    if (!settings.deepResearchWebSearchEnabled) {
       return const _GatewaySearchResult(
-        statusMessage: '未启用工具网关，本轮研究将仅使用模型与本地上下文。',
+        statusMessage: '深度研究联网搜索已关闭，本轮仅使用模型与本地上下文。',
       );
     }
-    final traceId = 'dr_${DateTime.now().millisecondsSinceEpoch}_$sessionId';
-    final result = await RuntimeHub.instance.controlAgent.dispatchToolIntent(
-      ToolIntent(
-        action: ToolAction.search,
-        query: query,
+
+    final gatewayError = _gatewayReadyError(settings);
+    if (gatewayError != null) {
+      return _GatewaySearchResult(statusMessage: gatewayError);
+    }
+
+    final tracePrefix =
+        'dr_${DateTime.now().millisecondsSinceEpoch}_$sessionId';
+    final orchestrator = WebSearchOrchestrator(
+      dispatchToolIntent: RuntimeHub.instance.controlAgent.dispatchToolIntent,
+    );
+
+    const maxRounds = 6; // Design target can be 100+; UI path uses a safe cap.
+    const fanout = 4;
+
+    final loop = await orchestrator.runSearchLoop(
+      config: WebSearchLoopConfig(
         sessionId: sessionId,
-        traceId: traceId,
         routing: 'deep_research',
+        tracePrefix: tracePrefix,
+        maxRounds: maxRounds,
+        fanoutPerRound: fanout,
+        maxPerRoundChars: 9000,
+        maxTotalInjectedChars: 9000,
+        roundCooldown: const Duration(milliseconds: 250),
+        planQueries: ({required round, required priorRounds}) async {
+          if (round == 1) {
+            return _planSearchQueriesRound1(goal: query, maxQueries: fanout);
+          }
+          final last = priorRounds.isEmpty
+              ? ''
+              : priorRounds.last.injectedSnippet;
+          return _planSearchQueriesRound2(
+            goal: query,
+            round1Snippet: last,
+            maxQueries: fanout,
+          );
+        },
+        shouldStop:
+            ({
+              required round,
+              required priorRounds,
+              required lastRoundInjectedSnippet,
+              required totalInjectedChars,
+            }) async {
+              if (lastRoundInjectedSnippet.trim().isEmpty) {
+                return const WebSearchStopDecision(
+                  stop: true,
+                  reason: 'no_new_evidence',
+                );
+              }
+              if (priorRounds.length >= 2) {
+                final a = priorRounds[priorRounds.length - 1].injectedSnippet
+                    .trim();
+                final b = priorRounds[priorRounds.length - 2].injectedSnippet
+                    .trim();
+                if (a.isEmpty && b.isEmpty) {
+                  return const WebSearchStopDecision(
+                    stop: true,
+                    reason: 'stalled',
+                  );
+                }
+              }
+              return const WebSearchStopDecision(stop: false);
+            },
+        isFailure: _isToolSearchFailure,
       ),
     );
-    final trimmed = result.trim();
-    if (trimmed.isEmpty) {
+
+    final totalQueries = loop.rounds.fold<int>(
+      0,
+      (prev, r) => prev + r.executedQueries.length,
+    );
+    final totalSuccess = loop.rounds.fold<int>(
+      0,
+      (prev, r) => prev + r.successful,
+    );
+    var combinedSnippet = loop.combinedInjectedSnippet.trim();
+    if (combinedSnippet.isEmpty) {
+      final stopReason = loop.rounds.isEmpty
+          ? 'no_rounds'
+          : (loop.rounds.last.stopReason ?? 'unknown');
       return _GatewaySearchResult(
-        statusMessage: '工具网关已调用（trace_id=$traceId），但未返回可用检索结果。',
+        statusMessage:
+            '工具网关检索循环完成：0/$totalQueries 条成功（stop=$stopReason）。本轮将仅使用模型与本地上下文。',
       );
     }
-    final lower = trimmed.toLowerCase();
-    final failed =
-        lower.contains('未启用') ||
+
+    final visionNote = await _maybeAnalyzeWebImages(
+      settings: settings,
+      sessionId: sessionId,
+      tracePrefix: tracePrefix,
+      combinedSnippet: combinedSnippet,
+    );
+    if (visionNote != null && visionNote.trim().isNotEmpty) {
+      combinedSnippet = '$combinedSnippet\n\n[网页关键图片理解]\n$visionNote';
+    }
+    final visionStatus = settings.deepResearchWebImageVisionEnabled
+        ? (visionNote == null ? '图片理解: 未注入' : '图片理解: 已注入')
+        : null;
+    return _GatewaySearchResult(
+      statusMessage:
+          '工具网关检索循环完成：$totalSuccess/$totalQueries 条成功（rounds=${loop.rounds.length}）'
+          '${visionStatus == null ? "" : " · $visionStatus"}，已注入研究上下文。',
+      contextSnippet: combinedSnippet,
+    );
+  }
+
+  String? _gatewayReadyError(AppSettings settings) {
+    if (!settings.toolGatewayEnabled) {
+      return '已开启深度研究联网搜索，但工具网关未启用，本轮仅使用模型与本地上下文。';
+    }
+    if (settings.toolGatewayBaseUrl.trim().isEmpty) {
+      return '已开启深度研究联网搜索，但工具网关地址未配置。';
+    }
+    if (settings.toolGatewayPairingToken.trim().isEmpty) {
+      return '已开启深度研究联网搜索，但工具网关 Pairing Token 未配置。';
+    }
+    return null;
+  }
+
+  bool _isToolSearchFailure(String message) {
+    final lower = message.toLowerCase();
+    return lower.contains('未启用') ||
         lower.contains('未配置') ||
         lower.contains('请求失败') ||
         lower.contains('执行失败') ||
+        lower.contains('网关错误') ||
         lower.contains('http ');
-    if (failed) {
-      return _GatewaySearchResult(
-        statusMessage: '工具网关检索失败（trace_id=$traceId）：$trimmed',
+  }
+
+  ProviderConfig? _resolveVisionProviderForWeb(AppSettings settings) {
+    final explicit = settings.visionProviderId?.trim();
+    if (explicit != null && explicit.isNotEmpty) {
+      final provider = widget.settingsRepository.findProvider(explicit);
+      if (provider != null) {
+        return provider;
+      }
+    }
+    final main = settings.llmProviderId?.trim();
+    if (main != null && main.isNotEmpty) {
+      final provider = widget.settingsRepository.findProvider(main);
+      if (provider != null &&
+          provider.capabilities.contains(ProviderCapability.vision)) {
+        return provider;
+      }
+    }
+    return null;
+  }
+
+  Future<String?> _maybeAnalyzeWebImages({
+    required AppSettings settings,
+    required String sessionId,
+    required String tracePrefix,
+    required String combinedSnippet,
+  }) async {
+    if (!settings.deepResearchWebImageVisionEnabled) {
+      return null;
+    }
+    final provider = _resolveVisionProviderForWeb(settings);
+    if (provider == null) {
+      return null;
+    }
+    final urls = _extractHttpUrls(combinedSnippet, max: 2);
+    if (urls.isEmpty) {
+      return null;
+    }
+
+    final dispatch = RuntimeHub.instance.controlAgent.dispatchToolIntent;
+    final crawlFutures = <Future<String>>[];
+    for (var i = 0; i < urls.length; i += 1) {
+      final traceId = '${tracePrefix}_crawl_$i';
+      crawlFutures.add(
+        dispatch(
+          ToolIntent(
+            action: ToolAction.crawl,
+            query: urls[i],
+            sessionId: sessionId,
+            routing: 'deep_research',
+            traceId: traceId,
+          ),
+        ).timeout(const Duration(seconds: 25), onTimeout: () => 'timeout'),
       );
     }
-    final snippet = trimmed.length <= 6000
-        ? trimmed
-        : '${trimmed.substring(0, 6000)}...';
-    return _GatewaySearchResult(
-      statusMessage: '工具网关检索完成（trace_id=$traceId），已将结果注入研究上下文。',
-      contextSnippet: snippet,
+
+    final crawled = await Future.wait(crawlFutures);
+    final images = <String>{};
+    for (final raw in crawled) {
+      images.addAll(_extractImageUrls(raw, max: 24));
+    }
+    final candidates = images
+        .where((u) => !_looksLikeUiAssetUrl(u))
+        .take(12)
+        .toList(growable: false);
+    if (candidates.isEmpty) {
+      return null;
+    }
+
+    final metas = <_WebImageMeta>[];
+    for (final url in candidates) {
+      final meta = await _probeImageMeta(url);
+      if (meta == null) continue;
+      if (!_isLikelyContentImage(meta)) continue;
+      metas.add(meta);
+      if (metas.length >= 3) {
+        break;
+      }
+    }
+    if (metas.isEmpty) {
+      return null;
+    }
+    metas.sort((a, b) => b.score.compareTo(a.score));
+    final selected = metas.take(2).toList(growable: false);
+    final selectedUrls = selected.map((m) => m.url).toList(growable: false);
+
+    final metaLines = selected
+        .map(
+          (m) =>
+              '- ${m.url} (${m.width}x${m.height}, ~${(m.bytes / 1024).round()}KB)',
+        )
+        .join('\n');
+
+    const systemPrompt = '''
+你是“网页图片解读器”。你的输出将直接注入深度研究上下文。
+硬性要求：
+1) 全文中文；
+2) 不要输出 [SPLIT]；
+3) 不要使用 Markdown 代码块（不要输出 ```）；
+4) 对不确定的内容明确写“待核验”，不要臆测。
+''';
+
+    final prompt =
+        '''
+请对以下网页图片进行研究向的解读（每张图一段）：
+- 这张图主要表达什么信息？
+- 如果是图表/表格/流程图：抽取关键结论与可能的指标名称（不要求精确数值，无法读清则标注“待核验”）。
+- 如果是截图/示意图：总结可引用的要点。
+
+已筛选图片（尽量排除图标/组件图）：
+$metaLines
+'''
+            .trim();
+
+    try {
+      var analysis = await _llmClient.analyzeImageUrls(
+        provider: provider,
+        prompt: prompt,
+        imageUrls: selectedUrls,
+        systemPrompt: systemPrompt,
+      );
+      analysis = analysis.trim();
+      if (analysis.length > 2400) {
+        analysis = '${analysis.substring(0, 2400)}...';
+      }
+      return analysis;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  List<String> _extractHttpUrls(String text, {required int max}) {
+    final matches = RegExp(r'https?://[^\s\]\">)]+')
+        .allMatches(text)
+        .map((m) => m.group(0) ?? '')
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty);
+    final out = <String>[];
+    final seen = <String>{};
+    for (final raw in matches) {
+      final cleaned = raw.replaceAll(RegExp(r'[\\]$'), '');
+      if (cleaned.length < 12) continue;
+      final key = cleaned.toLowerCase();
+      if (seen.contains(key)) continue;
+      seen.add(key);
+      out.add(cleaned);
+      if (out.length >= max) break;
+    }
+    return out;
+  }
+
+  List<String> _extractImageUrls(String text, {required int max}) {
+    final out = <String>[];
+    final seen = <String>{};
+    final patterns = <RegExp>[
+      RegExp(r'\[IMAGE:\s*(https?://[^\]]+)\]', caseSensitive: false),
+      RegExp(
+        r'https?://[^\s\]\">)]+\.(?:png|jpe?g|webp|gif)(?:\?[^\s\]\">)]*)?',
+        caseSensitive: false,
+      ),
+    ];
+    for (final reg in patterns) {
+      for (final match in reg.allMatches(text)) {
+        final url =
+            (match.groupCount >= 1 ? match.group(1) : match.group(0)) ?? '';
+        final cleaned = url.trim();
+        if (cleaned.isEmpty) continue;
+        final key = cleaned.toLowerCase();
+        if (seen.contains(key)) continue;
+        seen.add(key);
+        out.add(cleaned);
+        if (out.length >= max) return out;
+      }
+    }
+    return out;
+  }
+
+  bool _looksLikeUiAssetUrl(String url) {
+    final lower = url.toLowerCase();
+    if (lower.endsWith('.svg')) return true;
+    const tokens = <String>[
+      'favicon',
+      'sprite',
+      'icon',
+      'logo',
+      'avatar',
+      'badge',
+      'button',
+      'spinner',
+      'loading',
+      'tracking',
+      'analytics',
+      'pixel',
+      'ads',
+      'doubleclick',
+    ];
+    for (final t in tokens) {
+      if (lower.contains(t)) return true;
+    }
+    return false;
+  }
+
+  bool _isLikelyContentImage(_WebImageMeta meta) {
+    if (meta.bytes < 24 * 1024) return false;
+    if (meta.width < 260 || meta.height < 180) return false;
+    final ratio = meta.width / meta.height;
+    if (ratio > 6.0 || ratio < 0.25) return false;
+    return true;
+  }
+
+  Future<_WebImageMeta?> _probeImageMeta(String url) async {
+    Uri? uri;
+    try {
+      uri = Uri.parse(url);
+    } catch (_) {
+      return null;
+    }
+    if (uri.scheme != 'http' && uri.scheme != 'https') {
+      return null;
+    }
+
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
+    try {
+      int? lengthHint;
+      String? mimeHint;
+      try {
+        final head = await client
+            .headUrl(uri)
+            .timeout(
+              const Duration(seconds: 6),
+              onTimeout: () => throw const SocketException('head timeout'),
+            );
+        head.headers.set(HttpHeaders.userAgentHeader, 'CMYKE/0.1');
+        final res = await head.close();
+        mimeHint = res.headers.contentType?.mimeType;
+        if (res.headers.contentLength >= 0) {
+          lengthHint = res.headers.contentLength;
+        }
+        await res.drain<void>();
+      } catch (_) {}
+
+      if (mimeHint != null && !mimeHint.startsWith('image/')) {
+        return null;
+      }
+      if (lengthHint != null && lengthHint > 2 * 1024 * 1024) {
+        return null;
+      }
+
+      final req = await client.getUrl(uri);
+      req.headers.set(HttpHeaders.userAgentHeader, 'CMYKE/0.1');
+      req.headers.set(HttpHeaders.acceptHeader, 'image/*,*/*;q=0.8');
+      req.headers.set(HttpHeaders.rangeHeader, 'bytes=0-1048575');
+      final res = await req.close();
+      final data = await _readAtMost(res, 1024 * 1024).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => throw const SocketException('image read timeout'),
+      );
+      if (data.isEmpty) {
+        return null;
+      }
+      final codec = await ui.instantiateImageCodec(data);
+      final frame = await codec.getNextFrame();
+      final image = frame.image;
+      final width = image.width;
+      final height = image.height;
+      image.dispose();
+      codec.dispose();
+      return _WebImageMeta(
+        url: url,
+        bytes: data.length,
+        width: width,
+        height: height,
+      );
+    } catch (_) {
+      return null;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<Uint8List> _readAtMost(HttpClientResponse res, int maxBytes) async {
+    final builder = BytesBuilder(copy: false);
+    final completer = Completer<Uint8List>();
+    late final StreamSubscription<List<int>> sub;
+    sub = res.listen(
+      (chunk) async {
+        if (completer.isCompleted) {
+          return;
+        }
+        final remaining = maxBytes - builder.length;
+        if (remaining <= 0) {
+          await sub.cancel();
+          completer.complete(builder.takeBytes());
+          return;
+        }
+        if (chunk.length <= remaining) {
+          builder.add(chunk);
+          return;
+        }
+        builder.add(chunk.sublist(0, remaining));
+        await sub.cancel();
+        completer.complete(builder.takeBytes());
+      },
+      onDone: () {
+        if (!completer.isCompleted) {
+          completer.complete(builder.takeBytes());
+        }
+      },
+      onError: (e, _) {
+        if (!completer.isCompleted) {
+          completer.completeError(e);
+        }
+      },
+      cancelOnError: true,
     );
+    return completer.future;
+  }
+
+  Future<List<String>> _planSearchQueriesRound1({
+    required String goal,
+    required int maxQueries,
+  }) async {
+    final planned = await _planQueriesWithModel(
+      goal: goal,
+      contextHint: '',
+      maxQueries: maxQueries,
+    );
+    if (planned.isNotEmpty) {
+      return planned;
+    }
+    return _heuristicQueries(goal).take(maxQueries).toList(growable: false);
+  }
+
+  Future<List<String>> _planSearchQueriesRound2({
+    required String goal,
+    required String round1Snippet,
+    required int maxQueries,
+  }) async {
+    if (round1Snippet.trim().isEmpty) {
+      return const [];
+    }
+    final context = round1Snippet.length <= 1400
+        ? round1Snippet
+        : '${round1Snippet.substring(0, 1400)}...';
+    final planned = await _planQueriesWithModel(
+      goal: goal,
+      contextHint: context,
+      maxQueries: maxQueries,
+    );
+    if (planned.isNotEmpty) {
+      return planned;
+    }
+    return const [];
+  }
+
+  List<String> _heuristicQueries(String goal) {
+    final trimmed = goal.trim();
+    if (trimmed.isEmpty) return const [];
+    return [
+      trimmed,
+      '$trimmed 官方 文档',
+      '$trimmed 论文 whitepaper',
+      '$trimmed 竞品 对比',
+      '$trimmed github',
+    ];
+  }
+
+  Future<List<String>> _planQueriesWithModel({
+    required String goal,
+    required String contextHint,
+    required int maxQueries,
+  }) async {
+    try {
+      final provider = _resolveStandardProvider();
+      if (provider == null) {
+        return const [];
+      }
+      final systemPrompt =
+          '''
+你是一个“搜索关键词规划器”。你的任务是把用户目标拆解成可用于联网检索的查询词。
+
+硬性要求：
+1) 只输出 JSON 数组，例如 ["query1","query2"]，不要输出任何额外文字；
+2) 每条 query 20-80 字，中文为主，可夹带英文关键字；
+3) queries 之间要尽量互补（官方文档/评测对比/论文/社区实践等）；
+4) 不要输出超过 $maxQueries 条；
+5) 不要输出 [SPLIT]。
+''';
+      final user = contextHint.trim().isEmpty
+          ? '目标：$goal'
+          : '目标：$goal\n\n已检索到的部分线索（供你提出下一轮更好的 queries）：\n$contextHint';
+      final raw = await _llmClient.completeChat(
+        provider: provider,
+        messages: [
+          ChatMessage(
+            id: DateTime.now().microsecondsSinceEpoch.toString(),
+            role: ChatRole.user,
+            content: user,
+            createdAt: DateTime.now(),
+          ),
+        ],
+        systemPrompt: systemPrompt,
+      );
+      final parsed = _parseJsonStringList(raw);
+      final combined = <String>[
+        goal.trim(),
+        ...parsed,
+      ].where((e) => e.trim().isNotEmpty).toList(growable: false);
+      final deduped = <String>[];
+      final seen = <String>{};
+      for (final q in combined) {
+        final normalized = q.trim();
+        if (normalized.isEmpty) continue;
+        final key = normalized.toLowerCase();
+        if (seen.contains(key)) continue;
+        seen.add(key);
+        deduped.add(normalized);
+        if (deduped.length >= maxQueries) {
+          break;
+        }
+      }
+      return deduped;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  List<String> _parseJsonStringList(String raw) {
+    try {
+      final trimmed = raw.trim();
+      final start = trimmed.indexOf('[');
+      final end = trimmed.lastIndexOf(']');
+      if (start == -1 || end == -1 || end <= start) {
+        return const [];
+      }
+      final slice = trimmed.substring(start, end + 1);
+      final decoded = jsonDecode(slice);
+      if (decoded is! List) {
+        return const [];
+      }
+      return decoded
+          .map((e) => e?.toString() ?? '')
+          .map((e) => e.trim())
+          .where((e) => e.isNotEmpty)
+          .toList(growable: false);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  ProviderConfig? _resolveStandardProvider() {
+    final settings = widget.settingsRepository.settings;
+    final provider = widget.settingsRepository.findProvider(
+      settings.llmProviderId,
+    );
+    if (provider == null) {
+      return null;
+    }
+    if (provider.protocol == ProviderProtocol.deviceBuiltin) {
+      return null;
+    }
+    return provider;
   }
 
   Future<String> _formatFileSize(String path) async {
@@ -390,6 +1260,14 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
       result: result,
       sessionId: sessionId,
     );
+    final outputsRoot = await widget.workspaceService.outputsDirectory(sessionId);
+    final runId = DateTime.now().millisecondsSinceEpoch.toString();
+    final runDir = Directory(
+      p.join(outputsRoot.path, 'deep_research', 'runs', runId),
+    );
+    if (!await runDir.exists()) {
+      await runDir.create(recursive: true);
+    }
     final orderedFormats = DeepResearchExportFormat.values
         .where((format) => _exportFormats.contains(format))
         .toList();
@@ -403,9 +1281,11 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
           'deliverable': _deliverable.name,
           'depth': _depth.name,
           'questionnaire': _questionnaireAnswersBySession[sessionId] ?? {},
+          'workspace_run_id': runId,
         },
         format: format,
         filenamePrefix: 'deep_research_${sessionId}_${format.name}',
+        outputDir: runDir,
       );
       final path =
           (exportResult.outputPath != null &&
@@ -426,6 +1306,35 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
           note: note,
         ),
       );
+    }
+
+    try {
+      final manifest = <String, dynamic>{
+        'run_id': runId,
+        'session_id': sessionId,
+        'query': query,
+        'deliverable': _deliverable.name,
+        'depth': _depth.name,
+        'generated_at': DateTime.now().toIso8601String(),
+        'questionnaire': _questionnaireAnswersBySession[sessionId] ?? {},
+        'artifacts': artifacts
+            .where((a) => a.path != null && a.path!.trim().isNotEmpty)
+            .map(
+              (a) => {
+                'title': a.title,
+                'kind': a.kind,
+                'size': a.size,
+                'path': a.path,
+                if (a.note != null) 'note': a.note,
+              },
+            )
+            .toList(),
+      };
+      final file = File(p.join(runDir.path, 'manifest.json'));
+      const encoder = JsonEncoder.withIndent('  ');
+      await file.writeAsString(encoder.convert(manifest));
+    } catch (_) {
+      // Best-effort; export should still succeed without manifest.
     }
     return artifacts;
   }
@@ -475,40 +1384,13 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
     return trimmed.length <= 18 ? trimmed : '${trimmed.substring(0, 18)}...';
   }
 
-  void _applyOutputHeuristics(String input) {
-    final text = input.toLowerCase();
-    final wantsSlides = _matchesAny(text, const [
-      '汇报',
-      '演示',
-      '路演',
-      '演讲',
-      'ppt',
-      'pptx',
-      'presentation',
-      'pitch',
-    ]);
-    final wantsSheet = _matchesAny(text, const [
-      '预算',
-      '测算',
-      '对比',
-      '模型',
-      'roi',
-      '成本',
-      '表格',
-      'excel',
-      'xlsx',
-      'xls',
-      'data',
-      '数据',
-    ]);
-    _exportFormats.add(DeepResearchExportFormat.docx);
-    _exportFormats.add(DeepResearchExportFormat.pdf);
-    if (wantsSlides) {
-      _exportFormats.add(DeepResearchExportFormat.pptx);
-    }
-    if (wantsSheet) {
-      _exportFormats.add(DeepResearchExportFormat.xlsx);
-    }
+  void _resetResearchOptionsForNewRun() {
+    _deliverable = ResearchDeliverable.report;
+    _depth = ResearchDepth.deep;
+    _exportFormats
+      ..clear()
+      ..add(DeepResearchExportFormat.docx)
+      ..add(DeepResearchExportFormat.pdf);
   }
 
   bool _matchesAny(String haystack, List<String> needles) {
@@ -519,6 +1401,23 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
       }
     }
     return false;
+  }
+
+  void _resetExportFormatsByDeliverable(ResearchDeliverable deliverable) {
+    _exportFormats.clear();
+    _exportFormats.add(DeepResearchExportFormat.docx);
+    _exportFormats.add(DeepResearchExportFormat.pdf);
+    switch (deliverable) {
+      case ResearchDeliverable.slides:
+        _exportFormats.add(DeepResearchExportFormat.pptx);
+        break;
+      case ResearchDeliverable.table:
+        _exportFormats.add(DeepResearchExportFormat.xlsx);
+        break;
+      case ResearchDeliverable.summary:
+      case ResearchDeliverable.report:
+        break;
+    }
   }
 
   bool _shouldAskQuestionnaire(String input) {
@@ -540,7 +1439,8 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
     _questionnairesBySession[sessionId] = _QuestionnaireState(
       round: 1,
       questions: questions,
-      deadline: DateTime.now().add(const Duration(seconds: 90)),
+      deadline: DateTime.now().add(_questionnaireTimeout),
+      timeout: _questionnaireTimeout,
     );
     _scheduleQuestionnaireTimeout(sessionId);
     setState(() {});
@@ -549,7 +1449,7 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
   void _clearQuestionnaire(String sessionId) {
     _questionnaireTimers[sessionId]?.cancel();
     _questionnaireTimers.remove(sessionId);
-    _questionnairesBySession.remove(sessionId);
+    _questionnairesBySession.remove(sessionId)?.dispose();
     _questionnaireAnswersBySession.remove(sessionId);
     _pendingQueryBySession.remove(sessionId);
     _isBusy = false;
@@ -558,7 +1458,7 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
   void _scheduleQuestionnaireTimeout(String sessionId) {
     _questionnaireTimers[sessionId]?.cancel();
     _questionnaireTimers[sessionId] = Timer(
-      const Duration(seconds: 90),
+      _questionnaireTimeout,
       () => _autoFillQuestionnaire(sessionId),
     );
   }
@@ -572,10 +1472,13 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
       () => {},
     );
     for (final question in state.questions) {
-      if (question.selected != null) continue;
-      question.selected = question.defaultValue;
+      if (question.isAnswered) continue;
+      question.autoFillDefault();
       question.autoFilled = true;
-      answers[question.id] = question.defaultValue;
+      final encoded = question.encodedAnswer;
+      if (encoded != null) {
+        answers[question.id] = encoded;
+      }
     }
     await _repository.addMessage(
       DeepResearchMessage(
@@ -601,9 +1504,36 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
     );
     for (final question in state.questions) {
       if (question.id != questionId) continue;
-      question.selected = value;
+      question.applyOptionSelection(value);
       question.autoFilled = false;
-      answers[questionId] = value;
+      final encoded = question.encodedAnswer;
+      if (encoded != null) {
+        answers[questionId] = encoded;
+      } else {
+        answers.remove(questionId);
+      }
+      break;
+    }
+    setState(() {});
+  }
+
+  void _updateQuestionText(String sessionId, String questionId, String text) {
+    final state = _questionnairesBySession[sessionId];
+    if (state == null) return;
+    final answers = _questionnaireAnswersBySession.putIfAbsent(
+      sessionId,
+      () => {},
+    );
+    for (final question in state.questions) {
+      if (question.id != questionId) continue;
+      question.textAnswer = text;
+      question.autoFilled = false;
+      final encoded = question.encodedAnswer;
+      if (encoded != null) {
+        answers[questionId] = encoded;
+      } else {
+        answers.remove(questionId);
+      }
       break;
     }
     setState(() {});
@@ -627,7 +1557,8 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
     _questionnairesBySession[sessionId] = _QuestionnaireState(
       round: nextRound,
       questions: nextQuestions,
-      deadline: DateTime.now().add(const Duration(seconds: 90)),
+      deadline: DateTime.now().add(_questionnaireTimeout),
+      timeout: _questionnaireTimeout,
     );
     _scheduleQuestionnaireTimeout(sessionId);
     setState(() {});
@@ -638,7 +1569,7 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
     setState(() => _isBusy = true);
     _questionnaireTimers[sessionId]?.cancel();
     _questionnaireTimers.remove(sessionId);
-    _questionnairesBySession.remove(sessionId);
+    _questionnairesBySession.remove(sessionId)?.dispose();
     _applyQuestionnaireAnswers(sessionId);
     final query = _pendingQueryBySession.remove(sessionId) ?? '未命名研究';
     await _repository.addMessage(
@@ -696,9 +1627,13 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
       final normalizedGoal = goalSummary.isEmpty
           ? query
           : '$query\n\n问卷约束：\n$goalSummary';
-      final goalWithSearchContext = gatewaySearch.contextSnippet.isEmpty
+      final attachmentContext = _buildLatestUserAttachmentsContext(sessionId);
+      final goalWithAttachments = attachmentContext.isEmpty
           ? normalizedGoal
-          : '$normalizedGoal\n\n外部检索结果（工具网关原文）:\n${gatewaySearch.contextSnippet}';
+          : '$normalizedGoal\n\n用户上传资料（可在交付物中引用）:\n$attachmentContext';
+      final goalWithSearchContext = gatewaySearch.contextSnippet.isEmpty
+          ? goalWithAttachments
+          : '$goalWithAttachments\n\n外部检索结果（工具网关原文）:\n${gatewaySearch.contextSnippet}';
       final result = await _universalAgent.runResearch(
         ResearchJob(
           goal: goalWithSearchContext,
@@ -776,18 +1711,12 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
     final answers = _questionnaireAnswersBySession[sessionId];
     if (answers == null || answers.isEmpty) return;
     final deliverable = answers['deliverable'];
-    _exportFormats
-      ..clear()
-      ..add(DeepResearchExportFormat.docx)
-      ..add(DeepResearchExportFormat.pdf);
     switch (deliverable) {
       case 'slides':
         _deliverable = ResearchDeliverable.slides;
-        _exportFormats.add(DeepResearchExportFormat.pptx);
         break;
       case 'table':
         _deliverable = ResearchDeliverable.table;
-        _exportFormats.add(DeepResearchExportFormat.xlsx);
         break;
       case 'summary':
         _deliverable = ResearchDeliverable.summary;
@@ -802,6 +1731,43 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
     } else if (depth == 'deep') {
       _depth = ResearchDepth.deep;
     }
+    final applied = _applyExportFormatsFromEncoded(answers['formats']);
+    if (!applied) {
+      _resetExportFormatsByDeliverable(_deliverable);
+    }
+  }
+
+  bool _applyExportFormatsFromEncoded(String? encoded) {
+    final raw = encoded?.trim();
+    if (raw == null || raw.isEmpty) {
+      return false;
+    }
+    final parts = raw
+        .split(',')
+        .map((p) => p.trim().toLowerCase())
+        .where((p) => p.isNotEmpty)
+        .toSet();
+    if (parts.isEmpty) {
+      return false;
+    }
+    _exportFormats.clear();
+    for (final part in parts) {
+      switch (part) {
+        case 'docx':
+          _exportFormats.add(DeepResearchExportFormat.docx);
+          break;
+        case 'pdf':
+          _exportFormats.add(DeepResearchExportFormat.pdf);
+          break;
+        case 'pptx':
+          _exportFormats.add(DeepResearchExportFormat.pptx);
+          break;
+        case 'xlsx':
+          _exportFormats.add(DeepResearchExportFormat.xlsx);
+          break;
+      }
+    }
+    return _exportFormats.isNotEmpty;
   }
 
   String _buildQuestionnaireSummary(String sessionId) {
@@ -815,10 +1781,12 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
 
     addLine('受众', answers['audience'], 'audience');
     addLine('交付物', answers['deliverable'], 'deliverable');
+    addLine('文件格式', answers['formats'], 'formats');
     addLine('深度', answers['depth'], 'depth');
     addLine('长度', answers['length'], 'length');
     addLine('引用', answers['citation'], 'citation');
     addLine('图表偏好', answers['charts'], 'charts');
+    addLine('补充要求', answers['notes'], 'notes');
     return buffer.toString().trim();
   }
 
@@ -837,15 +1805,38 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
       case 'deliverable':
         switch (value) {
           case 'report':
-            return '研报（DOCX+PDF）';
+            return '研报（结构化）';
           case 'slides':
-            return '演示（PPTX）';
+            return '演示（讲稿/路演）';
           case 'table':
-            return '表格（XLSX）';
+            return '表格（可计算）';
           case 'summary':
-            return '摘要';
+            return '摘要（结论先行）';
         }
         break;
+      case 'formats':
+        final parts = value
+            .split(',')
+            .map((p) => p.trim().toLowerCase())
+            .where((p) => p.isNotEmpty)
+            .toList();
+        if (parts.isEmpty) return value;
+        String label(String token) {
+          switch (token) {
+            case 'docx':
+              return 'DOCX';
+            case 'pdf':
+              return 'PDF';
+            case 'pptx':
+              return 'PPTX';
+            case 'xlsx':
+              return 'XLSX';
+            default:
+              return token;
+          }
+        }
+
+        return parts.map(label).join(' + ');
       case 'depth':
         switch (value) {
           case 'quick':
@@ -884,6 +1875,8 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
             return '混合';
         }
         break;
+      case 'notes':
+        return value.trim();
     }
     return value;
   }
@@ -895,6 +1888,7 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
           _QuestionItem(
             id: 'audience',
             title: '报告的主要受众是谁？',
+            kind: _QuestionKind.singleChoice,
             defaultValue: 'mixed',
             options: const [
               _QuestionOption(value: 'exec', label: '管理层/高层'),
@@ -904,13 +1898,26 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
           ),
           _QuestionItem(
             id: 'deliverable',
-            title: '本次的主要交付物？',
+            title: '本次的主要内容交付物？',
+            kind: _QuestionKind.singleChoice,
             defaultValue: 'report',
             options: const [
-              _QuestionOption(value: 'report', label: '研报（DOCX+PDF）'),
-              _QuestionOption(value: 'slides', label: '演示（PPTX）'),
-              _QuestionOption(value: 'table', label: '表格（XLSX）'),
-              _QuestionOption(value: 'summary', label: '摘要'),
+              _QuestionOption(value: 'report', label: '研报（结构化）'),
+              _QuestionOption(value: 'slides', label: '演示（讲稿/路演）'),
+              _QuestionOption(value: 'table', label: '表格（可计算）'),
+              _QuestionOption(value: 'summary', label: '摘要（结论先行）'),
+            ],
+          ),
+          _QuestionItem(
+            id: 'formats',
+            title: '需要导出哪些文件格式？（可多选）',
+            kind: _QuestionKind.multiChoice,
+            defaultValue: 'docx,pdf',
+            options: const [
+              _QuestionOption(value: 'docx', label: 'DOCX'),
+              _QuestionOption(value: 'pdf', label: 'PDF'),
+              _QuestionOption(value: 'pptx', label: 'PPTX'),
+              _QuestionOption(value: 'xlsx', label: 'XLSX'),
             ],
           ),
         ];
@@ -919,6 +1926,7 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
           _QuestionItem(
             id: 'depth',
             title: '研究深度',
+            kind: _QuestionKind.singleChoice,
             defaultValue: 'deep',
             options: const [
               _QuestionOption(value: 'quick', label: '快速'),
@@ -928,6 +1936,7 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
           _QuestionItem(
             id: 'length',
             title: '目标篇幅',
+            kind: _QuestionKind.singleChoice,
             defaultValue: 'normal',
             options: const [
               _QuestionOption(value: 'short', label: '短（1-2页）'),
@@ -941,6 +1950,7 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
           _QuestionItem(
             id: 'citation',
             title: '引用样式',
+            kind: _QuestionKind.singleChoice,
             defaultValue: 'numeric',
             options: const [
               _QuestionOption(value: 'numeric', label: '脚注编号'),
@@ -951,12 +1961,21 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
           _QuestionItem(
             id: 'charts',
             title: '图表偏好',
+            kind: _QuestionKind.singleChoice,
             defaultValue: 'mixed',
             options: const [
               _QuestionOption(value: 'table', label: '以表格为主'),
               _QuestionOption(value: 'chart', label: '以图表为主'),
               _QuestionOption(value: 'mixed', label: '混合'),
             ],
+          ),
+          _QuestionItem(
+            id: 'notes',
+            title: '补充约束（可选）',
+            kind: _QuestionKind.text,
+            required: false,
+            defaultValue: '',
+            hintText: '例如：必须包含的要点、禁用的来源、目标公司/地区、希望包含的章节等。',
           ),
         ];
       default:
@@ -1086,6 +2105,13 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
                             controller: _inputController,
                             busy: _isBusy,
                             onSend: _handleSend,
+                            onPickAttachments: _pickAttachments,
+                            onRemoveAttachment: _removePendingAttachment,
+                            pendingAttachments:
+                                session == null
+                                    ? const []
+                                    : (_pendingAttachmentsBySession[session.id] ??
+                                        const []),
                             promptHint: session == null
                                 ? '提交目标后将先进入问卷澄清，再开始研究。'
                                 : _questionnairesBySession[session.id] == null
@@ -1321,6 +2347,7 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
                   sessionId: sessionId,
                   state: questionnaire,
                   onSelect: _selectQuestionAnswer,
+                  onTextChanged: _updateQuestionText,
                   onAdvance: _advanceQuestionnaireRound,
                 ),
                 const SizedBox(height: 12),
@@ -1737,12 +2764,18 @@ class _DeepResearchInputBar extends StatelessWidget {
     required this.controller,
     required this.busy,
     required this.onSend,
+    required this.onPickAttachments,
+    required this.onRemoveAttachment,
+    required this.pendingAttachments,
     required this.promptHint,
   });
 
   final TextEditingController controller;
   final bool busy;
   final VoidCallback onSend;
+  final Future<void> Function() onPickAttachments;
+  final void Function(String attachmentId) onRemoveAttachment;
+  final List<ChatAttachment> pendingAttachments;
   final String promptHint;
 
   @override
@@ -1760,6 +2793,22 @@ class _DeepResearchInputBar extends StatelessWidget {
                 color: context.chrome.textSecondary,
               ),
             ),
+            if (pendingAttachments.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: pendingAttachments
+                    .take(12)
+                    .map(
+                      (a) => _AttachmentChip(
+                        attachment: a,
+                        onRemove: () => onRemoveAttachment(a.id),
+                      ),
+                    )
+                    .toList(growable: false),
+              ),
+            ],
             const SizedBox(height: 10),
             Row(
               children: [
@@ -1775,6 +2824,11 @@ class _DeepResearchInputBar extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 12),
+                IconButton(
+                  tooltip: '添加图片/文件',
+                  onPressed: busy ? null : onPickAttachments,
+                  icon: const Icon(Icons.attach_file),
+                ),
                 FilledButton.icon(
                   onPressed: busy ? null : onSend,
                   icon: const Icon(Icons.play_arrow),
@@ -1784,6 +2838,52 @@ class _DeepResearchInputBar extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _AttachmentChip extends StatelessWidget {
+  const _AttachmentChip({required this.attachment, required this.onRemove});
+
+  final ChatAttachment attachment;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final chrome = context.chrome;
+    final icon = attachment.kind == ChatAttachmentKind.image
+        ? Icons.image_outlined
+        : Icons.insert_drive_file_outlined;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: chrome.surfaceElevated.withValues(alpha: 0.65),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: chrome.separatorStrong),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: chrome.textSecondary),
+          const SizedBox(width: 6),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 220),
+            child: Text(
+              attachment.fileName,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: chrome.textPrimary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          InkWell(
+            onTap: onRemove,
+            child: Icon(Icons.close, size: 16, color: chrome.textSecondary),
+          ),
+        ],
       ),
     );
   }
@@ -1828,6 +2928,7 @@ class _QuestionnaireCard extends StatelessWidget {
     required this.sessionId,
     required this.state,
     required this.onSelect,
+    required this.onTextChanged,
     required this.onAdvance,
   });
 
@@ -1835,11 +2936,16 @@ class _QuestionnaireCard extends StatelessWidget {
   final _QuestionnaireState state;
   final void Function(String sessionId, String questionId, String value)
   onSelect;
+  final void Function(String sessionId, String questionId, String text)
+  onTextChanged;
   final Future<void> Function(String sessionId) onAdvance;
 
   @override
   Widget build(BuildContext context) {
     final chrome = context.chrome;
+    final timeoutSeconds = state.timeout.inSeconds <= 0
+        ? 90
+        : state.timeout.inSeconds;
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -1850,22 +2956,53 @@ class _QuestionnaireCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Text(
-                '需求问卷 · 第 ${state.round} 轮',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-              ),
-              const Spacer(),
-              Text(
-                '90 秒未答自动填充',
-                style: Theme.of(
-                  context,
-                ).textTheme.labelSmall?.copyWith(color: chrome.textSecondary),
-              ),
-            ],
+          StreamBuilder<int>(
+            stream: Stream<int>.periodic(
+              const Duration(seconds: 1),
+              (tick) => tick,
+            ),
+            builder: (context, _) {
+              final left = state.deadline.difference(DateTime.now());
+              final secondsLeft = left.inSeconds.clamp(0, timeoutSeconds);
+              String two(int v) => v.toString().padLeft(2, '0');
+              final mm = secondsLeft ~/ 60;
+              final ss = secondsLeft % 60;
+              final label = '${two(mm)}:${two(ss)}';
+              final progress = secondsLeft / timeoutSeconds;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        '需求问卷 · 第 ${state.round} 轮',
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const Spacer(),
+                      Text(
+                        '剩余 $label（超时自动填充）',
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: chrome.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(999),
+                    child: LinearProgressIndicator(
+                      value: progress,
+                      minHeight: 6,
+                      backgroundColor: chrome.separatorStrong.withValues(
+                        alpha: 0.4,
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
           const SizedBox(height: 10),
           ...state.questions.map((question) {
@@ -1893,19 +3030,49 @@ class _QuestionnaireCard extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: question.options.map((option) {
-                      final isSelected = selected == option.value;
-                      return ChoiceChip(
-                        label: Text(option.label),
-                        selected: isSelected,
-                        onSelected: (_) =>
-                            onSelect(sessionId, question.id, option.value),
-                      );
-                    }).toList(),
-                  ),
+                  if (question.kind == _QuestionKind.text)
+                    TextField(
+                      controller: question.textController,
+                      maxLines: null,
+                      minLines: 2,
+                      decoration: InputDecoration(
+                        hintText: question.hintText ?? '可选，留空表示无。',
+                        isDense: true,
+                        filled: true,
+                        fillColor: chrome.surface,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: chrome.separatorStrong),
+                        ),
+                      ),
+                      onChanged: (text) =>
+                          onTextChanged(sessionId, question.id, text),
+                    )
+                  else
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: question.options.map((option) {
+                        final isSelected =
+                            question.kind == _QuestionKind.multiChoice
+                            ? question.selectedValues.contains(option.value)
+                            : selected == option.value;
+                        if (question.kind == _QuestionKind.multiChoice) {
+                          return FilterChip(
+                            label: Text(option.label),
+                            selected: isSelected,
+                            onSelected: (_) =>
+                                onSelect(sessionId, question.id, option.value),
+                          );
+                        }
+                        return ChoiceChip(
+                          label: Text(option.label),
+                          selected: isSelected,
+                          onSelected: (_) =>
+                              onSelect(sessionId, question.id, option.value),
+                        );
+                      }).toList(),
+                    ),
                 ],
               ),
             );
@@ -1929,30 +3096,133 @@ class _QuestionnaireState {
     required this.round,
     required this.questions,
     required this.deadline,
+    required this.timeout,
   });
 
   final int round;
   final List<_QuestionItem> questions;
   final DateTime deadline;
+  final Duration timeout;
 
-  bool get isComplete =>
-      questions.every((question) => question.selected != null);
+  bool get isComplete => questions.every((question) => question.isAnswered);
+
+  void dispose() {
+    for (final question in questions) {
+      question.dispose();
+    }
+  }
 }
+
+enum _QuestionKind { singleChoice, multiChoice, text }
 
 class _QuestionItem {
   _QuestionItem({
     required this.id,
     required this.title,
-    required this.options,
-    required this.defaultValue,
-  });
+    required this.kind,
+    this.required = true,
+    this.options = const [],
+    this.defaultValue = '',
+    this.hintText,
+  }) {
+    if (kind == _QuestionKind.text) {
+      textAnswer = defaultValue;
+      textController = TextEditingController(text: textAnswer);
+    }
+    if (kind == _QuestionKind.multiChoice && defaultValue.trim().isNotEmpty) {
+      selectedValues
+        ..clear()
+        ..addAll(
+          defaultValue
+              .split(',')
+              .map((p) => p.trim())
+              .where((p) => p.isNotEmpty),
+        );
+    }
+  }
 
   final String id;
   final String title;
+  final _QuestionKind kind;
+  final bool required;
   final List<_QuestionOption> options;
   final String defaultValue;
+  final String? hintText;
   String? selected;
+  final Set<String> selectedValues = {};
+  String textAnswer = '';
+  TextEditingController? textController;
   bool autoFilled = false;
+
+  bool get isAnswered {
+    switch (kind) {
+      case _QuestionKind.singleChoice:
+        return selected != null;
+      case _QuestionKind.multiChoice:
+        return selectedValues.isNotEmpty || !required;
+      case _QuestionKind.text:
+        if (!required) return true;
+        return textAnswer.trim().isNotEmpty;
+    }
+  }
+
+  String? get encodedAnswer {
+    switch (kind) {
+      case _QuestionKind.singleChoice:
+        return selected;
+      case _QuestionKind.multiChoice:
+        if (selectedValues.isEmpty) return null;
+        final list = selectedValues.toList()..sort();
+        return list.join(',');
+      case _QuestionKind.text:
+        final trimmed = textAnswer.trim();
+        return trimmed.isEmpty ? null : trimmed;
+    }
+  }
+
+  void applyOptionSelection(String value) {
+    switch (kind) {
+      case _QuestionKind.singleChoice:
+        selected = value;
+        break;
+      case _QuestionKind.multiChoice:
+        if (selectedValues.contains(value)) {
+          selectedValues.remove(value);
+        } else {
+          selectedValues.add(value);
+        }
+        break;
+      case _QuestionKind.text:
+        break;
+    }
+  }
+
+  void autoFillDefault() {
+    switch (kind) {
+      case _QuestionKind.singleChoice:
+        selected = defaultValue.trim().isEmpty ? null : defaultValue.trim();
+        break;
+      case _QuestionKind.multiChoice:
+        selectedValues
+          ..clear()
+          ..addAll(
+            defaultValue
+                .split(',')
+                .map((p) => p.trim())
+                .where((p) => p.isNotEmpty),
+          );
+        break;
+      case _QuestionKind.text:
+        textAnswer = defaultValue;
+        textController ??= TextEditingController(text: textAnswer);
+        textController!.text = textAnswer;
+        break;
+    }
+  }
+
+  void dispose() {
+    textController?.dispose();
+  }
 }
 
 class _QuestionOption {
@@ -1972,6 +3242,22 @@ class _GatewaySearchResult {
   final String contextSnippet;
 }
 
+class _WebImageMeta {
+  const _WebImageMeta({
+    required this.url,
+    required this.bytes,
+    required this.width,
+    required this.height,
+  });
+
+  final String url;
+  final int bytes;
+  final int width;
+  final int height;
+
+  double get score => (width * height).toDouble() + bytes.toDouble();
+}
+
 class _MessageBubble extends StatelessWidget {
   const _MessageBubble({required this.message});
 
@@ -1984,6 +3270,12 @@ class _MessageBubble extends StatelessWidget {
     final bubbleColor = isUser
         ? chrome.accent.withValues(alpha: 0.18)
         : chrome.surfaceElevated;
+    final images = message.attachments
+        .where((a) => a.kind == ChatAttachmentKind.image)
+        .toList(growable: false);
+    final files = message.attachments
+        .where((a) => a.kind == ChatAttachmentKind.file)
+        .toList(growable: false);
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(12),
@@ -2003,7 +3295,55 @@ class _MessageBubble extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 6),
-          Text(_displayContent(message.content)),
+          if (_displayContent(message.content).trim().isNotEmpty)
+            Text(_displayContent(message.content)),
+          if (images.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: images
+                  .take(6)
+                  .map(
+                    (a) => ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: Image.file(
+                        File(a.localPath),
+                        width: 140,
+                        height: 140,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Container(
+                          width: 140,
+                          height: 140,
+                          alignment: Alignment.center,
+                          color: chrome.surface,
+                          child: Icon(
+                            Icons.broken_image_outlined,
+                            color: chrome.textSecondary,
+                          ),
+                        ),
+                      ),
+                    ),
+                  )
+                  .toList(growable: false),
+            ),
+          ],
+          if (files.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: files
+                  .take(8)
+                  .map(
+                    (a) => Chip(
+                      label: Text(a.fileName),
+                      avatar: const Icon(Icons.insert_drive_file_outlined),
+                    ),
+                  )
+                  .toList(growable: false),
+            ),
+          ],
         ],
       ),
     );
@@ -2276,6 +3616,20 @@ class _ArtifactItem {
   final String size;
   final String? path;
   final String? note;
+}
+
+class _VisionJsonEntry {
+  const _VisionJsonEntry({
+    required this.index,
+    required this.type,
+    required this.caption,
+    required this.tags,
+  });
+
+  final int index;
+  final String type;
+  final String caption;
+  final List<String> tags;
 }
 
 String _newId() => DateTime.now().microsecondsSinceEpoch.toString();

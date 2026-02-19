@@ -78,6 +78,7 @@ For Deep Research runs:
 - OpenCode executes tools (including MCP) inside the sandbox.
 - Rust gateway logs and enforces path/permission rules; it does **not**
   directly call MCP tools in this mode.
+- OpenCode skills/config are managed under `workspace/_shared/opencode/` (shared across sessions).
 
 Reference:
 - OpenCode CLI tool contract and sandbox policy: `docs/OpenCode_CLI_Tool_Contract.md`

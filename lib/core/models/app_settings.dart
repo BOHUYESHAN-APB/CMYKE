@@ -65,6 +65,9 @@ class AppSettings {
     this.toolGatewayEnabled = false,
     this.toolGatewayBaseUrl = 'http://127.0.0.1:4891',
     this.toolGatewayPairingToken = '',
+    this.standardWebSearchEnabled = true,
+    this.deepResearchWebSearchEnabled = true,
+    this.deepResearchWebImageVisionEnabled = false,
     this.voiceChannelEnabled = false,
     this.voiceChannelInjectEnabled = true,
     this.voiceChannelDeviceId,
@@ -113,6 +116,9 @@ class AppSettings {
   bool toolGatewayEnabled;
   String toolGatewayBaseUrl;
   String toolGatewayPairingToken;
+  bool standardWebSearchEnabled;
+  bool deepResearchWebSearchEnabled;
+  bool deepResearchWebImageVisionEnabled;
 
   /// Windows-only. Enables voice-channel monitoring UI + runtime hook.
   /// Actual audio routing is done by selecting a virtual sound card as the
@@ -165,6 +171,9 @@ class AppSettings {
     bool? toolGatewayEnabled,
     String? toolGatewayBaseUrl,
     String? toolGatewayPairingToken,
+    bool? standardWebSearchEnabled,
+    bool? deepResearchWebSearchEnabled,
+    bool? deepResearchWebImageVisionEnabled,
     bool? voiceChannelEnabled,
     bool? voiceChannelInjectEnabled,
     String? voiceChannelDeviceId,
@@ -225,6 +234,13 @@ class AppSettings {
       toolGatewayBaseUrl: toolGatewayBaseUrl ?? this.toolGatewayBaseUrl,
       toolGatewayPairingToken:
           toolGatewayPairingToken ?? this.toolGatewayPairingToken,
+      standardWebSearchEnabled:
+          standardWebSearchEnabled ?? this.standardWebSearchEnabled,
+      deepResearchWebSearchEnabled:
+          deepResearchWebSearchEnabled ?? this.deepResearchWebSearchEnabled,
+      deepResearchWebImageVisionEnabled:
+          deepResearchWebImageVisionEnabled ??
+          this.deepResearchWebImageVisionEnabled,
       voiceChannelEnabled: voiceChannelEnabled ?? this.voiceChannelEnabled,
       voiceChannelInjectEnabled:
           voiceChannelInjectEnabled ?? this.voiceChannelInjectEnabled,
@@ -237,8 +253,7 @@ class AppSettings {
       layoutSidebarWidth: layoutSidebarWidth ?? this.layoutSidebarWidth,
       layoutRightPanelWidth:
           layoutRightPanelWidth ?? this.layoutRightPanelWidth,
-      layoutShowRightPanel:
-          layoutShowRightPanel ?? this.layoutShowRightPanel,
+      layoutShowRightPanel: layoutShowRightPanel ?? this.layoutShowRightPanel,
     );
   }
 
@@ -279,6 +294,9 @@ class AppSettings {
     'tool_gateway_enabled': toolGatewayEnabled,
     'tool_gateway_base_url': toolGatewayBaseUrl,
     'tool_gateway_pairing_token': toolGatewayPairingToken,
+    'standard_web_search_enabled': standardWebSearchEnabled,
+    'deep_research_web_search_enabled': deepResearchWebSearchEnabled,
+    'deep_research_web_image_vision_enabled': deepResearchWebImageVisionEnabled,
     'voice_channel_enabled': voiceChannelEnabled,
     'voice_channel_inject_enabled': voiceChannelInjectEnabled,
     'voice_channel_device_id': voiceChannelDeviceId,
@@ -343,8 +361,7 @@ class AppSettings {
         json['autonomy_proactive_enabled'] as bool? ?? false,
     autonomyProactiveIntervalMinutes:
         (json['autonomy_proactive_interval_minutes'] as num?)?.toInt() ?? 20,
-    autonomyExploreEnabled:
-        json['autonomy_explore_enabled'] as bool? ?? false,
+    autonomyExploreEnabled: json['autonomy_explore_enabled'] as bool? ?? false,
     autonomyExploreIntervalMinutes:
         (json['autonomy_explore_interval_minutes'] as num?)?.toInt() ?? 60,
     autonomyPlatforms: _parseAutonomyPlatforms(json['autonomy_platforms']),
@@ -355,10 +372,16 @@ class AppSettings {
     toolGatewayEnabled: json['tool_gateway_enabled'] as bool? ?? false,
     toolGatewayBaseUrl:
         (json['tool_gateway_base_url'] as String?)?.trim().isNotEmpty == true
-            ? (json['tool_gateway_base_url'] as String)
-            : 'http://127.0.0.1:4891',
+        ? (json['tool_gateway_base_url'] as String)
+        : 'http://127.0.0.1:4891',
     toolGatewayPairingToken:
         json['tool_gateway_pairing_token'] as String? ?? '',
+    standardWebSearchEnabled:
+        json['standard_web_search_enabled'] as bool? ?? true,
+    deepResearchWebSearchEnabled:
+        json['deep_research_web_search_enabled'] as bool? ?? true,
+    deepResearchWebImageVisionEnabled:
+        json['deep_research_web_image_vision_enabled'] as bool? ?? false,
     voiceChannelEnabled: json['voice_channel_enabled'] as bool? ?? false,
     voiceChannelInjectEnabled:
         json['voice_channel_inject_enabled'] as bool? ?? true,

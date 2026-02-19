@@ -58,6 +58,54 @@ class LlmClient {
     }
   }
 
+  Future<String> analyzeImageUrls({
+    required ProviderConfig provider,
+    required String prompt,
+    required List<String> imageUrls,
+    String? systemPrompt,
+  }) async {
+    if (imageUrls.isEmpty) {
+      return '';
+    }
+    switch (provider.protocol) {
+      case ProviderProtocol.openaiCompatible:
+        return _completeOpenAiVision(
+          provider: provider,
+          prompt: prompt,
+          imageUrls: imageUrls,
+          systemPrompt: systemPrompt,
+        );
+      case ProviderProtocol.ollamaNative:
+        throw UnsupportedError('Vision is not supported for Ollama native.');
+      case ProviderProtocol.deviceBuiltin:
+        throw UnsupportedError('Vision is not supported for device builtin.');
+    }
+  }
+
+  Future<String> analyzeImageBytes({
+    required ProviderConfig provider,
+    required String prompt,
+    required List<LlmImageInput> images,
+    String? systemPrompt,
+  }) async {
+    if (images.isEmpty) {
+      return '';
+    }
+    switch (provider.protocol) {
+      case ProviderProtocol.openaiCompatible:
+        return _completeOpenAiVisionBytes(
+          provider: provider,
+          prompt: prompt,
+          images: images,
+          systemPrompt: systemPrompt,
+        );
+      case ProviderProtocol.ollamaNative:
+        throw UnsupportedError('Vision is not supported for Ollama native.');
+      case ProviderProtocol.deviceBuiltin:
+        throw UnsupportedError('Vision is not supported for device builtin.');
+    }
+  }
+
   Future<List<double>> embedText({
     required ProviderConfig provider,
     required String input,
@@ -214,6 +262,76 @@ class LlmClient {
     if (response.statusCode != HttpStatus.ok) {
       throw HttpException(
         'LLM request failed: ${response.statusCode} ${response.body}',
+      );
+    }
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    final choices = json['choices'] as List<dynamic>? ?? [];
+    if (choices.isEmpty) {
+      return '';
+    }
+    final message =
+        (choices.first as Map<String, dynamic>)['message']
+            as Map<String, dynamic>?;
+    return message?['content'] as String? ?? '';
+  }
+
+  Future<String> _completeOpenAiVision({
+    required ProviderConfig provider,
+    required String prompt,
+    required List<String> imageUrls,
+    String? systemPrompt,
+  }) async {
+    final uri = _buildChatUri(provider.baseUrl);
+    final headers = _headers(provider);
+    final payload = _visionPayload(
+      provider: provider,
+      prompt: prompt,
+      imageUrls: imageUrls,
+      systemPrompt: systemPrompt,
+    );
+    final response = await http.post(
+      uri,
+      headers: headers,
+      body: jsonEncode(payload),
+    );
+    if (response.statusCode != HttpStatus.ok) {
+      throw HttpException(
+        'Vision request failed: ${response.statusCode} ${response.body}',
+      );
+    }
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    final choices = json['choices'] as List<dynamic>? ?? [];
+    if (choices.isEmpty) {
+      return '';
+    }
+    final message =
+        (choices.first as Map<String, dynamic>)['message']
+            as Map<String, dynamic>?;
+    return message?['content'] as String? ?? '';
+  }
+
+  Future<String> _completeOpenAiVisionBytes({
+    required ProviderConfig provider,
+    required String prompt,
+    required List<LlmImageInput> images,
+    String? systemPrompt,
+  }) async {
+    final uri = _buildChatUri(provider.baseUrl);
+    final headers = _headers(provider);
+    final payload = _visionBytesPayload(
+      provider: provider,
+      prompt: prompt,
+      images: images,
+      systemPrompt: systemPrompt,
+    );
+    final response = await http.post(
+      uri,
+      headers: headers,
+      body: jsonEncode(payload),
+    );
+    if (response.statusCode != HttpStatus.ok) {
+      throw HttpException(
+        'Vision request failed: ${response.statusCode} ${response.body}',
       );
     }
     final json = jsonDecode(response.body) as Map<String, dynamic>;
@@ -396,6 +514,55 @@ class LlmClient {
     return payload;
   }
 
+  Map<String, dynamic> _visionPayload({
+    required ProviderConfig provider,
+    required String prompt,
+    required List<String> imageUrls,
+    String? systemPrompt,
+  }) {
+    final messages = <Map<String, Object>>[];
+    if (systemPrompt != null && systemPrompt.trim().isNotEmpty) {
+      messages.add({'role': 'system', 'content': systemPrompt});
+    }
+    final content = <Map<String, Object>>[
+      {'type': 'text', 'text': prompt},
+    ];
+    for (final url in imageUrls) {
+      final trimmed = url.trim();
+      if (trimmed.isEmpty) continue;
+      content.add({
+        'type': 'image_url',
+        'image_url': {'url': trimmed, 'detail': 'auto'},
+      });
+    }
+    messages.add({'role': 'user', 'content': content});
+
+    final payload = <String, dynamic>{
+      'model': provider.model,
+      'stream': false,
+      'messages': messages,
+    };
+    if (provider.temperature != null) {
+      payload['temperature'] = provider.temperature;
+    }
+    if (provider.topP != null) {
+      payload['top_p'] = provider.topP;
+    }
+    if (provider.maxTokens != null) {
+      payload['max_tokens'] = provider.maxTokens;
+    }
+    if (provider.presencePenalty != null) {
+      payload['presence_penalty'] = provider.presencePenalty;
+    }
+    if (provider.frequencyPenalty != null) {
+      payload['frequency_penalty'] = provider.frequencyPenalty;
+    }
+    if (provider.seed != null) {
+      payload['seed'] = provider.seed;
+    }
+    return payload;
+  }
+
   Future<List<List<double>>> _embedOpenAi({
     required ProviderConfig provider,
     required List<String> inputs,
@@ -507,4 +674,62 @@ class LlmClient {
     }
     return payload;
   }
+
+  Map<String, dynamic> _visionBytesPayload({
+    required ProviderConfig provider,
+    required String prompt,
+    required List<LlmImageInput> images,
+    String? systemPrompt,
+  }) {
+    final messages = <Map<String, Object>>[];
+    if (systemPrompt != null && systemPrompt.trim().isNotEmpty) {
+      messages.add({'role': 'system', 'content': systemPrompt});
+    }
+    final content = <Map<String, Object>>[
+      {'type': 'text', 'text': prompt},
+    ];
+    for (final image in images) {
+      final mime = image.mimeType.trim().isEmpty
+          ? 'image/png'
+          : image.mimeType.trim();
+      final b64 = base64Encode(image.bytes);
+      content.add({
+        'type': 'image_url',
+        'image_url': {'url': 'data:$mime;base64,$b64', 'detail': 'auto'},
+      });
+    }
+    messages.add({'role': 'user', 'content': content});
+
+    final payload = <String, dynamic>{
+      'model': provider.model,
+      'stream': false,
+      'messages': messages,
+    };
+    if (provider.temperature != null) {
+      payload['temperature'] = provider.temperature;
+    }
+    if (provider.topP != null) {
+      payload['top_p'] = provider.topP;
+    }
+    if (provider.maxTokens != null) {
+      payload['max_tokens'] = provider.maxTokens;
+    }
+    if (provider.presencePenalty != null) {
+      payload['presence_penalty'] = provider.presencePenalty;
+    }
+    if (provider.frequencyPenalty != null) {
+      payload['frequency_penalty'] = provider.frequencyPenalty;
+    }
+    if (provider.seed != null) {
+      payload['seed'] = provider.seed;
+    }
+    return payload;
+  }
+}
+
+class LlmImageInput {
+  const LlmImageInput({required this.bytes, required this.mimeType});
+
+  final List<int> bytes;
+  final String mimeType;
 }

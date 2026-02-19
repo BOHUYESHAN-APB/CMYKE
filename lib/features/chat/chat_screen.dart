@@ -2,8 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:file_picker/file_picker.dart';
 
 import '../../core/models/app_settings.dart';
+import '../../core/models/chat_attachment.dart';
 import '../../core/models/chat_message.dart';
 import '../../core/models/chat_session.dart';
 import '../../core/models/memory_record.dart';
@@ -15,6 +17,7 @@ import '../../core/repositories/settings_repository.dart';
 import '../../core/services/chat_export_service.dart';
 import '../../core/services/chat_engine.dart';
 import '../../core/services/autonomy_service.dart';
+import '../../core/services/attachment_ingest_service.dart';
 import '../../core/services/draft_service.dart';
 import '../../core/services/workspace_service.dart';
 import '../../ui/theme/cmyke_chrome.dart';
@@ -55,6 +58,8 @@ class _ChatScreenState extends State<ChatScreen> {
   late final ChatEngine _chatEngine;
   late final AutonomyService _autonomyService;
   late final DraftService _draftService;
+  late final AttachmentIngestService _attachmentIngest;
+  final List<ChatAttachment> _pendingAttachments = [];
   double _sidebarWidth = 280.0;
   double _rightPanelWidth = 380.0;
   bool _showRightPanel = true;
@@ -69,6 +74,9 @@ class _ChatScreenState extends State<ChatScreen> {
       chatRepository: widget.chatRepository,
       memoryRepository: widget.memoryRepository,
       settingsRepository: widget.settingsRepository,
+    );
+    _attachmentIngest = AttachmentIngestService(
+      workspaceService: widget.workspaceService,
     );
     _draftService = DraftService(workspaceService: widget.workspaceService);
     _autonomyService = AutonomyService(
@@ -164,13 +172,57 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _handleSend() async {
     final text = _composerController.text.trim();
-    if (text.isEmpty) {
+    if (text.isEmpty && _pendingAttachments.isEmpty) {
       return;
     }
+    final attachments = List<ChatAttachment>.from(_pendingAttachments);
+    _pendingAttachments.clear();
     _composerController.clear();
     _autonomyService.noteUserActivity();
-    await _chatEngine.sendText(text);
+    await _chatEngine.sendTextWithAttachments(text, attachments: attachments);
     _scrollToBottom();
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  Future<void> _pickAttachments() async {
+    final sessionId = widget.chatRepository.activeSessionId;
+    if (sessionId == null || sessionId.trim().isEmpty) {
+      return;
+    }
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        allowMultiple: true,
+        withData: true,
+      );
+      if (result == null) {
+        return;
+      }
+      final inputs = result.files
+          .where((f) => f.name.trim().isNotEmpty)
+          .map((f) => IngestFileInput(fileName: f.name, path: f.path, bytes: f.bytes))
+          .toList(growable: false);
+      final ingested = await _attachmentIngest.ingestToLibraryAndWorkspace(
+        sessionId: sessionId,
+        inputs: inputs,
+      );
+      if (ingested.isEmpty) {
+        _showSnack('未读取到可用附件。');
+        return;
+      }
+      setState(() {
+        _pendingAttachments.addAll(ingested);
+      });
+    } catch (e) {
+      _showSnack('选择附件失败：$e');
+    }
+  }
+
+  void _removePendingAttachment(String attachmentId) {
+    setState(() {
+      _pendingAttachments.removeWhere((a) => a.id == attachmentId);
+    });
   }
 
   Future<void> _createSessionForRoute() async {
@@ -457,6 +509,7 @@ class _ChatScreenState extends State<ChatScreen> {
         builder: (_) => DeepResearchScreen(
           settingsRepository: widget.settingsRepository,
           memoryRepository: widget.memoryRepository,
+          workspaceService: widget.workspaceService,
         ),
       ),
     );
@@ -811,6 +864,9 @@ class _ChatScreenState extends State<ChatScreen> {
                                   ChatComposer(
                                     controller: _composerController,
                                     onSend: _handleSend,
+                                    onPickAttachments: _pickAttachments,
+                                    onRemoveAttachment: _removePendingAttachment,
+                                    pendingAttachments: _pendingAttachments,
                                     onToggleListening:
                                         _chatEngine.toggleListening,
                                     onToggleVoiceChannelMonitoring: _chatEngine

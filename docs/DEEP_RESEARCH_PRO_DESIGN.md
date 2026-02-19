@@ -16,6 +16,8 @@ This document mixes target design and current implementation. Current state:
   - questionnaire as the single source of truth for deliverable/depth constraints (no duplicated bottom presets),
   - deep-research specific prompt policy (separate from normal chat persona policy),
   - real execution via `UniversalAgent.runResearch(...)` (not fake progress),
+  - tool-gateway delegated **multi-query** web search (fanout) with trace IDs; Deep Research supports multi-round search refinement (best-effort, model-assisted planning),
+  - per-run workspace outputs: exports are written under `workspace/<session_id>/outputs/deep_research/runs/<run_id>/` with a `manifest.json` (no overwrite; old artifacts are kept),
   - artifact export pipeline and local file open action.
 - Current export path can generate HTML and attempts DOCX/PDF/PPTX/XLSX via existing exporter behavior; converter/runtime availability still affects final format fidelity.
 - Mobile/Gateway/OpenCode-delegated Deep Research remains a target architecture and is not fully wired end-to-end yet.
@@ -42,6 +44,15 @@ This document mixes target design and current implementation. Current state:
 - Slides (PPTX): narrative structure, charts, summary slide, appendix, speaker notes optional.
 - Spreadsheet (XLSX): working formulas, assumptions tab, scenario table, charts where relevant.
 - Optional: "audio summary" as a separate artifact.
+
+### A4. Expert Mode (multi-model debate, future)
+
+To improve rigor (at the cost of tokens), Deep Research should support an optional "Expert Mode":
+
+- Use 2+ different models/providers (e.g. different vendors, different strengths).
+- Have them discuss the same evidence, challenge each other's weak claims, and converge on a final report.
+- Ensure all experts share the same tool pipeline: web search, crawl, analyze, summarize, and (optionally) code execution, with unified traceability (`trace_id`, sources, manifests).
+
 
 ### A2. Client Support
 
@@ -81,6 +92,48 @@ In Deep Research workspace, the user should explicitly pick deliverables and con
 - Every non-trivial claim should be traceable to a citation (web/doc/internal).
 - Numbers must be reproducible: either computed by a tool (code sandbox) or quoted with citation.
 - Sources panel must be easy to audit: consistent IDs, clickable references, and deduping.
+
+### B2. Web Search Fanout (multi-round + concurrency)
+
+To reach "research-grade" outputs, a single user request should be allowed to trigger **multiple searches**:
+
+- **Fanout (parallel):** run 3+ web searches concurrently with different queries (e.g. official docs, evaluation/comparison, community practice, papers).
+- **Multi-round (iterative):** after round-1 results, generate follow-up queries and run a second round to fill gaps or verify key claims.
+- **Traceability:** every search must carry a `trace_id` and be stored as a `Source` entry (future work: normalized sources panel).
+
+Practical policy defaults:
+- Standard chat: at most 1 round (low-latency).
+- Deep Research: 2 rounds (quality first), with strict caps on total queries and injected context length.
+
+### B3. AI-Driven Retrieval Loop (100+ rounds design)
+
+The "100+ rounds" capability is not "just run search many times". It requires a **retrieval loop** with budgets, caching, and stopping criteria.
+
+Core loop:
+- Plan queries (fanout) -> Run searches concurrently -> Fetch/Read key pages -> Extract facts & citations -> Evaluate gaps -> Repeat.
+
+Key constraints (must-have):
+- **Budget control:** hard caps on total rounds, total tool calls, total injected context length, and total wall-clock time.
+- **Stop criteria:** stop when information gain stalls, evidence coverage is sufficient for deliverable, or budget is hit.
+- **Cache & dedupe:** avoid re-searching the same query and re-reading the same URLs; reuse prior evidence.
+- **Traceability:** every tool call has `trace_id`; every URL/PDF/image becomes a `Source` with stable ID.
+
+Suggested stopping heuristics (hybrid):
+- Rule-based: 2 consecutive rounds with no new unique sources/facts.
+- Model-based: an "evidence sufficiency judge" returns `{stop:boolean, reasons:string[], missing:string[]}`.
+
+Why we need a judge:
+- Deep retrieval without a judge turns into wasteful loops.
+- The judge is also what enables skills to be deterministic ("verify pass" can fail the job if judge says evidence missing).
+
+Connector strategy (advanced network environments):
+- Treat "paper DBs / enterprise DBs" as **retrieval providers** behind the same tool contract.
+- Examples: Crossref/OpenAlex/arXiv, institutional SCI(E) gateways, internal knowledge bases.
+- UI must show: which providers were used, and which require credentials/consent.
+
+UI implications:
+- Show live counters: `rounds`, `fanout`, `tool_calls`, `unique_sources`, `budget_remaining`.
+- Allow user to "raise budget", "pause", "force stop", and "pin sources".
 
 ### B1. Citation Enforcement (hard policy)
 
@@ -380,15 +433,18 @@ This keeps "code execution" aligned with our tool permission model.
 ## OpenCode CLI Integration (local OS)
 
 We can use OpenCode CLI as a **code/agent tool** that runs locally inside the
-session workspace. The Tool Gateway should:
+workspace sandbox. The Tool Gateway should:
 
-- set `cwd` to `workspace/<session_id>/scratch/`
+- set `cwd` within `workspace/<session_id>/` (default: `scratch/`)
+- set `OPENCODE_CONFIG` + `OPENCODE_CONFIG_DIR` to a workspace-shared location so skills can be reused
+  across sessions (CMYKE uses `workspace/_shared/opencode/`)
 - pass the user's prompt or the agent's instruction
 - capture `stdout/stderr/exit_code`
 - parse JSON output when available
 
-**Hard policy:** OpenCode execution is **sandbox-only**. It must not access
-paths outside `workspace/<session_id>`. All file IO is scoped to the sandbox.
+**Hard policy:** OpenCode execution is **sandbox-only**.
+- All task file IO (inputs/outputs/scratch) is scoped to `workspace/<session_id>/`.
+- Shared config/skills are stored under `workspace/_shared/opencode/` (still under the workspace root).
 
 Minimal invocation plan:
 
@@ -481,6 +537,8 @@ From the repos you requested we cloned into `Studying/deep_research`:
 - **openclaw-skills**: skills are standalone artifacts.
   - Suggests we keep skills versioned and separate from the core runtime.
   - Common structure: `SKILL.md` + `_meta.json` + optional `scripts/` and `references/`.
+- **zeroclaw**: agent prompt patterns + tool-loop behaviors.
+  - Useful as a reference when we harden Deep Research's "multi-turn tool calling" policies and persona separation.
 - **coze-studio**: full agent-dev platform with workflow, plugins, knowledge, and models.
   - Useful for thinking about modular resources and UI composition.
 
@@ -496,6 +554,11 @@ They are primarily used for architecture research and migration analysis.
 | TP-REF-003 | openclaw-skills | `Studying/deep_research/openclaw-skills` | SKILL artifact structure reference | MIT |
 | TP-REF-004 | nanobot-cn | `Studying/deep_research/nanobot-cn` | Agent orchestration reference | MIT |
 | TP-REF-005 | coze-studio | `Studying/deep_research/coze-studio` | Platform composition reference | Apache-2.0 |
+| TP-REF-006 | zeroclaw | `Studying/deep_research/zeroclaw` | Prompt/tool-loop organization reference | MIT |
+| TP-REF-007 | OpenManus | `Studying/universal-agent/openmanus/OpenManus-main` | Manus-like sandbox/flow reference | MIT |
+| TP-REF-008 | OpenCowork | `Studying/universal-agent/opencowork/opencowork-main` | Deep research orchestration reference | MIT |
+| TP-REF-009 | DeepResearchAgent | `Studying/universal-agent/deepresearchagent/DeepResearchAgent-main` | Toolset/process reference | Public Domain / The Unlicense |
+| TP-REF-010 | Skywork Super Agents | `Studying/universal-agent/skywork-super-agents/Skywork-Super-Agents-main` | Multi-agent orchestration reference | MIT |
 
 OpenCode note:
 - OpenCode is integrated as an external tool runner in our gateway path.

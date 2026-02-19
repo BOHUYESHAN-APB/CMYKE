@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../core/models/chat_attachment.dart';
 import '../../../ui/theme/cmyke_chrome.dart';
 import '../../../ui/widgets/frosted_surface.dart';
 
@@ -11,6 +12,9 @@ class ChatComposer extends StatefulWidget {
     super.key,
     required this.controller,
     required this.onSend,
+    required this.onPickAttachments,
+    required this.onRemoveAttachment,
+    required this.pendingAttachments,
     required this.onToggleListening,
     required this.onToggleVoiceChannelMonitoring,
     required this.isListening,
@@ -23,6 +27,9 @@ class ChatComposer extends StatefulWidget {
 
   final TextEditingController controller;
   final VoidCallback onSend;
+  final Future<void> Function() onPickAttachments;
+  final void Function(String attachmentId) onRemoveAttachment;
+  final List<ChatAttachment> pendingAttachments;
   final VoidCallback onToggleListening;
   final VoidCallback onToggleVoiceChannelMonitoring;
   final bool isListening;
@@ -496,69 +503,144 @@ class _ChatComposerState extends State<ChatComposer> {
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 18),
       child: FrostedSurface(
         padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            IconButton(
-              tooltip: '通用 Agent',
-              onPressed: widget.onOpenAgent,
-              icon: const Icon(Icons.auto_awesome_outlined),
-              color: chrome.textSecondary,
-            ),
-            IconButton(
-              tooltip: widget.isListening ? '停止语音输入' : '语音输入',
-              onPressed: widget.onToggleListening,
-              icon: Icon(
-                widget.isListening ? Icons.mic : Icons.mic_none_outlined,
-                color: widget.isListening
-                    ? chrome.accent
-                    : chrome.textSecondary,
-              ),
-            ),
-            if (widget.showVoiceChannelButton)
-              IconButton(
-                tooltip: widget.isVoiceChannelMonitoring
-                    ? '停止语音频道监听'
-                    : '语音频道监听',
-                onPressed: widget.onToggleVoiceChannelMonitoring,
-                icon: Icon(
-                  widget.isVoiceChannelMonitoring
-                      ? Icons.headphones
-                      : Icons.headphones_outlined,
-                  color: widget.isVoiceChannelMonitoring
-                      ? chrome.accent
-                      : chrome.textSecondary,
+            if (widget.pendingAttachments.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(6, 4, 6, 10),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: widget.pendingAttachments
+                      .take(12)
+                      .map(
+                        (a) => _AttachmentChip(
+                          attachment: a,
+                          onRemove: () => widget.onRemoveAttachment(a.id),
+                        ),
+                      )
+                      .toList(growable: false),
                 ),
               ),
-            Expanded(
-              child: CallbackShortcuts(
-                bindings: shortcuts,
-                child: CompositedTransformTarget(
-                  link: _inputLink,
-                  child: TextField(
-                    key: _inputKey,
-                    focusNode: _inputFocusNode,
-                    controller: widget.controller,
-                    minLines: 1,
-                    maxLines: 5,
-                    textInputAction: TextInputAction.send,
-                    decoration: const InputDecoration(
-                      hintText: '发送一条消息...',
-                      filled: false,
-                      border: InputBorder.none,
-                    ),
-                    onSubmitted: (_) => _trySend(allowImeQueue: true),
+            Row(
+              children: [
+                IconButton(
+                  tooltip: '通用 Agent',
+                  onPressed: widget.onOpenAgent,
+                  icon: const Icon(Icons.auto_awesome_outlined),
+                  color: chrome.textSecondary,
+                ),
+                IconButton(
+                  tooltip: '添加图片/文件',
+                  onPressed: widget.isStreaming ? null : widget.onPickAttachments,
+                  icon: const Icon(Icons.attach_file),
+                  color: chrome.textSecondary,
+                ),
+                IconButton(
+                  tooltip: widget.isListening ? '停止语音输入' : '语音输入',
+                  onPressed: widget.onToggleListening,
+                  icon: Icon(
+                    widget.isListening ? Icons.mic : Icons.mic_none_outlined,
+                    color: widget.isListening
+                        ? chrome.accent
+                        : chrome.textSecondary,
                   ),
                 ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            FilledButton.icon(
-              onPressed: widget.isStreaming ? null : widget.onSend,
-              icon: const Icon(Icons.send_rounded),
-              label: const Text('发送'),
+                if (widget.showVoiceChannelButton)
+                  IconButton(
+                    tooltip: widget.isVoiceChannelMonitoring
+                        ? '停止语音频道监听'
+                        : '语音频道监听',
+                    onPressed: widget.onToggleVoiceChannelMonitoring,
+                    icon: Icon(
+                      widget.isVoiceChannelMonitoring
+                          ? Icons.headphones
+                          : Icons.headphones_outlined,
+                      color: widget.isVoiceChannelMonitoring
+                          ? chrome.accent
+                          : chrome.textSecondary,
+                    ),
+                  ),
+                Expanded(
+                  child: CallbackShortcuts(
+                    bindings: shortcuts,
+                    child: CompositedTransformTarget(
+                      link: _inputLink,
+                      child: TextField(
+                        key: _inputKey,
+                        focusNode: _inputFocusNode,
+                        controller: widget.controller,
+                        minLines: 1,
+                        maxLines: 5,
+                        textInputAction: TextInputAction.send,
+                        decoration: const InputDecoration(
+                          hintText: '发送一条消息...',
+                          filled: false,
+                          border: InputBorder.none,
+                        ),
+                        onSubmitted: (_) => _trySend(allowImeQueue: true),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                FilledButton.icon(
+                  onPressed: widget.isStreaming ? null : widget.onSend,
+                  icon: const Icon(Icons.send_rounded),
+                  label: const Text('发送'),
+                ),
+              ],
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _AttachmentChip extends StatelessWidget {
+  const _AttachmentChip({required this.attachment, required this.onRemove});
+
+  final ChatAttachment attachment;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final chrome = context.chrome;
+    final icon = attachment.kind == ChatAttachmentKind.image
+        ? Icons.image_outlined
+        : Icons.insert_drive_file_outlined;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: chrome.surfaceElevated.withValues(alpha: 0.65),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: chrome.separatorStrong),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: chrome.textSecondary),
+          const SizedBox(width: 6),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 220),
+            child: Text(
+              attachment.fileName,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: chrome.textPrimary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          InkWell(
+            onTap: onRemove,
+            child: Icon(Icons.close, size: 16, color: chrome.textSecondary),
+          ),
+        ],
       ),
     );
   }

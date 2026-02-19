@@ -1,3 +1,5 @@
+import 'chat_attachment.dart';
+
 enum ChatRole { system, user, assistant }
 
 enum ChatSourceKind {
@@ -22,7 +24,8 @@ class ChatMessage {
     this.sourceKind,
     this.sourceId,
     this.priority = ChatPriority.normal,
-  });
+    List<ChatAttachment>? attachments,
+  }) : attachments = attachments ?? const [];
 
   final String id;
   final ChatRole role;
@@ -31,6 +34,7 @@ class ChatMessage {
   final ChatSourceKind? sourceKind;
   final String? sourceId;
   final ChatPriority priority;
+  final List<ChatAttachment> attachments;
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -40,6 +44,7 @@ class ChatMessage {
     'source_kind': sourceKind?.name,
     'source_id': sourceId,
     'priority': priority.name,
+    'attachments': attachments.map((a) => a.toJson()).toList(),
   };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
@@ -53,6 +58,10 @@ class ChatMessage {
     sourceKind: _parseSourceKind(json['source_kind']),
     sourceId: json['source_id'] as String?,
     priority: _parsePriority(json['priority']),
+    attachments: (json['attachments'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(ChatAttachment.fromJson)
+        .toList(),
   );
 
   static ChatSourceKind? _parseSourceKind(Object? raw) {

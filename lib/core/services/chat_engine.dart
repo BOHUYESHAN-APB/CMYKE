@@ -2,13 +2,16 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'dart:collection';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:image/image.dart' as img;
 import 'package:speech_to_text/speech_to_text.dart';
 
 import '../models/app_settings.dart';
+import '../models/chat_attachment.dart';
 import '../models/chat_message.dart';
 import '../models/chat_session.dart';
 import '../models/llm_stream_event.dart';
@@ -32,6 +35,7 @@ import 'runtime_hub.dart';
 import 'motion_agent.dart';
 import 'memory_agent.dart';
 import 'time_range_parser.dart';
+import 'web_search_orchestrator.dart';
 
 class ChatEngine extends ChangeNotifier {
   ChatEngine({
@@ -146,9 +150,10 @@ class ChatEngine extends ChangeNotifier {
     ChatSourceKind sourceKind = ChatSourceKind.user,
     String? sourceId,
     ChatPriority priority = ChatPriority.user,
+    List<ChatAttachment> attachments = const [],
   }) async {
     final trimmed = text.trim();
-    if (trimmed.isEmpty) {
+    if (trimmed.isEmpty && attachments.isEmpty) {
       return;
     }
     final helpTopic = _parseHelpTopic(trimmed);
@@ -353,11 +358,26 @@ class ChatEngine extends ChangeNotifier {
       }
     }
     await interrupt();
+
+    final normalizedText =
+        trimmed.isEmpty && attachments.isNotEmpty
+            ? '（发送了 ${attachments.length} 个附件）'
+            : trimmed;
+
+    final resolvedAttachments = attachments.isEmpty
+        ? const <ChatAttachment>[]
+        : await _maybeAnalyzeUserAttachments(
+          normalizedText,
+          attachments: attachments,
+        );
+    final attachmentContext = _formatAttachmentContext(resolvedAttachments);
+
     await _chatRepository.sendUserMessage(
-      trimmed,
+      normalizedText,
       sourceKind: sourceKind,
       sourceId: sourceId,
       priority: priority,
+      attachments: resolvedAttachments,
     );
 
     final assistantMessage = ChatMessage(
@@ -379,7 +399,25 @@ class ChatEngine extends ChangeNotifier {
     }
 
     await _maybeCompressSession(provider);
-    final systemPrompt = await _buildSystemPrompt(trimmed);
+    final autoSearch = await _tryAutoWebSearchForStandardMode(normalizedText);
+    if (autoSearch.statusMessage != null) {
+      await _chatRepository.addMessage(
+        ChatMessage(
+          id: DateTime.now().microsecondsSinceEpoch.toString(),
+          role: ChatRole.system,
+          content: autoSearch.statusMessage!,
+          createdAt: DateTime.now(),
+          sourceKind: ChatSourceKind.tool,
+          priority: ChatPriority.low,
+        ),
+        persist: true,
+      );
+    }
+    final systemPrompt = await _buildSystemPrompt(
+      normalizedText,
+      webSearchContext: autoSearch.contextSnippet,
+      attachmentContext: attachmentContext,
+    );
     _isStreaming = true;
     _updateTalkingState();
     notifyListeners();
@@ -485,6 +523,22 @@ class ChatEngine extends ChangeNotifier {
           },
           cancelOnError: true,
         );
+  }
+
+  Future<void> sendTextWithAttachments(
+    String text, {
+    ChatSourceKind sourceKind = ChatSourceKind.user,
+    String? sourceId,
+    ChatPriority priority = ChatPriority.user,
+    List<ChatAttachment> attachments = const [],
+  }) {
+    return sendText(
+      text,
+      sourceKind: sourceKind,
+      sourceId: sourceId,
+      priority: priority,
+      attachments: attachments,
+    );
   }
 
   Future<void> speakAssistant(String text) async {
@@ -745,8 +799,9 @@ class ChatEngine extends ChangeNotifier {
     if (!trimmed.startsWith('#')) {
       return null;
     }
-    final match = RegExp(r'^#([A-Za-z][\w-]*)(?:\s+(.+))?$')
-        .firstMatch(trimmed);
+    final match = RegExp(
+      r'^#([A-Za-z][\w-]*)(?:\s+(.+))?$',
+    ).firstMatch(trimmed);
     if (match == null) {
       return null;
     }
@@ -786,6 +841,138 @@ class ChatEngine extends ChangeNotifier {
     return _parseTagCommand(trimmed) != null;
   }
 
+  Future<_AutoWebSearchResult> _tryAutoWebSearchForStandardMode(
+    String userText,
+  ) async {
+    final settings = _settingsRepository.settings;
+    if (settings.route != ModelRoute.standard) {
+      return const _AutoWebSearchResult();
+    }
+    if (!settings.standardWebSearchEnabled) {
+      return const _AutoWebSearchResult();
+    }
+    if (!settings.toolGatewayEnabled ||
+        settings.toolGatewayBaseUrl.trim().isEmpty ||
+        settings.toolGatewayPairingToken.trim().isEmpty) {
+      return const _AutoWebSearchResult();
+    }
+    if (!_shouldAutoWebSearch(userText)) {
+      return const _AutoWebSearchResult();
+    }
+    final sessionId = _chatRepository.activeSession?.id;
+    final tracePrefix =
+        'std_${DateTime.now().millisecondsSinceEpoch}_${sessionId ?? "default"}';
+    final orchestrator = WebSearchOrchestrator(
+      dispatchToolIntent: RuntimeHub.instance.controlAgent.dispatchToolIntent,
+    );
+    final queries = _buildStandardAutoSearchQueries(userText);
+    final batch = await orchestrator.searchBatch(
+      queries: queries,
+      sessionId: sessionId,
+      routing: 'standard_chat',
+      tracePrefix: tracePrefix,
+      maxResultsChars: 6000,
+    );
+
+    var success = 0;
+    final buffer = StringBuffer();
+    for (var i = 0; i < batch.queries.length; i += 1) {
+      final raw = batch.rawResults[i].trim();
+      if (raw.isEmpty || _isToolSearchFailure(raw)) {
+        continue;
+      }
+      success += 1;
+      if (buffer.length > 0) buffer.writeln('\n');
+      buffer.writeln('### ${batch.queries[i]}');
+      buffer.writeln('trace_id: ${batch.traceIds[i]}');
+      buffer.writeln(raw);
+      if (buffer.length >= 5000) {
+        break;
+      }
+    }
+    final snippet = buffer.toString().trim();
+    if (success <= 0 || snippet.isEmpty) {
+      final preview = batch.rawResults.isEmpty
+          ? ''
+          : batch.rawResults.first.trim().replaceAll('\n', ' ');
+      final tail = preview.length <= 180
+          ? preview
+          : '${preview.substring(0, 180)}...';
+      return _AutoWebSearchResult(
+        statusMessage:
+            '基础模式并发检索失败（${batch.queries.length}条）。${tail.isEmpty ? "" : "首条返回：$tail"}',
+      );
+    }
+    return _AutoWebSearchResult(
+      statusMessage: '基础模式并发检索完成：$success/${batch.queries.length}条已注入上下文。',
+      contextSnippet: snippet,
+    );
+  }
+
+  List<String> _buildStandardAutoSearchQueries(String userText) {
+    final trimmed = userText.trim();
+    if (trimmed.isEmpty) {
+      return const [];
+    }
+    return [trimmed, '$trimmed 最新', '$trimmed 官方 文档'];
+  }
+
+  bool _shouldAutoWebSearch(String input) {
+    final text = input.trim();
+    if (text.length < 6) {
+      return false;
+    }
+    final lower = text.toLowerCase();
+    const keywords = <String>[
+      '最新',
+      '最近',
+      '今天',
+      '本周',
+      '本月',
+      '今年',
+      '新闻',
+      '行情',
+      '价格',
+      '汇率',
+      '政策',
+      '发布',
+      '更新',
+      '官网',
+      '文档',
+      '版本',
+      '推荐',
+      '对比',
+      'latest',
+      'today',
+      'news',
+      'price',
+      'policy',
+      'release',
+      'update',
+      'documentation',
+      'docs',
+      'version',
+      'compare',
+      'best',
+    ];
+    for (final keyword in keywords) {
+      if (lower.contains(keyword)) {
+        return true;
+      }
+    }
+    return RegExp(r'20\d{2}').hasMatch(lower);
+  }
+
+  bool _isToolSearchFailure(String message) {
+    final lower = message.toLowerCase();
+    return lower.contains('未启用') ||
+        lower.contains('未配置') ||
+        lower.contains('请求失败') ||
+        lower.contains('执行失败') ||
+        lower.contains('网关错误') ||
+        lower.contains('http ');
+  }
+
   String _buildCommandHelp({String? topic}) {
     final normalized = (topic ?? '').trim().toLowerCase();
     final settings = _settingsRepository.settings;
@@ -795,6 +982,10 @@ class ChatEngine extends ChangeNotifier {
       final baseUrl = settings.toolGatewayBaseUrl.trim().isEmpty
           ? '未配置'
           : settings.toolGatewayBaseUrl.trim();
+      final standardSearch = settings.standardWebSearchEnabled ? '开启' : '关闭';
+      final deepSearch = settings.deepResearchWebSearchEnabled ? '开启' : '关闭';
+      lines.add('基础模式联网搜索: $standardSearch');
+      lines.add('深度研究联网搜索: $deepSearch');
       lines.add('工具网关状态: $enabled ($baseUrl)');
       if (settings.toolGatewayPairingToken.trim().isEmpty) {
         lines.add('工具网关 pairing token: 未配置');
@@ -814,7 +1005,9 @@ class ChatEngine extends ChangeNotifier {
       lines.add('#summarize <text> 摘要');
       lines.add('#image <prompt> 生图（待接入）');
       lines.add('#vision <prompt> 视觉分析（待接入）');
-      lines.add('支持的 action: code / search / crawl / analyze / summarize / image / vision');
+      lines.add(
+        '支持的 action: code / search / crawl / analyze / summarize / image / vision',
+      );
       addGatewayStatus();
       return lines.join('\n');
     }
@@ -1221,7 +1414,8 @@ class ChatEngine extends ChangeNotifier {
     _speechReady = await _speech.initialize(
       onError: (error) {
         debugPrint('[STT] error: ${error.errorMsg} (${error.permanent})');
-        _sttLastError = '${error.errorMsg}${error.permanent ? " (permanent)" : ""}';
+        _sttLastError =
+            '${error.errorMsg}${error.permanent ? " (permanent)" : ""}';
         notifyListeners();
         if (_isVoiceChannelMonitoring) {
           _scheduleVoiceChannelRestart();
@@ -2433,7 +2627,11 @@ $original
     }
   }
 
-  Future<String> _buildSystemPrompt(String userMessage) async {
+  Future<String> _buildSystemPrompt(
+    String userMessage, {
+    String? webSearchContext,
+    String? attachmentContext,
+  }) async {
     final settings = _settingsRepository.settings;
     final base = buildLumiPersona(
       mode: settings.personaMode,
@@ -2441,6 +2639,8 @@ $original
       style: settings.personaStyle,
       customPrompt: settings.personaPrompt,
     );
+    final normalizedWebSearch = _sanitizeWebSearchContext(webSearchContext);
+    final normalizedAttachment = _sanitizeAttachmentContext(attachmentContext);
     String applyRouteAddons(String prompt) {
       if (settings.route != ModelRoute.realtime) {
         return prompt;
@@ -2540,11 +2740,21 @@ $original
     if (contextRecords.isEmpty &&
         coreSelected.isEmpty &&
         diaryAll.isEmpty &&
-        relevantFiltered.isEmpty) {
+        relevantFiltered.isEmpty &&
+        normalizedWebSearch == null &&
+        normalizedAttachment == null) {
       return applyRouteAddons(base);
     }
 
     final buffer = StringBuffer('$base\n');
+    if (normalizedWebSearch != null) {
+      buffer.writeln('\n[外部检索结果]');
+      buffer.writeln(normalizedWebSearch);
+    }
+    if (normalizedAttachment != null) {
+      buffer.writeln('\n[用户上传资料]');
+      buffer.writeln(normalizedAttachment);
+    }
 
     final seen = <String>{};
     String dedupeKey(String content) {
@@ -2635,6 +2845,283 @@ $original
     return applyRouteAddons(buffer.toString());
   }
 
+  String? _sanitizeWebSearchContext(String? raw) {
+    final text = raw?.trim();
+    if (text == null || text.isEmpty) {
+      return null;
+    }
+    if (text.length <= 5000) {
+      return text;
+    }
+    return '${text.substring(0, 5000)}...';
+  }
+
+  String? _sanitizeAttachmentContext(String? raw) {
+    final text = raw?.trim();
+    if (text == null || text.isEmpty) {
+      return null;
+    }
+    if (text.length <= 4000) {
+      return text;
+    }
+    return '${text.substring(0, 4000)}...';
+  }
+
+  String _formatAttachmentContext(List<ChatAttachment> attachments) {
+    if (attachments.isEmpty) {
+      return '';
+    }
+    final images = attachments
+        .where((a) => a.kind == ChatAttachmentKind.image)
+        .toList(growable: false);
+    final files = attachments
+        .where((a) => a.kind == ChatAttachmentKind.file)
+        .toList(growable: false);
+
+    final buffer = StringBuffer();
+    if (images.isNotEmpty) {
+      buffer.writeln('图片：');
+      for (var i = 0; i < images.length; i += 1) {
+        final a = images[i];
+        final dim = (a.width != null && a.height != null)
+            ? '${a.width}x${a.height}'
+            : 'unknown';
+        final kb = a.bytes == null ? '?' : ((a.bytes! / 1024).round()).toString();
+        final caption = a.caption?.trim();
+        final token = Uri.file(a.localPath).toString();
+        buffer.writeln(
+          '- IMG${i + 1}: ${caption == null || caption.isEmpty ? a.fileName : caption} ($dim, ~${kb}KB) [IMAGE: $token]',
+        );
+        if (buffer.length > 3500) {
+          buffer.writeln('...');
+          break;
+        }
+      }
+    }
+    if (files.isNotEmpty) {
+      if (buffer.isNotEmpty) buffer.writeln('');
+      buffer.writeln('文件：');
+      for (var i = 0; i < files.length; i += 1) {
+        final a = files[i];
+        final kb = a.bytes == null ? '?' : ((a.bytes! / 1024).round()).toString();
+        buffer.writeln('- FILE${i + 1}: ${a.fileName} (~${kb}KB) path=${a.localPath}');
+        if (buffer.length > 3900) {
+          buffer.writeln('...');
+          break;
+        }
+      }
+    }
+    return buffer.toString().trimRight();
+  }
+
+  ProviderConfig? _resolveVisionProvider() {
+    final settings = _settingsRepository.settings;
+    final explicit = settings.visionProviderId?.trim();
+    if (explicit != null && explicit.isNotEmpty) {
+      return _settingsRepository.findProvider(explicit);
+    }
+    final main = _activeProvider();
+    if (main != null && main.capabilities.contains(ProviderCapability.vision)) {
+      return main;
+    }
+    return null;
+  }
+
+  Future<List<ChatAttachment>> _maybeAnalyzeUserAttachments(
+    String userText, {
+    required List<ChatAttachment> attachments,
+  }) async {
+    final images = attachments
+        .where((a) => a.kind == ChatAttachmentKind.image)
+        .toList(growable: false);
+    if (images.isEmpty) {
+      return attachments;
+    }
+    final provider = _resolveVisionProvider();
+    if (provider == null) {
+      return attachments;
+    }
+
+    final limited = images.take(6).toList(growable: false);
+    final prepared = <LlmImageInput>[];
+    final idByIndex = <int, String>{};
+    for (var i = 0; i < limited.length; i += 1) {
+      final attachment = limited[i];
+      final bytes = await _readFileBytesSafe(attachment.localPath);
+      if (bytes == null || bytes.isEmpty) continue;
+      final resized = _resizeForVision(bytes);
+      if (resized == null || resized.isEmpty) continue;
+      prepared.add(LlmImageInput(bytes: resized, mimeType: 'image/jpeg'));
+      idByIndex[prepared.length] = attachment.id;
+    }
+    if (prepared.isEmpty) {
+      return attachments;
+    }
+
+    const systemPrompt = '''
+你是“图片归类与说明”助手。你的输出将被注入对话上下文，用于后续对话与深度研究。
+硬性要求：
+1) 只输出 JSON 数组，不要输出 Markdown，不要输出解释文字；
+2) 每个元素包含：index(从1开始)、type、caption、tags(数组)、has_text(布尔)；
+3) type 只能取：sticker,meme,screenshot,photo,chart,document,other；
+4) caption 要能被引用（偏客观描述）；不确定写“待核验”。
+''';
+    final prompt = '''
+用户消息：$userText
+请逐张图输出结构化结果。tags 可以包含：表情包/流程图/截图/网页/代码/表格/人物/风景/Logo 等。
+'''.trim();
+
+    String raw;
+    try {
+      raw = await _llmClient
+          .analyzeImageBytes(
+            provider: provider,
+            prompt: prompt,
+            images: prepared,
+            systemPrompt: systemPrompt,
+          )
+          .timeout(const Duration(seconds: 25));
+    } catch (_) {
+      return attachments;
+    }
+    final parsed = _parseVisionJson(raw);
+    if (parsed.isEmpty) {
+      return attachments;
+    }
+
+    final updatedById = <String, ChatAttachment>{};
+    for (final entry in parsed) {
+      final idx = entry.index;
+      if (idx <= 0) continue;
+      final id = idByIndex[idx];
+      if (id == null) continue;
+      final original = attachments.firstWhere((a) => a.id == id);
+      updatedById[id] = ChatAttachment(
+        id: original.id,
+        kind: original.kind,
+        localPath: original.localPath,
+        fileName: original.fileName,
+        createdAt: original.createdAt,
+        mimeType: original.mimeType,
+        bytes: original.bytes,
+        width: original.width,
+        height: original.height,
+        sha256: original.sha256,
+        caption: entry.caption,
+        tags: entry.tags,
+      );
+
+      if (entry.type == 'sticker' || entry.type == 'meme') {
+        try {
+          await _memoryRepository.addRecord(
+            tier: MemoryTier.crossSession,
+            record: MemoryRecord(
+              id: DateTime.now().microsecondsSinceEpoch.toString(),
+              tier: MemoryTier.crossSession,
+              content:
+                  '用户表情包/图片素材：${entry.caption}\n可引用图片：[IMAGE: ${Uri.file(original.localPath)}]',
+              createdAt: DateTime.now(),
+              tags: ['media', entry.type, ...entry.tags],
+            ),
+            embed: false,
+          );
+        } catch (_) {
+          // Best-effort; don't block chat on memory writes.
+        }
+      }
+    }
+
+    if (updatedById.isEmpty) {
+      return attachments;
+    }
+    return attachments
+        .map((a) => updatedById[a.id] ?? a)
+        .toList(growable: false);
+  }
+
+  Future<Uint8List?> _readFileBytesSafe(String path) async {
+    try {
+      return await File(path).readAsBytes();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Uint8List? _resizeForVision(Uint8List bytes) {
+    try {
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return null;
+      final maxSide = decoded.width > decoded.height
+          ? decoded.width
+          : decoded.height;
+      var working = decoded;
+      if (maxSide > 1280) {
+        final scale = 1280 / maxSide;
+        working = img.copyResize(
+          decoded,
+          width: (decoded.width * scale).round(),
+          height: (decoded.height * scale).round(),
+          interpolation: img.Interpolation.average,
+        );
+      }
+      var jpg = img.encodeJpg(working, quality: 85);
+      if (jpg.length > 1200 * 1024 && maxSide > 960) {
+        final scale = 960 / maxSide;
+        final smaller = img.copyResize(
+          working,
+          width: (working.width * scale).round(),
+          height: (working.height * scale).round(),
+          interpolation: img.Interpolation.average,
+        );
+        jpg = img.encodeJpg(smaller, quality: 80);
+      }
+      if (jpg.length > 1600 * 1024) {
+        jpg = img.encodeJpg(working, quality: 70);
+      }
+      return Uint8List.fromList(jpg);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  List<_VisionJsonEntry> _parseVisionJson(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return const [];
+    dynamic decoded;
+    try {
+      decoded = jsonDecode(trimmed);
+    } catch (_) {
+      final start = trimmed.indexOf('[');
+      final end = trimmed.lastIndexOf(']');
+      if (start >= 0 && end > start) {
+        try {
+          decoded = jsonDecode(trimmed.substring(start, end + 1));
+        } catch (_) {
+          return const [];
+        }
+      } else {
+        return const [];
+      }
+    }
+    if (decoded is! List) return const [];
+    final out = <_VisionJsonEntry>[];
+    for (final item in decoded) {
+      if (item is! Map) continue;
+      final idx = (item['index'] as num?)?.toInt() ?? 0;
+      final type = (item['type'] ?? '').toString().trim();
+      final caption = (item['caption'] ?? '').toString().trim();
+      final tags = (item['tags'] is List)
+          ? (item['tags'] as List)
+              .map((e) => e.toString().trim())
+              .where((e) => e.isNotEmpty)
+              .toList(growable: false)
+          : const <String>[];
+      if (idx <= 0 || caption.isEmpty) continue;
+      out.add(_VisionJsonEntry(index: idx, type: type, caption: caption, tags: tags));
+    }
+    return out;
+  }
+
   @override
   void dispose() {
     _voiceChannelRestartTimer?.cancel();
@@ -2652,6 +3139,27 @@ $original
     unawaited(_audioPlayer.dispose());
     super.dispose();
   }
+}
+
+class _AutoWebSearchResult {
+  const _AutoWebSearchResult({this.statusMessage, this.contextSnippet = ''});
+
+  final String? statusMessage;
+  final String contextSnippet;
+}
+
+class _VisionJsonEntry {
+  const _VisionJsonEntry({
+    required this.index,
+    required this.type,
+    required this.caption,
+    required this.tags,
+  });
+
+  final int index; // 1-based index in the analyzed image list
+  final String type;
+  final String caption;
+  final List<String> tags;
 }
 
 class _AgentCommand {
@@ -2690,21 +3198,19 @@ class _TagCommand {
     this.topic,
   });
 
-  const _TagCommand.tool({
-    required ToolAction action,
-    required String payload,
-  }) : this(type: _TagCommandType.tool, action: action, payload: payload);
+  const _TagCommand.tool({required ToolAction action, required String payload})
+    : this(type: _TagCommandType.tool, action: action, payload: payload);
 
   const _TagCommand.agent({
     required String payload,
     required ResearchDeliverable deliverable,
     required ResearchDepth depth,
   }) : this(
-        type: _TagCommandType.agent,
-        payload: payload,
-        deliverable: deliverable,
-        depth: depth,
-      );
+         type: _TagCommandType.agent,
+         payload: payload,
+         deliverable: deliverable,
+         depth: depth,
+       );
 
   const _TagCommand.help({String topic = ''})
     : this(type: _TagCommandType.help, topic: topic);

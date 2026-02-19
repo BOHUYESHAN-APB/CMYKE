@@ -57,7 +57,7 @@ class LocalDatabase {
       return ffi.databaseFactoryFfi.openDatabase(
         dbPath,
         options: OpenDatabaseOptions(
-          version: 21,
+          version: 25,
           onConfigure: (db) async {
             await db.execute('PRAGMA foreign_keys = ON');
           },
@@ -68,7 +68,7 @@ class LocalDatabase {
     }
     return openDatabase(
       dbPath,
-      version: 21,
+      version: 25,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
       },
@@ -111,6 +111,28 @@ class LocalDatabase {
     ''');
     await db.execute(
       'CREATE INDEX idx_chat_messages_session_id ON chat_messages(session_id)',
+    );
+
+    await db.execute('''
+      CREATE TABLE chat_attachments (
+        id TEXT PRIMARY KEY,
+        message_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        local_path TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        mime_type TEXT,
+        bytes INTEGER,
+        width INTEGER,
+        height INTEGER,
+        sha256 TEXT,
+        caption TEXT,
+        tags TEXT,
+        FOREIGN KEY(message_id) REFERENCES chat_messages(id) ON DELETE CASCADE
+      )
+    ''');
+    await db.execute(
+      'CREATE INDEX idx_chat_attachments_message_id ON chat_attachments(message_id)',
     );
 
     await db.execute('''
@@ -219,6 +241,9 @@ class LocalDatabase {
         tool_gateway_enabled INTEGER NOT NULL DEFAULT 0,
         tool_gateway_base_url TEXT,
         tool_gateway_pairing_token TEXT,
+        standard_web_search_enabled INTEGER NOT NULL DEFAULT 1,
+        deep_research_web_search_enabled INTEGER NOT NULL DEFAULT 1,
+        deep_research_web_image_vision_enabled INTEGER NOT NULL DEFAULT 0,
         voice_channel_enabled INTEGER NOT NULL DEFAULT 0,
         voice_channel_inject_enabled INTEGER NOT NULL DEFAULT 1,
         voice_channel_device_id TEXT,
@@ -346,7 +371,9 @@ class LocalDatabase {
       await db.execute('ALTER TABLE app_settings ADD COLUMN ui_glass TEXT');
     }
     if (oldVersion < 17) {
-      await db.execute('ALTER TABLE app_settings ADD COLUMN layout_preset TEXT');
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN layout_preset TEXT',
+      );
       await db.execute(
         'ALTER TABLE app_settings ADD COLUMN layout_sidebar_width REAL',
       );
@@ -358,8 +385,12 @@ class LocalDatabase {
       );
     }
     if (oldVersion < 18) {
-      await db.execute('ALTER TABLE app_settings ADD COLUMN live3d_quality TEXT');
-      await db.execute('ALTER TABLE app_settings ADD COLUMN live3d_fps_cap TEXT');
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN live3d_quality TEXT',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN live3d_fps_cap TEXT',
+      );
     }
     if (oldVersion < 19) {
       await db.execute(
@@ -400,6 +431,42 @@ class LocalDatabase {
       );
       await db.execute(
         'ALTER TABLE app_settings ADD COLUMN tool_gateway_pairing_token TEXT',
+      );
+    }
+    if (oldVersion < 22) {
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN standard_web_search_enabled INTEGER NOT NULL DEFAULT 1',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN deep_research_web_search_enabled INTEGER NOT NULL DEFAULT 1',
+      );
+    }
+    if (oldVersion < 23) {
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN deep_research_web_image_vision_enabled INTEGER NOT NULL DEFAULT 0',
+      );
+    }
+    if (oldVersion < 24) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS chat_attachments (
+          id TEXT PRIMARY KEY,
+          message_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          local_path TEXT NOT NULL,
+          file_name TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          mime_type TEXT,
+          bytes INTEGER,
+          width INTEGER,
+          height INTEGER,
+          sha256 TEXT,
+          caption TEXT,
+          tags TEXT,
+          FOREIGN KEY(message_id) REFERENCES chat_messages(id) ON DELETE CASCADE
+        )
+      ''');
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_chat_attachments_message_id ON chat_attachments(message_id)',
       );
     }
   }

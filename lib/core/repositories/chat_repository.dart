@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../models/chat_message.dart';
+import '../models/chat_attachment.dart';
 import '../models/chat_session.dart';
 import '../services/local_database.dart';
 import '../services/local_storage.dart';
@@ -30,6 +31,7 @@ class ChatRepository extends ChangeNotifier {
   static const String _storageFile = 'chat_sessions.json';
   static const String _sessionsTable = 'chat_sessions';
   static const String _messagesTable = 'chat_messages';
+  static const String _attachmentsTable = 'chat_attachments';
 
   List<ChatSession> get sessions => List.unmodifiable(_sessions);
   String? get activeSessionId => _activeSessionId;
@@ -66,14 +68,53 @@ class ChatRepository extends ChangeNotifier {
       _messagesTable,
       orderBy: 'created_at ASC',
     );
+    final attachmentRows = await db.query(
+      _attachmentsTable,
+      orderBy: 'created_at ASC',
+    );
+    final attachmentsByMessage = <String, List<ChatAttachment>>{};
+    for (final row in attachmentRows) {
+      final messageId = row['message_id'] as String;
+      final tagsRaw = row['tags'] as String?;
+      final tags = tagsRaw == null || tagsRaw.trim().isEmpty
+          ? const <String>[]
+          : tagsRaw
+              .split(',')
+              .map((t) => t.trim())
+              .where((t) => t.isNotEmpty)
+              .toList(growable: false);
+      final kindRaw = (row['kind'] as String?)?.trim() ?? 'file';
+      final kind = ChatAttachmentKind.values.firstWhere(
+        (k) => k.name == kindRaw,
+        orElse: () => ChatAttachmentKind.file,
+      );
+      final attachment = ChatAttachment(
+        id: row['id'] as String,
+        kind: kind,
+        localPath: row['local_path'] as String? ?? '',
+        fileName: row['file_name'] as String? ?? '',
+        createdAt: DateTime.parse(row['created_at'] as String),
+        mimeType: row['mime_type'] as String?,
+        bytes: (row['bytes'] as num?)?.toInt(),
+        width: (row['width'] as num?)?.toInt(),
+        height: (row['height'] as num?)?.toInt(),
+        sha256: row['sha256'] as String?,
+        caption: row['caption'] as String?,
+        tags: tags,
+      );
+      attachmentsByMessage
+          .putIfAbsent(messageId, () => [])
+          .add(attachment);
+    }
     final messagesBySession = <String, List<ChatMessage>>{};
     for (final row in messageRows) {
       final sessionId = row['session_id'] as String;
+      final messageId = row['id'] as String;
       messagesBySession
           .putIfAbsent(sessionId, () => [])
           .add(
             ChatMessage(
-              id: row['id'] as String,
+              id: messageId,
               role: ChatRole.values.firstWhere(
                 (role) => role.name == row['role'],
                 orElse: () => ChatRole.assistant,
@@ -83,6 +124,7 @@ class ChatRepository extends ChangeNotifier {
               sourceKind: _parseSourceKind(row['source_kind']),
               sourceId: row['source_id'] as String?,
               priority: _parsePriority(row['priority']),
+              attachments: attachmentsByMessage[messageId] ?? const [],
             ),
           );
     }
@@ -154,6 +196,7 @@ class ChatRepository extends ChangeNotifier {
     ChatSourceKind? sourceKind,
     String? sourceId,
     ChatPriority priority = ChatPriority.user,
+    List<ChatAttachment> attachments = const [],
   }) async {
     final message = ChatMessage(
       id: _newId(),
@@ -163,6 +206,7 @@ class ChatRepository extends ChangeNotifier {
       sourceKind: sourceKind ?? ChatSourceKind.user,
       sourceId: sourceId,
       priority: priority,
+      attachments: attachments,
     );
     await addMessage(message);
   }
@@ -201,6 +245,15 @@ class ChatRepository extends ChangeNotifier {
     if (persist) {
       await db.transaction((txn) async {
         await txn.insert(_messagesTable, _messageToRow(message, session.id));
+        if (message.attachments.isNotEmpty) {
+          for (final attachment in message.attachments) {
+            await txn.insert(
+              _attachmentsTable,
+              _attachmentToRow(attachment, message.id),
+              conflictAlgorithm: ConflictAlgorithm.replace,
+            );
+          }
+        }
         await txn.update(
           _sessionsTable,
           _sessionToRow(session),
@@ -210,6 +263,27 @@ class ChatRepository extends ChangeNotifier {
       });
       await _archiveSession(session);
     }
+  }
+
+  Map<String, Object?> _attachmentToRow(
+    ChatAttachment attachment,
+    String messageId,
+  ) {
+    return {
+      'id': attachment.id,
+      'message_id': messageId,
+      'kind': attachment.kind.name,
+      'local_path': attachment.localPath,
+      'file_name': attachment.fileName,
+      'created_at': attachment.createdAt.toIso8601String(),
+      'mime_type': attachment.mimeType,
+      'bytes': attachment.bytes,
+      'width': attachment.width,
+      'height': attachment.height,
+      'sha256': attachment.sha256,
+      'caption': attachment.caption,
+      'tags': attachment.tags.join(','),
+    };
   }
 
   Future<void> updateMessageContent(

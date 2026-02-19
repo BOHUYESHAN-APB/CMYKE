@@ -33,11 +33,15 @@ class DeepResearchExportService {
     required Map<String, dynamic> metadata,
     required DeepResearchExportFormat format,
     String filenamePrefix = 'cmyke_deep_research',
+    Directory? outputDir,
   }) async {
     final exportedAt = DateTime.now();
     final baseName =
         '${_sanitizePrefix(filenamePrefix, metadata)}_${exportedAt.millisecondsSinceEpoch}';
-    final dir = await _exportsDirectory();
+    final dir = outputDir ?? await _exportsDirectory();
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
 
     final htmlPath = await _writeTextFile(
       dir: dir,

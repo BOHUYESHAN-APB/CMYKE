@@ -410,10 +410,16 @@ class SettingsRepository extends ChangeNotifier {
       toolGatewayEnabled: _toBool(row['tool_gateway_enabled']) ?? false,
       toolGatewayBaseUrl:
           (row['tool_gateway_base_url'] as String?)?.trim().isNotEmpty == true
-              ? (row['tool_gateway_base_url'] as String)
-              : 'http://127.0.0.1:4891',
+          ? (row['tool_gateway_base_url'] as String)
+          : 'http://127.0.0.1:4891',
       toolGatewayPairingToken:
           row['tool_gateway_pairing_token'] as String? ?? '',
+      standardWebSearchEnabled:
+          _toBool(row['standard_web_search_enabled']) ?? true,
+      deepResearchWebSearchEnabled:
+          _toBool(row['deep_research_web_search_enabled']) ?? true,
+      deepResearchWebImageVisionEnabled:
+          _toBool(row['deep_research_web_image_vision_enabled']) ?? false,
       voiceChannelEnabled: _toBool(row['voice_channel_enabled']) ?? false,
       voiceChannelInjectEnabled:
           _toBool(row['voice_channel_inject_enabled']) ?? true,
@@ -480,9 +486,16 @@ class SettingsRepository extends ChangeNotifier {
       'tool_gateway_enabled': settings.toolGatewayEnabled ? 1 : 0,
       'tool_gateway_base_url': settings.toolGatewayBaseUrl,
       'tool_gateway_pairing_token': settings.toolGatewayPairingToken,
+      'standard_web_search_enabled': settings.standardWebSearchEnabled ? 1 : 0,
+      'deep_research_web_search_enabled': settings.deepResearchWebSearchEnabled
+          ? 1
+          : 0,
+      'deep_research_web_image_vision_enabled':
+          settings.deepResearchWebImageVisionEnabled ? 1 : 0,
       'voice_channel_enabled': settings.voiceChannelEnabled ? 1 : 0,
-      'voice_channel_inject_enabled':
-          settings.voiceChannelInjectEnabled ? 1 : 0,
+      'voice_channel_inject_enabled': settings.voiceChannelInjectEnabled
+          ? 1
+          : 0,
       'voice_channel_device_id': settings.voiceChannelDeviceId,
       'voice_channel_device_label': settings.voiceChannelDeviceLabel,
       'ui_palette': settings.uiPalette.name,

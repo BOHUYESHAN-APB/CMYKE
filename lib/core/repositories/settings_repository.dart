@@ -425,6 +425,12 @@ class SettingsRepository extends ChangeNotifier {
           _toBool(row['voice_channel_inject_enabled']) ?? true,
       voiceChannelDeviceId: row['voice_channel_device_id'] as String?,
       voiceChannelDeviceLabel: row['voice_channel_device_label'] as String?,
+      voiceChannelPlaybackDeviceId:
+          row['voice_channel_playback_device_id'] as String?,
+      voiceChannelPlaybackDeviceLabel:
+          row['voice_channel_playback_device_label'] as String?,
+      voiceChannelTtsInjectEnabled:
+          _toBool(row['voice_channel_tts_inject_enabled']) ?? false,
       uiPalette: UiPalette.values.firstWhere(
         (palette) => palette.name == row['ui_palette'],
         orElse: () => UiPalette.jade,
@@ -498,6 +504,11 @@ class SettingsRepository extends ChangeNotifier {
           : 0,
       'voice_channel_device_id': settings.voiceChannelDeviceId,
       'voice_channel_device_label': settings.voiceChannelDeviceLabel,
+      'voice_channel_playback_device_id': settings.voiceChannelPlaybackDeviceId,
+      'voice_channel_playback_device_label':
+          settings.voiceChannelPlaybackDeviceLabel,
+      'voice_channel_tts_inject_enabled':
+          settings.voiceChannelTtsInjectEnabled ? 1 : 0,
       'ui_palette': settings.uiPalette.name,
       'ui_glass': settings.uiGlass.name,
       'layout_preset': settings.layoutPreset.name,

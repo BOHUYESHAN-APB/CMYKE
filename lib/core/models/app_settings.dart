@@ -72,6 +72,9 @@ class AppSettings {
     this.voiceChannelInjectEnabled = true,
     this.voiceChannelDeviceId,
     this.voiceChannelDeviceLabel,
+    this.voiceChannelPlaybackDeviceId,
+    this.voiceChannelPlaybackDeviceLabel,
+    this.voiceChannelTtsInjectEnabled = false,
     this.uiPalette = UiPalette.jade,
     this.uiGlass = UiGlass.standard,
     this.layoutPreset = LayoutPreset.balanced,
@@ -127,6 +130,9 @@ class AppSettings {
   bool voiceChannelInjectEnabled;
   String? voiceChannelDeviceId;
   String? voiceChannelDeviceLabel;
+  String? voiceChannelPlaybackDeviceId;
+  String? voiceChannelPlaybackDeviceLabel;
+  bool voiceChannelTtsInjectEnabled;
   UiPalette uiPalette;
   UiGlass uiGlass;
   LayoutPreset layoutPreset;
@@ -178,6 +184,9 @@ class AppSettings {
     bool? voiceChannelInjectEnabled,
     String? voiceChannelDeviceId,
     String? voiceChannelDeviceLabel,
+    String? voiceChannelPlaybackDeviceId,
+    String? voiceChannelPlaybackDeviceLabel,
+    bool? voiceChannelTtsInjectEnabled,
     UiPalette? uiPalette,
     UiGlass? uiGlass,
     LayoutPreset? layoutPreset,
@@ -247,6 +256,12 @@ class AppSettings {
       voiceChannelDeviceId: voiceChannelDeviceId ?? this.voiceChannelDeviceId,
       voiceChannelDeviceLabel:
           voiceChannelDeviceLabel ?? this.voiceChannelDeviceLabel,
+      voiceChannelPlaybackDeviceId:
+          voiceChannelPlaybackDeviceId ?? this.voiceChannelPlaybackDeviceId,
+      voiceChannelPlaybackDeviceLabel:
+          voiceChannelPlaybackDeviceLabel ?? this.voiceChannelPlaybackDeviceLabel,
+      voiceChannelTtsInjectEnabled:
+          voiceChannelTtsInjectEnabled ?? this.voiceChannelTtsInjectEnabled,
       uiPalette: uiPalette ?? this.uiPalette,
       uiGlass: uiGlass ?? this.uiGlass,
       layoutPreset: layoutPreset ?? this.layoutPreset,
@@ -301,6 +316,9 @@ class AppSettings {
     'voice_channel_inject_enabled': voiceChannelInjectEnabled,
     'voice_channel_device_id': voiceChannelDeviceId,
     'voice_channel_device_label': voiceChannelDeviceLabel,
+    'voice_channel_playback_device_id': voiceChannelPlaybackDeviceId,
+    'voice_channel_playback_device_label': voiceChannelPlaybackDeviceLabel,
+    'voice_channel_tts_inject_enabled': voiceChannelTtsInjectEnabled,
     'ui_palette': uiPalette.name,
     'ui_glass': uiGlass.name,
     'layout_preset': layoutPreset.name,
@@ -387,6 +405,12 @@ class AppSettings {
         json['voice_channel_inject_enabled'] as bool? ?? true,
     voiceChannelDeviceId: json['voice_channel_device_id'] as String?,
     voiceChannelDeviceLabel: json['voice_channel_device_label'] as String?,
+    voiceChannelPlaybackDeviceId:
+        json['voice_channel_playback_device_id'] as String?,
+    voiceChannelPlaybackDeviceLabel:
+        json['voice_channel_playback_device_label'] as String?,
+    voiceChannelTtsInjectEnabled:
+        json['voice_channel_tts_inject_enabled'] as bool? ?? false,
     uiPalette: UiPalette.values.firstWhere(
       (palette) => palette.name == json['ui_palette'],
       orElse: () => UiPalette.jade,

@@ -1548,6 +1548,7 @@ class _VoiceChannelCard extends StatefulWidget {
 
 class _VoiceChannelCardState extends State<_VoiceChannelCard> {
   Future<List<AudioInputDeviceInfo>>? _devicesFuture;
+  Future<List<AudioOutputDeviceInfo>>? _outputDevicesFuture;
 
   @override
   void initState() {
@@ -1558,7 +1559,78 @@ class _VoiceChannelCardState extends State<_VoiceChannelCard> {
   void _reloadDevices() {
     setState(() {
       _devicesFuture = WindowsAudioDeviceBridge.listInputDevices();
+      _outputDevicesFuture = WindowsAudioDeviceBridge.listOutputDevices();
     });
+  }
+
+  bool _looksLikeVirtualDevice(String name) {
+    final lower = name.toLowerCase();
+    return lower.contains('cable') ||
+        lower.contains('vb-audio') ||
+        lower.contains('voicemeeter') ||
+        lower.contains('virtual') ||
+        lower.contains('vac') ||
+        lower.contains('loopback') ||
+        name.contains('虚拟');
+  }
+
+  String? _suggestPairedPlaybackDeviceName(String recordingDeviceName) {
+    final name = recordingDeviceName.trim();
+    if (name.isEmpty) return null;
+
+    final lower = name.toLowerCase();
+    if (!_looksLikeVirtualDevice(name)) return null;
+
+    String suggested = name;
+    // VB-CABLE uses a confusing naming convention:
+    // - Playback device: "CABLE Input"
+    // - Recording device: "CABLE Output"
+    if (suggested.contains('CABLE Output')) {
+      suggested = suggested.replaceAll('CABLE Output', 'CABLE Input');
+    } else if (suggested.contains('Cable Output')) {
+      suggested = suggested.replaceAll('Cable Output', 'Cable Input');
+    } else if (suggested.contains('输出') && suggested.contains('CABLE')) {
+      suggested = suggested.replaceAll('输出', '输入');
+    } else if (suggested.contains('Output') && suggested.contains('CABLE')) {
+      suggested = suggested.replaceAll('Output', 'Input');
+    } else if (suggested.contains('Output') && lower.contains('virtual')) {
+      suggested = suggested.replaceAll('Output', 'Input');
+    } else if (suggested.contains('输出') && name.contains('虚拟')) {
+      suggested = suggested.replaceAll('输出', '输入');
+    }
+
+    suggested = suggested.trim();
+    if (suggested == name) return null;
+    return suggested;
+  }
+
+  String? _suggestPairedRecordingDeviceName(String playbackDeviceName) {
+    final name = playbackDeviceName.trim();
+    if (name.isEmpty) return null;
+    if (!_looksLikeVirtualDevice(name)) return null;
+
+    String suggested = name;
+    // VB-CABLE pairing (inverse direction):
+    // - Playback device: "CABLE Input"
+    // - Recording device: "CABLE Output"
+    if (suggested.contains('CABLE Input')) {
+      suggested = suggested.replaceAll('CABLE Input', 'CABLE Output');
+    } else if (suggested.contains('Cable Input')) {
+      suggested = suggested.replaceAll('Cable Input', 'Cable Output');
+    } else if (suggested.contains('输入') && suggested.contains('CABLE')) {
+      suggested = suggested.replaceAll('输入', '输出');
+    } else if (suggested.contains('Input') && suggested.contains('CABLE')) {
+      suggested = suggested.replaceAll('Input', 'Output');
+    } else if (suggested.contains('Input') &&
+        name.toLowerCase().contains('virtual')) {
+      suggested = suggested.replaceAll('Input', 'Output');
+    } else if (suggested.contains('输入') && name.contains('虚拟')) {
+      suggested = suggested.replaceAll('输入', '输出');
+    }
+
+    suggested = suggested.trim();
+    if (suggested == name) return null;
+    return suggested;
   }
 
   @override
@@ -1575,7 +1647,7 @@ class _VoiceChannelCardState extends State<_VoiceChannelCard> {
           children: [
             const _SectionHeader(
               title: '语音频道（Windows）',
-              subtitle: '虚拟声卡监听与注入控制',
+              subtitle: '虚拟声卡“接线”配置：监听（语音->文本）与回注入（文本->语音，后续）',
             ),
             const SizedBox(height: 12),
             SwitchListTile(
@@ -1591,7 +1663,7 @@ class _VoiceChannelCardState extends State<_VoiceChannelCard> {
             ),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('语音频道注入主对话'),
+              title: const Text('将识别结果自动发到主对话（文本）'),
               subtitle: const Text('关闭后仅保留监听记录，不自动发送到对话'),
               value: settings.voiceChannelInjectEnabled,
               onChanged: (value) {
@@ -1600,12 +1672,160 @@ class _VoiceChannelCardState extends State<_VoiceChannelCard> {
                 );
               },
             ),
+            if (Platform.isWindows) ...[
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('TTS 回注入（实验）'),
+                subtitle: const Text(
+                  '把 CMYKE 的语音输出路由到你选择的“语音软件输出设备(播放)”（建议虚拟声卡播放端），供语音软件作为麦克风输入使用。',
+                ),
+                value: settings.voiceChannelTtsInjectEnabled,
+                onChanged: (value) {
+                  settingsRepository.updateSettings(
+                    settings.copyWith(voiceChannelTtsInjectEnabled: value),
+                  );
+                },
+              ),
+            ],
             const SizedBox(height: 6),
             Text(
-              '选择虚拟声卡输入设备',
+              '监听源（语音软件输出/播放设备）',
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '请在 Discord/KOOK 把“输出设备(播放)”设为虚拟声卡的播放端（例如 VB-CABLE 的 CABLE Input）。这里用于辅助你识别设备名并给出配对提示。',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: chrome.textSecondary,
+                height: 1.25,
+              ),
+            ),
+            const SizedBox(height: 8),
+            FutureBuilder<List<AudioOutputDeviceInfo>>(
+              future: _outputDevicesFuture,
+              builder: (context, snapshot) {
+                  final devices = snapshot.data ?? const [];
+                  final items = <DropdownMenuItem<String>>[
+                    const DropdownMenuItem(value: '', child: Text('不指定（仅作提示）')),
+                    ...devices.map(
+                      (device) => DropdownMenuItem(
+                        value: device.id,
+                        child: Text(device.name),
+                    ),
+                  ),
+                ];
+                final selectedId = settings.voiceChannelPlaybackDeviceId ?? '';
+                final hasSelected =
+                    selectedId.isEmpty || devices.any((d) => d.id == selectedId);
+                final effectiveValue = hasSelected ? selectedId : '';
+
+                AudioOutputDeviceInfo? defaultDevice;
+                for (final device in devices) {
+                  if (device.isDefault) {
+                    defaultDevice = device;
+                    break;
+                  }
+                }
+
+                final selectedDeviceName = effectiveValue.isNotEmpty
+                    ? devices
+                        .firstWhere(
+                          (d) => d.id == effectiveValue,
+                          orElse: () => const AudioOutputDeviceInfo(
+                            id: '',
+                            name: '',
+                            isDefault: false,
+                          ),
+                        )
+                        .name
+                    : (defaultDevice?.name ?? '');
+                final pairedRecording =
+                    _suggestPairedRecordingDeviceName(selectedDeviceName);
+
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            value: effectiveValue,
+                            items: items,
+                            onChanged: (value) {
+                              final id = value ?? '';
+                              final label = devices
+                                  .firstWhere(
+                                    (d) => d.id == id,
+                                    orElse: () => const AudioOutputDeviceInfo(
+                                      id: '',
+                                      name: '',
+                                      isDefault: false,
+                                    ),
+                                  )
+                                  .name;
+                              settingsRepository.updateSettings(
+                                settings.copyWith(
+                                  voiceChannelPlaybackDeviceId:
+                                      id.isEmpty ? null : id,
+                                  voiceChannelPlaybackDeviceLabel:
+                                      id.isEmpty ? null : label,
+                                ),
+                              );
+                            },
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          tooltip: '刷新设备列表',
+                          onPressed: _reloadDevices,
+                          icon: const Icon(Icons.refresh),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      defaultDevice == null
+                          ? '当前系统默认输出设备：未识别'
+                          : '当前系统默认输出设备：${defaultDevice.name}',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: chrome.textSecondary,
+                      ),
+                    ),
+                    if (pairedRecording != null) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        '配对提示：当语音软件“输出(播放)”用的是 "$selectedDeviceName"，Windows “输入(录音)”通常应切换为：$pairedRecording',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: chrome.textSecondary,
+                          height: 1.25,
+                        ),
+                      ),
+                    ],
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 10),
+            Text(
+              '选择 Windows 录音设备（输入）',
               style: Theme.of(
                 context,
               ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '说明：当前语音频道监听使用系统 STT，实际会跟随 Windows 的“默认录音设备”。'
+              '这里用于查看设备名称并提示你去系统切换。',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: chrome.textSecondary,
+                height: 1.25,
+              ),
             ),
             const SizedBox(height: 8),
             FutureBuilder<List<AudioInputDeviceInfo>>(
@@ -1634,6 +1854,21 @@ class _VoiceChannelCardState extends State<_VoiceChannelCard> {
                     break;
                   }
                 }
+
+                final selectedDeviceName = effectiveValue.isNotEmpty
+                    ? devices
+                        .firstWhere(
+                          (d) => d.id == effectiveValue,
+                          orElse: () => const AudioInputDeviceInfo(
+                            id: '',
+                            name: '',
+                            isDefault: false,
+                          ),
+                        )
+                        .name
+                    : (defaultDevice?.name ?? '');
+                final pairedPlayback =
+                    _suggestPairedPlaybackDeviceName(selectedDeviceName);
 
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1688,6 +1923,16 @@ class _VoiceChannelCardState extends State<_VoiceChannelCard> {
                         color: chrome.textSecondary,
                       ),
                     ),
+                    if (pairedPlayback != null) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        '配对提示：若你要“监听语音频道输出(播放)”，请在 Discord/KOOK 把 输出设备(播放) 设为：$pairedPlayback',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: chrome.textSecondary,
+                          height: 1.25,
+                        ),
+                      ),
+                    ],
                     if (effectiveValue.isNotEmpty &&
                         defaultDevice != null &&
                         effectiveValue != defaultDevice.id)
@@ -1710,8 +1955,17 @@ class _VoiceChannelCardState extends State<_VoiceChannelCard> {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      '使用方式：把 Discord/KOOK 的输出设备改为虚拟声卡（如 VB-CABLE 输出），'
-                      '再把该虚拟声卡设为 Windows 默认录音设备。CMYKE 中用 🎧 按钮开始/停止监听。',
+                      '使用方式（以 VB-CABLE 为例）：\n'
+                      '接线（推荐记法）：\n'
+                      '监听：语音软件 输出(播放) -> 虚拟扬声器(播放端) -> 虚拟麦克风(录音端) -> Windows 默认录音 -> CMYKE(STT)\n'
+                      '回注入（后续）：CMYKE(TTS) -> 虚拟扬声器(播放端) -> 虚拟麦克风(录音端) -> 语音软件 输入(麦克风)\n'
+                      '\n'
+                      '快速配置：\n'
+                      '1) Discord/KOOK 输出设备(播放)：CABLE Input\n'
+                      '2) Windows 默认输入设备(录音)：CABLE Output\n'
+                      '3) CMYKE：聊天页“耳机”按钮开始/停止监听\n'
+                      '\n'
+                      '注：当前“注入”仅指把识别到的文本自动发到主对话，不包含 TTS 音频回注入。',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: chrome.textSecondary,
                         height: 1.25,

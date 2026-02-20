@@ -222,7 +222,7 @@ class Live3DBridge {
 
   void setFpsCap(int fps) {
     _fpsCap = fps < 0 ? 0 : fps;
-    _runJs('window.setFpsCap && window.setFpsCap(${_fpsCap});');
+    _runJs('window.setFpsCap && window.setFpsCap($_fpsCap);');
   }
 
   /// Play a named motion (VRMA catalog id / file name / url / procedural id).

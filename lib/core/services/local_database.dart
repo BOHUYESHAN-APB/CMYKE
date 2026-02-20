@@ -57,7 +57,7 @@ class LocalDatabase {
       return ffi.databaseFactoryFfi.openDatabase(
         dbPath,
         options: OpenDatabaseOptions(
-          version: 25,
+          version: 27,
           onConfigure: (db) async {
             await db.execute('PRAGMA foreign_keys = ON');
           },
@@ -68,7 +68,7 @@ class LocalDatabase {
     }
     return openDatabase(
       dbPath,
-      version: 25,
+      version: 27,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
       },
@@ -248,6 +248,9 @@ class LocalDatabase {
         voice_channel_inject_enabled INTEGER NOT NULL DEFAULT 1,
         voice_channel_device_id TEXT,
         voice_channel_device_label TEXT,
+        voice_channel_playback_device_id TEXT,
+        voice_channel_playback_device_label TEXT,
+        voice_channel_tts_inject_enabled INTEGER NOT NULL DEFAULT 0,
         ui_palette TEXT,
         ui_glass TEXT,
         layout_preset TEXT,
@@ -467,6 +470,19 @@ class LocalDatabase {
       ''');
       await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_chat_attachments_message_id ON chat_attachments(message_id)',
+      );
+    }
+    if (oldVersion < 26) {
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN voice_channel_playback_device_id TEXT',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN voice_channel_playback_device_label TEXT',
+      );
+    }
+    if (oldVersion < 27) {
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN voice_channel_tts_inject_enabled INTEGER NOT NULL DEFAULT 0',
       );
     }
   }

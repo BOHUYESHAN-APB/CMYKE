@@ -11,6 +11,7 @@ realtime, multimodal agent runtime without breaking core UX.
   Rust core + optional Python extensions.
 - Dual-mode runtime: standard LLM for tool-heavy workflows and realtime
   voice models for low-latency conversation.
+- JSON-first internal protocols for tool/agent/event wiring (structured outputs).
 - Reserve avatar rendering slots (Live2D/Live3D) with shared expression events.
 
 ## Modules
@@ -71,6 +72,12 @@ We keep **frontend capabilities** so mobile can still work independently.
 - Control/Planner Agent
   - Reads context + memory, decides tool calls on behalf of realtime model.
   - Outputs expression events for avatar synchronization.
+- Embodiment Manager (planned)
+  - Standard-model helper that compresses state and produces control plans for
+    realtime embodiment flows (VRChat/robotics).
+- VLA Spine (planned)
+  - Vision-Language-Action controller that outputs short-horizon `ActionFrame`
+    for external executors (guarded by policy).
 - Deep Search Agent (planned)
   - Multi-source retrieval, citation tracking, structured summaries.
 - Deep Research Agent (planned)
@@ -85,6 +92,11 @@ Realtime mode:
 - User -> Realtime Voice Model (dialog)
 - Control/Planner Agent -> Tool Router -> Tool Executor -> Memory/Context
 - Expression Orchestrator -> Avatar Stage (Live2D/Live3D)
+- (Planned) Embodiment: Realtime/Omni Boss -> Manager -> VLA Spine -> Policy Gate -> Actuators
+
+See also:
+- `docs/STRUCTURED_OUTPUT_PROTOCOL.md` (JSON-first output envelopes)
+- `docs/EMBODIMENT_ARCHITECTURE.md` (VRChat/robotics embodiment pipeline)
 
 ## Memory Tiers
 

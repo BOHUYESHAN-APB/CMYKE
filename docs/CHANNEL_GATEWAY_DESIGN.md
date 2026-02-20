@@ -239,6 +239,15 @@ From the cloned repos:
 - **nanobot-cn**: ultra-light, clear bus model + config-based channels.
   - Useful pattern: simple `MessageBus`, config-driven channel activation.
 
+## How openclaw / zeroclaw / OpenManus Participate in CMYKE
+
+These projects are **not runtime dependencies** of CMYKE by default. In this repo they live under `Studying/` and are used for:
+
+- Design reference and migration notes (prompt patterns, tool loop patterns, gateway/channel routing, security policy ideas).
+- Skills ecosystem reference: `Studying/deep_research/openclaw-skills` is used as a **local skill pack** source for the in-app "OpenCode Skills" installer (developer convenience).
+
+For the authoritative, traceable list (paths + usage boundary + license), see `docs/THIRD_PARTY_ATTRIBUTIONS.md`.
+
 ## Computer-Use Adapter (QQ/WeChat fallback)
 
 Why: official QQ/WeChat bot APIs are hard to obtain; unofficial APIs are high risk.

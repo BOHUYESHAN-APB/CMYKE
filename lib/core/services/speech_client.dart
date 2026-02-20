@@ -7,6 +7,37 @@ import 'package:http/http.dart' as http;
 import '../models/provider_config.dart';
 
 class SpeechClient {
+  Future<Uint8List> synthesizeSpeechBytes({
+    required ProviderConfig provider,
+    required String text,
+    String responseFormat = 'wav',
+  }) async {
+    final uri = _buildSpeechUri(provider.baseUrl);
+    final headers = _headers(provider);
+    final payload = <String, dynamic>{
+      'model': provider.model,
+      'input': text,
+      'stream': false,
+      'response_format': responseFormat,
+    };
+    if (provider.outputSampleRate != null) {
+      payload['sample_rate'] = provider.outputSampleRate;
+    }
+    if (provider.audioVoice != null && provider.audioVoice!.isNotEmpty) {
+      payload['voice'] = provider.audioVoice;
+    }
+    final response = await http.post(
+      uri,
+      headers: headers,
+      body: jsonEncode(payload),
+    );
+    if (response.statusCode != HttpStatus.ok) {
+      final body = response.body.trim();
+      throw HttpException('TTS request failed: ${response.statusCode} $body');
+    }
+    return response.bodyBytes;
+  }
+
   Stream<Uint8List> streamSpeech({
     required ProviderConfig provider,
     required String text,

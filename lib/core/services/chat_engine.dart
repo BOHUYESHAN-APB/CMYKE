@@ -36,6 +36,7 @@ import 'motion_agent.dart';
 import 'memory_agent.dart';
 import 'time_range_parser.dart';
 import 'web_search_orchestrator.dart';
+import '../../ui/windows/audio_device_bridge.dart';
 
 class ChatEngine extends ChangeNotifier {
   ChatEngine({
@@ -1493,6 +1494,43 @@ class ChatEngine extends ChangeNotifier {
       return;
     }
     final provider = _resolveTtsProvider();
+
+    // Windows voice-channel TTS injection: route audio to a selected render
+    // endpoint (typically the virtual cable playback endpoint).
+    final settings = _settingsRepository.settings;
+    final injectTts =
+        Platform.isWindows &&
+        settings.voiceChannelEnabled &&
+        settings.voiceChannelTtsInjectEnabled &&
+        (settings.voiceChannelPlaybackDeviceId ?? '').trim().isNotEmpty;
+    if (injectTts) {
+      if (provider == null ||
+          provider.protocol == ProviderProtocol.deviceBuiltin) {
+        // System TTS cannot target a specific output device.
+        if (_isSystemTtsEnabled()) {
+          await _speak(text);
+        }
+        return;
+      }
+      try {
+        await WindowsAudioDeviceBridge.stopInjectedTts();
+        final Uint8List wav = await _speechClient.synthesizeSpeechBytes(
+          provider: provider,
+          text: text,
+          responseFormat: 'wav',
+        );
+        final ok = await WindowsAudioDeviceBridge.playWavToOutputDevice(
+          wavBytes: wav,
+          deviceId: settings.voiceChannelPlaybackDeviceId,
+        );
+        if (ok) {
+          return;
+        }
+      } catch (_) {
+        // Fall through to normal playback below.
+      }
+    }
+
     if (provider == null) {
       if (!_isSystemTtsEnabled()) {
         return;

@@ -22,6 +22,26 @@ class AudioInputDeviceInfo {
   }
 }
 
+class AudioOutputDeviceInfo {
+  const AudioOutputDeviceInfo({
+    required this.id,
+    required this.name,
+    required this.isDefault,
+  });
+
+  final String id;
+  final String name;
+  final bool isDefault;
+
+  factory AudioOutputDeviceInfo.fromMap(Map<dynamic, dynamic> map) {
+    return AudioOutputDeviceInfo(
+      id: (map['id'] as String?) ?? '',
+      name: (map['name'] as String?) ?? '',
+      isDefault: map['isDefault'] == true,
+    );
+  }
+}
+
 class WindowsAudioDeviceBridge {
   static const MethodChannel _channel = MethodChannel('cmyke/audio');
 
@@ -38,6 +58,16 @@ class WindowsAudioDeviceBridge {
         .toList();
   }
 
+  static Future<List<AudioOutputDeviceInfo>> listOutputDevices() async {
+    if (!_enabled) return const [];
+    final res = await _channel.invokeMethod('listOutputDevices');
+    if (res is! List) return const [];
+    return res
+        .whereType<Map<dynamic, dynamic>>()
+        .map(AudioOutputDeviceInfo.fromMap)
+        .toList();
+  }
+
   static Future<AudioInputDeviceInfo?> getDefaultInputDevice() async {
     if (!_enabled) return null;
     final res = await _channel.invokeMethod('getDefaultInputDevice');
@@ -45,8 +75,35 @@ class WindowsAudioDeviceBridge {
     return AudioInputDeviceInfo.fromMap(res);
   }
 
+  static Future<AudioOutputDeviceInfo?> getDefaultOutputDevice() async {
+    if (!_enabled) return null;
+    final res = await _channel.invokeMethod('getDefaultOutputDevice');
+    if (res is! Map) return null;
+    return AudioOutputDeviceInfo.fromMap(res);
+  }
+
   static Future<void> openSoundSettings() async {
     if (!_enabled) return;
     await _channel.invokeMethod('openSoundSettings');
+  }
+
+  static Future<bool> playWavToOutputDevice({
+    required Uint8List wavBytes,
+    String? deviceId,
+  }) async {
+    if (!_enabled) return false;
+    final res = await _channel.invokeMethod(
+      'playWavToOutputDevice',
+      {
+        'deviceId': (deviceId ?? '').trim(),
+        'wavBytes': wavBytes,
+      },
+    );
+    return res == true;
+  }
+
+  static Future<void> stopInjectedTts() async {
+    if (!_enabled) return;
+    await _channel.invokeMethod('stopInjectedTts');
   }
 }

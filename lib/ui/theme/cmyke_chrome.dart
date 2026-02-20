@@ -302,7 +302,7 @@ Color _tint(Color base, Color tint, double amount) {
 
 Color _withOpacity(Color color, double opacity) {
   final value = opacity.clamp(0.0, 1.0);
-  return color.withOpacity(value);
+  return color.withValues(alpha: value);
 }
 
 double _glassBlur(UiGlass glass) {

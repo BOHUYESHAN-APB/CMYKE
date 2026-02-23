@@ -28,6 +28,38 @@ class ToolRouter {
   final http.Client _client;
   ToolGatewayConfig _config = ToolGatewayConfig.disabled;
 
+  String _sanitizeRelSegment(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return 'trace';
+    final buffer = StringBuffer();
+    for (final rune in trimmed.runes) {
+      final c = String.fromCharCode(rune);
+      final ok = RegExp(r'[A-Za-z0-9_-]').hasMatch(c);
+      buffer.write(ok ? c : '_');
+    }
+    final out = buffer.toString().replaceAll(RegExp(r'_+'), '_');
+    final normalized = out.replaceAll(RegExp(r'^_+|_+$'), '');
+    return normalized.isEmpty ? 'trace' : normalized;
+  }
+
+  String _deriveCwd(ToolIntent intent) {
+    final traceId = intent.traceId?.trim();
+    final tracePart = (traceId != null && traceId.isNotEmpty)
+        ? _sanitizeRelSegment(traceId)
+        : null;
+    switch (intent.action) {
+      case ToolAction.search:
+      case ToolAction.crawl:
+      case ToolAction.analyze:
+      case ToolAction.summarize:
+        return tracePart == null ? 'scratch/tools' : 'scratch/tools/$tracePart';
+      case ToolAction.code:
+      case ToolAction.imageGen:
+      case ToolAction.imageAnalyze:
+        return 'scratch';
+    }
+  }
+
   bool _isDeepResearchRouting(String? routing) {
     final value = routing?.trim().toLowerCase();
     if (value == null || value.isEmpty) {
@@ -78,9 +110,10 @@ class ToolRouter {
       'pairing_token': _config.pairingToken.trim(),
       'session_id': sessionId,
       'message': _buildMessage(intent),
-      // Run at the session workspace root. OpenCode config/skills are injected by
-      // the gateway via OPENCODE_CONFIG/OPENCODE_CONFIG_DIR under `workspace/_shared/opencode/`.
-      'cwd': '.',
+      // Run inside the per-session workspace sandbox. We default to scratch and
+      // further scope search/crawl/analyze/summarize to a per-trace subdir so
+      // tools can safely write JSON artifacts without polluting other runs.
+      'cwd': _deriveCwd(intent),
     };
     if (intent.traceId != null && intent.traceId!.trim().isNotEmpty) {
       payload['trace_id'] = intent.traceId!.trim();

@@ -121,6 +121,7 @@ class Live3DBridge {
   bool get cursorFollowEnabled => _cursorFollowEnabled;
   bool get petMode => _petMode;
   double get petZoom => _petZoom;
+  String get controlMode => _controlMode;
 
   /// Swap VRM mapping at runtime (e.g., user loads a different model).
   void updateConfig(VrmConfig config) {
@@ -129,8 +130,9 @@ class Live3DBridge {
 
   void attachJsInvoker(Future<void> Function(String script) invoker) {
     _jsInvoker = invoker;
-    // Force basic mode; external pose driving is disabled.
-    setControlMode('basic');
+    // Keep the current mode (default: basic). Advanced mode is intended for
+    // external pose driving / embodiment experiments.
+    setControlMode(_controlMode);
     setTalking(_talking);
     setCursorFollow(_cursorFollowEnabled);
     setPetMode(_petMode);
@@ -180,8 +182,9 @@ class Live3DBridge {
 
   /// Switch control mode: 'basic' | 'advanced'. Advanced is driven via applyPose.
   void setControlMode(String mode) {
-    _controlMode = 'basic';
-    _runJs('window.setControlMode(${jsonEncode(_controlMode)});');
+    final raw = mode.trim().toLowerCase();
+    _controlMode = raw == 'advanced' ? 'advanced' : 'basic';
+    _runJs('window.setControlMode && window.setControlMode(${jsonEncode(_controlMode)});');
   }
 
   void setTalking(bool isTalking) {
@@ -239,8 +242,10 @@ class Live3DBridge {
 
   /// Send a pose payload (bones/expression/viseme) to viewer in advanced mode.
   Future<void> sendPose(Map<String, dynamic> pose) async {
-    // External pose driving is disabled in basic-only mode.
-    return;
+    if (_controlMode != 'advanced') {
+      return;
+    }
+    await _runJs('window.applyPose && window.applyPose(${jsonEncode(pose)});');
   }
 
   Future<void> dispose() async {

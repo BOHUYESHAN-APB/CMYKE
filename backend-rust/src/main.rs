@@ -381,7 +381,14 @@ async fn opencode_run(
         .map(|raw| raw.trim().to_string())
         .filter(|raw| !raw.is_empty())
         .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let trace_id_fs = sanitize_trace_id(&trace_id);
+    let run_started_at = SystemTime::now()
+        .checked_sub(Duration::from_secs(2))
+        .unwrap_or_else(|| SystemTime::now());
     let opencode_log_path = workspace_root.join("logs").join("opencode_runs.jsonl");
+    let opencode_artifact_dir = workspace_root.join("logs").join("opencode_runs");
+    let _ = fs::create_dir_all(&opencode_artifact_dir).await;
+    let opencode_artifact_path = opencode_artifact_dir.join(format!("{trace_id_fs}.json"));
     if let Err(err) = append_jsonl_log(
         &opencode_log_path,
         serde_json::json!({
@@ -443,7 +450,7 @@ async fn opencode_run(
 
     let mut cmd = Command::new(resolve_opencode_bin());
     cmd.arg("run");
-    cmd.arg(message);
+    cmd.arg(&message);
     cmd.current_dir(&cwd);
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
@@ -511,7 +518,7 @@ async fn opencode_run(
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(err) => {
-            let response = OpencodeRunResponse {
+            let mut response = OpencodeRunResponse {
                 ok: false,
                 exit_code: -1,
                 stdout: String::new(),
@@ -549,6 +556,33 @@ async fn opencode_run(
                 error = %response.stderr,
                 "opencode run failed to spawn"
             );
+            let mut files_written = Vec::new();
+            if let Some(rel) = workspace_rel_path(&workspace_root, &opencode_log_path) {
+                files_written.push(rel);
+            }
+            if let Some(rel) = workspace_rel_path(&workspace_root, &opencode_artifact_path) {
+                files_written.push(rel);
+            }
+            files_written.sort();
+            files_written.dedup();
+            response.files_written = files_written;
+
+            let artifact = build_opencode_run_artifact_json(
+                &trace_id,
+                session_id,
+                cwd_rel,
+                &format,
+                timeout_ms,
+                payload.command.as_deref(),
+                payload.model.as_deref(),
+                payload.agent.as_deref(),
+                &message,
+                false,
+                &response,
+            );
+            if let Err(err) = write_pretty_json(&opencode_artifact_path, artifact).await {
+                tracing::warn!("failed to write opencode artifact: {}", err);
+            }
             return Ok(Json(response));
         }
     };
@@ -579,7 +613,7 @@ async fn opencode_run(
         Ok(result) => match result {
             Ok(status) => Some(status),
             Err(err) => {
-                let response = OpencodeRunResponse {
+                let mut response = OpencodeRunResponse {
                     ok: false,
                     exit_code: -1,
                     stdout: String::new(),
@@ -617,6 +651,34 @@ async fn opencode_run(
                     error = %response.stderr,
                     "opencode run wait failed"
                 );
+                let mut files_written =
+                    collect_files_written_since(&workspace_root, &cwd, run_started_at, 2000).await;
+                if let Some(rel) = workspace_rel_path(&workspace_root, &opencode_log_path) {
+                    files_written.push(rel);
+                }
+                if let Some(rel) = workspace_rel_path(&workspace_root, &opencode_artifact_path) {
+                    files_written.push(rel);
+                }
+                files_written.sort();
+                files_written.dedup();
+                response.files_written = files_written;
+
+                let artifact = build_opencode_run_artifact_json(
+                    &trace_id,
+                    session_id,
+                    cwd_rel,
+                    &format,
+                    timeout_ms,
+                    payload.command.as_deref(),
+                    payload.model.as_deref(),
+                    payload.agent.as_deref(),
+                    &message,
+                    false,
+                    &response,
+                );
+                if let Err(err) = write_pretty_json(&opencode_artifact_path, artifact).await {
+                    tracing::warn!("failed to write opencode artifact: {}", err);
+                }
                 return Ok(Json(response));
             }
         },
@@ -659,7 +721,7 @@ async fn opencode_run(
         Vec::new()
     };
 
-    let response = OpencodeRunResponse {
+    let mut response = OpencodeRunResponse {
         ok,
         exit_code,
         stdout,
@@ -673,6 +735,33 @@ async fn opencode_run(
         workspace_root: workspace_root.to_string_lossy().to_string(),
         log_path: opencode_log_path.to_string_lossy().to_string(),
     };
+    let mut files_written = collect_files_written_since(&workspace_root, &cwd, run_started_at, 2000).await;
+    if let Some(rel) = workspace_rel_path(&workspace_root, &opencode_log_path) {
+        files_written.push(rel);
+    }
+    if let Some(rel) = workspace_rel_path(&workspace_root, &opencode_artifact_path) {
+        files_written.push(rel);
+    }
+    files_written.sort();
+    files_written.dedup();
+    response.files_written = files_written;
+
+    let artifact = build_opencode_run_artifact_json(
+        &trace_id,
+        session_id,
+        cwd_rel,
+        &format,
+        timeout_ms,
+        payload.command.as_deref(),
+        payload.model.as_deref(),
+        payload.agent.as_deref(),
+        &message,
+        timed_out,
+        &response,
+    );
+    if let Err(err) = write_pretty_json(&opencode_artifact_path, artifact).await {
+        tracing::warn!("failed to write opencode artifact: {}", err);
+    }
     if let Err(log_err) = append_jsonl_log(
         &opencode_log_path,
         serde_json::json!({
@@ -886,6 +975,111 @@ async fn append_jsonl_log(path: &Path, entry: serde_json::Value) -> Result<(), S
         .map_err(|err| err.to_string())?;
     file.write_all(b"\n").await.map_err(|err| err.to_string())?;
     Ok(())
+}
+
+fn workspace_rel_path(workspace_root: &Path, path: &Path) -> Option<String> {
+    let rel = path.strip_prefix(workspace_root).ok()?;
+    Some(rel.to_string_lossy().replace('\\', "/"))
+}
+
+async fn write_pretty_json(path: &Path, value: serde_json::Value) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .await
+            .map_err(|err| err.to_string())?;
+    }
+    let text = serde_json::to_string_pretty(&value).map_err(|err| err.to_string())?;
+    fs::write(path, text).await.map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+async fn collect_files_written_since(
+    workspace_root: &Path,
+    dir: &Path,
+    since: SystemTime,
+    limit: usize,
+) -> Vec<String> {
+    let workspace_root = workspace_root.to_path_buf();
+    let dir = dir.to_path_buf();
+    let since = since;
+    let limit = limit.max(1);
+    tokio::task::spawn_blocking(move || {
+        let mut out = Vec::new();
+        let mut stack = vec![dir];
+        while let Some(current) = stack.pop() {
+            if out.len() >= limit {
+                break;
+            }
+            let rd = match std::fs::read_dir(&current) {
+                Ok(rd) => rd,
+                Err(_) => continue,
+            };
+            for entry in rd.flatten() {
+                if out.len() >= limit {
+                    break;
+                }
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name == ".git" || name == "node_modules" || name == "target" {
+                    continue;
+                }
+                let ty = match entry.file_type() {
+                    Ok(ty) => ty,
+                    Err(_) => continue,
+                };
+                let path = entry.path();
+                if ty.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if !ty.is_file() {
+                    continue;
+                }
+                if let Ok(meta) = entry.metadata() {
+                    if let Ok(modified) = meta.modified() {
+                        if modified < since {
+                            continue;
+                        }
+                    }
+                }
+                if let Ok(rel) = path.strip_prefix(&workspace_root) {
+                    out.push(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+        out
+    })
+    .await
+    .unwrap_or_default()
+}
+
+fn build_opencode_run_artifact_json(
+    trace_id: &str,
+    session_id: &str,
+    cwd_rel: &str,
+    format: &str,
+    timeout_ms: u64,
+    command: Option<&str>,
+    model: Option<&str>,
+    agent: Option<&str>,
+    message: &str,
+    timed_out: bool,
+    response: &OpencodeRunResponse,
+) -> serde_json::Value {
+    serde_json::json!({
+        "event": "opencode_run",
+        "at": now_ts(),
+        "trace_id": trace_id,
+        "session_id": session_id,
+        "cwd": cwd_rel,
+        "format": format,
+        "timeout_ms": timeout_ms,
+        "command": command,
+        "model": model,
+        "agent": agent,
+        "message": message,
+        "timed_out": timed_out,
+        "response": response,
+    })
 }
 
 fn preview_text(text: &str, max_chars: usize) -> String {
@@ -1110,6 +1304,27 @@ fn sanitize_skill_name(raw: &str) -> String {
         "skill".to_string()
     } else {
         trimmed
+    }
+}
+
+fn sanitize_trace_id(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return "trace".to_string();
+    }
+    let mut out = String::with_capacity(trimmed.len());
+    for c in trimmed.chars() {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+            out.push(c);
+        } else {
+            out.push('_');
+        }
+    }
+    let cleaned = out.trim_matches('_').to_string();
+    if cleaned.is_empty() {
+        "trace".to_string()
+    } else {
+        cleaned
     }
 }
 

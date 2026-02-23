@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_windows/webview_windows.dart';
@@ -65,6 +67,10 @@ class _Live3DPreviewState extends State<Live3DPreview> {
   bool _petMode = false;
   String? _renderQuality;
   int? _fpsCap;
+  bool _advancedPose = false;
+  bool _autoPose = false;
+  Timer? _autoPoseTimer;
+  int _autoPoseTick = 0;
 
   void _handleHoverEnter() {
     if (!mounted) return;
@@ -126,6 +132,7 @@ class _Live3DPreviewState extends State<Live3DPreview> {
     }
     _syncPetModeFlag(force: true);
     _syncRenderSettings(force: true);
+    _advancedPose = _hub.live3dBridge.controlMode == 'advanced';
     widget.settingsRepository?.addListener(_handleSettingsChanged);
     _prepareBundle().then((_) {
       if (!mounted) return;
@@ -186,6 +193,125 @@ class _Live3DPreviewState extends State<Live3DPreview> {
     _fpsCap = nextFps;
     _hub.live3dBridge.setRenderQuality(nextQuality);
     _hub.live3dBridge.setFpsCap(nextFps);
+  }
+
+  void _setAdvancedPose(bool enabled) {
+    if (!mounted) return;
+    setState(() {
+      _advancedPose = enabled;
+      if (!enabled) {
+        _autoPose = false;
+        _autoPoseTimer?.cancel();
+        _autoPoseTimer = null;
+      }
+    });
+    _hub.live3dBridge.setControlMode(enabled ? 'advanced' : 'basic');
+  }
+
+  void _ensureAdvancedPose() {
+    if (_advancedPose) return;
+    _setAdvancedPose(true);
+  }
+
+  void _setAutoPose(bool enabled) {
+    if (!mounted) return;
+    if (enabled) {
+      _ensureAdvancedPose();
+    }
+    setState(() => _autoPose = enabled);
+    _autoPoseTimer?.cancel();
+    _autoPoseTimer = null;
+    if (!enabled) return;
+
+    _autoPoseTick = 0;
+    const dt = Duration(milliseconds: 120);
+    _autoPoseTimer = Timer.periodic(dt, (_) {
+      if (!mounted) return;
+      _autoPoseTick += 1;
+      final t = _autoPoseTick * (dt.inMilliseconds / 1000.0);
+
+      // Keep it intentionally simple: yaw head + a tiny right arm swing.
+      final yaw = math.sin(t * 1.6) * 0.38;
+      final arm = (math.sin(t * 2.6) * 0.35) + 0.9;
+      final pose = <String, dynamic>{
+        'bones': {
+          'head': _quatFromAxisAngle(x: 0, y: 1, z: 0, radians: yaw),
+          'neck': _quatFromAxisAngle(x: 0, y: 1, z: 0, radians: yaw * 0.35),
+          'rightLowerArm':
+              _quatFromAxisAngle(x: 0, y: 0, z: 1, radians: arm),
+        },
+      };
+
+      unawaited(_hub.live3dBridge.sendPose(pose));
+    });
+  }
+
+  Map<String, dynamic> _quatFromAxisAngle({
+    required double x,
+    required double y,
+    required double z,
+    required double radians,
+  }) {
+    final len = math.sqrt(x * x + y * y + z * z);
+    if (len <= 1e-6) {
+      return const {'x': 0.0, 'y': 0.0, 'z': 0.0, 'w': 1.0};
+    }
+    final nx = x / len;
+    final ny = y / len;
+    final nz = z / len;
+    final half = radians / 2.0;
+    final s = math.sin(half);
+    return {'x': nx * s, 'y': ny * s, 'z': nz * s, 'w': math.cos(half)};
+  }
+
+  Future<void> _burstPose(Map<String, dynamic> pose) async {
+    // Viewer uses slerp(0.35), so a small burst helps it reach the target pose.
+    for (var i = 0; i < 6; i += 1) {
+      await _hub.live3dBridge.sendPose(pose);
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+    }
+  }
+
+  Future<void> _poseLookYaw(double yawRadians) async {
+    _ensureAdvancedPose();
+    final pose = <String, dynamic>{
+      'bones': {
+        'head': _quatFromAxisAngle(x: 0, y: 1, z: 0, radians: yawRadians),
+        'neck': _quatFromAxisAngle(
+          x: 0,
+          y: 1,
+          z: 0,
+          radians: yawRadians * 0.35,
+        ),
+      },
+    };
+    await _burstPose(pose);
+  }
+
+  Future<void> _poseWave() async {
+    _ensureAdvancedPose();
+    final pose = <String, dynamic>{
+      'bones': {
+        'rightUpperArm':
+            _quatFromAxisAngle(x: 0, y: 0, z: 1, radians: 1.15),
+        'rightLowerArm':
+            _quatFromAxisAngle(x: 0, y: 0, z: 1, radians: 0.65),
+      },
+    };
+    await _burstPose(pose);
+  }
+
+  Future<void> _poseReset() async {
+    _ensureAdvancedPose();
+    final pose = <String, dynamic>{
+      'bones': {
+        'head': const {'x': 0.0, 'y': 0.0, 'z': 0.0, 'w': 1.0},
+        'neck': const {'x': 0.0, 'y': 0.0, 'z': 0.0, 'w': 1.0},
+        'rightUpperArm': const {'x': 0.0, 'y': 0.0, 'z': 0.0, 'w': 1.0},
+        'rightLowerArm': const {'x': 0.0, 'y': 0.0, 'z': 0.0, 'w': 1.0},
+      },
+    };
+    await _burstPose(pose);
   }
 
   Future<void> _prepareBundle() async {
@@ -617,6 +743,7 @@ class _Live3DPreviewState extends State<Live3DPreview> {
   @override
   void dispose() {
     _modelSub?.cancel();
+    _autoPoseTimer?.cancel();
     widget.settingsRepository?.removeListener(_handleSettingsChanged);
     _hub.live3dBridge.detachJsInvoker();
     super.dispose();
@@ -836,6 +963,41 @@ class _Live3DPreviewState extends State<Live3DPreview> {
                           color: chrome.textSecondary,
                         ),
                       ),
+                    if (!kReleaseMode) ...[
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          FilterChip(
+                            label: const Text('ADV Pose'),
+                            selected: _advancedPose,
+                            onSelected: _setAdvancedPose,
+                          ),
+                          FilterChip(
+                            label: const Text('AutoPose'),
+                            selected: _autoPose,
+                            onSelected: _setAutoPose,
+                          ),
+                          ActionChip(
+                            label: const Text('Look L'),
+                            onPressed: () => _poseLookYaw(0.55),
+                          ),
+                          ActionChip(
+                            label: const Text('Look R'),
+                            onPressed: () => _poseLookYaw(-0.55),
+                          ),
+                          ActionChip(
+                            label: const Text('Wave'),
+                            onPressed: _poseWave,
+                          ),
+                          ActionChip(
+                            label: const Text('Reset'),
+                            onPressed: _poseReset,
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),

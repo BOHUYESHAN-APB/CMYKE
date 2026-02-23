@@ -31,6 +31,9 @@ Rules:
 Notes:
 - OpenCode config/skills are stored under `workspace/_shared/opencode/` so they can be reused across sessions.
 - Tool execution (cwd/files) remains strictly scoped to `workspace/<session_id>/`.
+- For traceability, the gateway writes a per-run JSON artifact under:
+  - `workspace/<session_id>/logs/opencode_runs/<trace_id>.json` (best-effort)
+  and returns this path in `files_written` when available.
 
 ## 2) tool.opencode.run Schema
 
@@ -101,7 +104,7 @@ Notes:
     "files_written": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Workspace-relative paths discovered after run"
+      "description": "Workspace-relative paths discovered after run (e.g. tool outputs under cwd, plus the gateway's per-run artifact JSON)"
     },
     "duration_ms": {"type": "integer"}
   }

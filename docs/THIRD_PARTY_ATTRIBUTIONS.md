@@ -2,7 +2,7 @@
 
 本文件用于记录 CMYKE 当前实际使用或明确引用的第三方项目、资源与许可信息。
 
-更新时间：2026-02-19
+更新时间：2026-02-20
 
 ## 1) 运行时使用（产品功能直接依赖）
 
@@ -38,6 +38,7 @@
 | TP-REF-009 | DeepResearchAgent | `Studying/universal-agent/deepresearchagent/DeepResearchAgent-main` | 研究代理流程、browser/terminal/file 工具集参考 | https://github.com/SkyworkAI/DeepResearchAgent | Public Domain / The Unlicense（见上游 LICENSE） |
 | TP-REF-010 | Skywork Super Agents | `Studying/universal-agent/skywork-super-agents/Skywork-Super-Agents-main` | 多智能体分工与任务编排参考 | https://github.com/Skywork-ai/Skywork-Super-Agents | MIT |
 | TP-REF-011 | Ultimate Agent Skills Collection | （不克隆入仓库） | skills 仓库集合索引，用于挑选并导入可用 skills | https://github.com/ZhanlinCui/Ultimate-Agent-Skills-Collection | （以其仓库 LICENSE 为准，待确认） |
+| TP-REF-012 | Xiaomi-Robotics-0 | `Studying/embodiment/Xiaomi-Robotics-0` | VLA 模型论文/推理/评测参考；具身控制 `Spine` 的候选技术路线之一 | https://github.com/XiaomiRobotics/Xiaomi-Robotics-0 | Apache-2.0 |
 
 ## 3) 维护规则
 

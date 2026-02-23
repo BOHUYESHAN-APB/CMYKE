@@ -1643,7 +1643,8 @@
         post('info', `vrma library: ${availableVrmaAnimations.length}`);
       };
       window.setControlMode = (mode) => {
-        const m = 'basic';
+        const raw = (mode ?? '').toString().trim().toLowerCase();
+        const m = raw === 'advanced' ? 'advanced' : 'basic';
         window.__controlMode = m;
         setStatus(`Mode: ${m}`);
         post('info', `mode:${m}`);

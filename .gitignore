@@ -33,9 +33,12 @@ migrate_working_dir/
 .pub/
 /build/
 /local_models/
+/workspace/
 /tools/_tmp_fonts/
 backend-rust/target/
 /_tmp_skillpacks/
+/HANDOFF.md
+/docs/HANDOFF.md
 
 # Symbolication related
 app.*.symbols

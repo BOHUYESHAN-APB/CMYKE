@@ -57,3 +57,10 @@ Updated: 2026-02-20
 - Bundled OpenCode (`opencode.exe`) works with the gateway and shared skill store under `_shared/opencode/`.
 - Dev vs release environment detection behaves as expected (base URLs, workspace locations, sidecar startup).
 
+## Embodiment / External Control (Long-Term)
+
+- Standalone minimal experiment for VLA model loading/inference:
+  - ModelScope download works (light + full) for `XiaomiRobotics/Xiaomi-Robotics-0-LIBERO`,
+  - `transformers` can load with `trust_remote_code` and run one dummy forward pass,
+  - `outputs.actions` exists and `processor.decode_action(...)` returns an action chunk with expected shape.
+  - Note: this is a local-only experiment (not committed). Keep model files under `local_models/` (already gitignored).

@@ -37,8 +37,6 @@ migrate_working_dir/
 /tools/_tmp_fonts/
 backend-rust/target/
 /_tmp_skillpacks/
-/HANDOFF.md
-/docs/HANDOFF.md
 
 # Symbolication related
 app.*.symbols

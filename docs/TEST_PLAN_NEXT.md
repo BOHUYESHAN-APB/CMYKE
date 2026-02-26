@@ -2,7 +2,7 @@
 
 This checklist collects the manual tests we have not fully validated yet. Keep it updated as features evolve.
 
-Updated: 2026-02-20
+Updated: 2026-02-26
 
 ## Tool Gateway / Web Search
 
@@ -51,16 +51,34 @@ Updated: 2026-02-20
   - transcript injection respects the "auto send to chat" toggle.
 - Confirm current boundary: system STT follows Windows default recording device.
 
+## Local Realtime Speech (Fun-Audio-Chat Line)
+
+- Verify local speech-to-speech roundtrip latency on XPU and CPU fallback paths.
+- Verify barge-in stability during continuous conversation (interrupt user/AI speech multiple times).
+- Verify long-session stability (>=30 min) without stream deadlock, memory leak, or device reset.
+- Verify degraded-mode behavior when TTS device falls back from XPU to CPU.
+
+## Handoff Docs Consistency
+
+- Verify `HANDOFF.md` and `docs/HANDOFF.md` share the same active-track statement (voice and VLA both active).
+- Verify dates and run commands are current after each milestone update.
+- Verify snapshot statements are explicitly marked as snapshot (avoid persistent claims like "always clean").
+- Verify local `.git/hooks/pre-push` blocks `HANDOFF.md` and `docs/HANDOFF.md` from remote push by default.
+
 ## Desktop Packaging / Deployment
 
 - Windows package includes frontend + `cmyke-backend.exe` and can auto-connect.
 - Bundled OpenCode (`opencode.exe`) works with the gateway and shared skill store under `_shared/opencode/`.
 - Dev vs release environment detection behaves as expected (base URLs, workspace locations, sidecar startup).
 
-## Embodiment / External Control (Long-Term)
+## Embodiment / External Control (Active Pre-Research)
 
 - Standalone minimal experiment for VLA model loading/inference:
   - ModelScope download works (light + full) for `XiaomiRobotics/Xiaomi-Robotics-0-LIBERO`,
   - `transformers` can load with `trust_remote_code` and run one dummy forward pass,
   - `outputs.actions` exists and `processor.decode_action(...)` returns an action chunk with expected shape.
   - Note: this is a local-only experiment (not committed). Keep model files under `local_models/` (already gitignored).
+- Proactive movement behavior in VRM sandbox:
+  - avatar can keep purposeful movement toward goals without relying on a hand-authored trigger table,
+  - collect metrics: goal completion rate, interact-too-far count, wall-contact count, manual override count,
+  - verify rule-based logic is limited to safety gate/fallback and does not replace policy decisions.

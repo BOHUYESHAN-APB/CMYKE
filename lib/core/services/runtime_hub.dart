@@ -3,6 +3,8 @@ import 'bilibili_danmaku_service.dart';
 import 'control_agent.dart';
 import 'event_bus.dart';
 import 'live3d_bridge.dart';
+import 'runtime_capability_registry.dart';
+import 'runtime_event_arbitrator.dart';
 import 'tool_router.dart';
 
 /// Aggregates runtime-wide services (event bus, control agent, tool router,
@@ -10,7 +12,9 @@ import 'tool_router.dart';
 class RuntimeHub {
   RuntimeHub._internal()
     : bus = RuntimeEventBus(),
-      toolRouter = ToolRouter() {
+      toolRouter = ToolRouter(),
+      arbitrator = RuntimeEventArbitrator() {
+    _capabilities = RuntimeCapabilityRegistry(toolRouter: toolRouter);
     controlAgent = ControlAgent(bus: bus, toolRouter: toolRouter);
     live3dBridge = Live3DBridge(bus);
     bilibiliDanmaku = BilibiliDanmakuService(bus: bus);
@@ -20,6 +24,9 @@ class RuntimeHub {
 
   final RuntimeEventBus bus;
   final ToolRouter toolRouter;
+  final RuntimeEventArbitrator arbitrator;
+  late final RuntimeCapabilityRegistry _capabilities;
+  RuntimeCapabilityRegistry get capabilities => _capabilities;
   late final ControlAgent controlAgent;
   late final Live3DBridge live3dBridge;
   late final BilibiliDanmakuService bilibiliDanmaku;
@@ -32,9 +39,12 @@ class RuntimeHub {
         pairingToken: settings.toolGatewayPairingToken,
       ),
     );
+    capabilities.updateToolGatewayConfig(settings);
   }
 
   Future<void> dispose() async {
+    arbitrator.clear();
+    capabilities.dispose();
     await toolRouter.dispose();
     await live3dBridge.dispose();
     await bilibiliDanmaku.dispose();

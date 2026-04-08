@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../models/app_settings.dart';
+import '../models/brain_contract.dart';
 import '../models/provider_config.dart';
 import '../services/local_database.dart';
 import '../services/local_storage.dart';
@@ -27,6 +28,7 @@ class SettingsRepository extends ChangeNotifier {
 
   List<ProviderConfig> get providers => List.unmodifiable(_providers);
   AppSettings get settings => _settings;
+  BrainContract get brainContract => BrainContract.fromSettings(_settings);
 
   List<ProviderConfig> providersByKind(ProviderKind kind) => _providers
       .where((provider) => provider.kind == kind)
@@ -42,6 +44,15 @@ class SettingsRepository extends ChangeNotifier {
       }
     }
     return null;
+  }
+
+  ProviderConfig? resolveBrainProvider(BrainRole role) {
+    final contract = brainContract;
+    final providerId = switch (role) {
+      BrainRole.left => contract.leftBrain.providerId,
+      BrainRole.right => contract.rightBrain?.providerId,
+    };
+    return findProvider(providerId);
   }
 
   Future<void> load() async {
@@ -507,8 +518,9 @@ class SettingsRepository extends ChangeNotifier {
       'voice_channel_playback_device_id': settings.voiceChannelPlaybackDeviceId,
       'voice_channel_playback_device_label':
           settings.voiceChannelPlaybackDeviceLabel,
-      'voice_channel_tts_inject_enabled':
-          settings.voiceChannelTtsInjectEnabled ? 1 : 0,
+      'voice_channel_tts_inject_enabled': settings.voiceChannelTtsInjectEnabled
+          ? 1
+          : 0,
       'ui_palette': settings.uiPalette.name,
       'ui_glass': settings.uiGlass.name,
       'layout_preset': settings.layoutPreset.name,

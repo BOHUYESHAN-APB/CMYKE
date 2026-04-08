@@ -435,6 +435,158 @@ class MemoryRepository extends ChangeNotifier {
     await removeRecord(collectionId: collection.id, recordId: existing.id);
   }
 
+  MemoryRecord? noteLinkedRecord(String noteId, MemoryTier tier) {
+    final normalizedNoteId = noteId.trim();
+    if (normalizedNoteId.isEmpty) {
+      return null;
+    }
+    final targetTag = 'note:$normalizedNoteId';
+    for (final collection in collectionsByTier(tier)) {
+      for (final record in collection.records) {
+        if (record.tags.contains(targetTag)) {
+          return record;
+        }
+      }
+    }
+    return null;
+  }
+
+  String? collectionIdForRecord(String recordId) {
+    final normalizedRecordId = recordId.trim();
+    if (normalizedRecordId.isEmpty) {
+      return null;
+    }
+    for (final collection in _collections) {
+      for (final record in collection.records) {
+        if (record.id == normalizedRecordId) {
+          return collection.id;
+        }
+      }
+    }
+    return null;
+  }
+
+  Future<MemoryRecord?> syncNoteMemory({
+    required String noteId,
+    required String title,
+    required String content,
+    required String summary,
+    required MemoryTier tier,
+    String? coreKey,
+    DateTime? occurredAt,
+  }) async {
+    final normalizedNoteId = noteId.trim();
+    final normalizedTitle = title.trim();
+    final normalizedContent = content.trim();
+    final normalizedSummary = summary.trim();
+    if (normalizedNoteId.isEmpty || normalizedContent.isEmpty) {
+      return null;
+    }
+
+    final tags = <String>[
+      'note:$normalizedNoteId',
+      'note_sync',
+      'learning:project',
+    ];
+
+    switch (tier) {
+      case MemoryTier.context:
+        return null;
+      case MemoryTier.crossSession:
+        final normalizedKey = coreKey?.trim() ?? '';
+        if (normalizedKey.isEmpty) {
+          return null;
+        }
+        final memoryText = _distillNoteForStructuredMemory(
+          summary: normalizedSummary,
+          content: normalizedContent,
+        );
+        if (memoryText.isEmpty) {
+          return null;
+        }
+        await upsertCoreMemory(
+          key: normalizedKey,
+          content: memoryText,
+          title: normalizedTitle.isEmpty ? null : normalizedTitle,
+          tags: tags,
+          includeAgentTag: false,
+        );
+        return coreMemoryByKey(normalizedKey);
+      case MemoryTier.autonomous:
+        final memoryText = _distillNoteForStructuredMemory(
+          summary: normalizedSummary,
+          content: normalizedContent,
+        );
+        if (memoryText.isEmpty) {
+          return null;
+        }
+        final linked = noteLinkedRecord(
+          normalizedNoteId,
+          MemoryTier.autonomous,
+        );
+        final eventTime = occurredAt ?? DateTime.now();
+        final normalizedTags = <String>{
+          ...tags,
+          'day:${eventTime.toIso8601String().substring(0, 10)}',
+        }.toList(growable: false);
+        final collection = defaultCollection(MemoryTier.autonomous);
+        if (linked != null) {
+          await updateRecord(
+            collectionId: collection.id,
+            record: linked.copyWith(
+              content: memoryText,
+              createdAt: eventTime,
+              title: normalizedTitle.isEmpty ? linked.title : normalizedTitle,
+              tags: normalizedTags,
+              scope: _defaultScopeForTier(MemoryTier.autonomous),
+            ),
+            embed: true,
+          );
+          return noteLinkedRecord(normalizedNoteId, MemoryTier.autonomous);
+        }
+        await addDiaryMemory(
+          occurredAt: eventTime,
+          content: memoryText,
+          title: normalizedTitle.isEmpty ? null : normalizedTitle,
+          tags: tags,
+          includeAgentTag: false,
+        );
+        return noteLinkedRecord(normalizedNoteId, MemoryTier.autonomous);
+      case MemoryTier.external:
+        final linked = noteLinkedRecord(normalizedNoteId, MemoryTier.external);
+        final collection = defaultCollection(MemoryTier.external);
+        if (linked != null) {
+          await updateRecord(
+            collectionId: collection.id,
+            record: linked.copyWith(
+              content: normalizedContent,
+              title: normalizedTitle.isEmpty ? linked.title : normalizedTitle,
+              tags: tags,
+              scope: _defaultScopeForTier(MemoryTier.external),
+            ),
+            embed: true,
+          );
+          return noteLinkedRecord(normalizedNoteId, MemoryTier.external);
+        }
+        final record = MemoryRecord(
+          id: _newId(),
+          tier: MemoryTier.external,
+          content: normalizedContent,
+          createdAt: DateTime.now(),
+          title: normalizedTitle.isEmpty ? null : normalizedTitle,
+          tags: tags,
+          scope: _defaultScopeForTier(MemoryTier.external),
+        );
+        await addRecord(
+          tier: MemoryTier.external,
+          collectionId: collection.id,
+          record: record,
+          embed: true,
+        );
+        return noteLinkedRecord(normalizedNoteId, MemoryTier.external);
+    }
+  }
+
   Future<void> addDiaryMemory({
     required DateTime occurredAt,
     required String content,
@@ -770,6 +922,21 @@ class MemoryRepository extends ChangeNotifier {
     if (changed) {
       notifyListeners();
     }
+  }
+
+  String _distillNoteForStructuredMemory({
+    required String summary,
+    required String content,
+  }) {
+    final seed = summary.trim().isNotEmpty ? summary.trim() : content.trim();
+    if (seed.isEmpty) {
+      return '';
+    }
+    final compact = seed.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (compact.length <= 240) {
+      return compact;
+    }
+    return '${compact.substring(0, 240)}...';
   }
 
   void _insertRecordSorted(MemoryCollection collection, MemoryRecord record) {

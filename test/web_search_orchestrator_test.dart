@@ -12,6 +12,8 @@ void main() {
         final orchestrator = WebSearchOrchestrator(
           dispatchToolIntent: (intent) async {
             expect(intent.action, ToolAction.search);
+            expect(intent.cancelGroup, 'session:s1');
+            expect(intent.interruptible, isTrue);
             seen.add(intent.query ?? '');
             return 'result:${intent.query}';
           },
@@ -22,6 +24,7 @@ void main() {
           sessionId: 's1',
           routing: 'standard_chat',
           tracePrefix: 't',
+          cancelGroup: 'session:s1',
           maxResultsChars: 2000,
         );
 
@@ -54,6 +57,7 @@ void main() {
             sessionId: 's1',
             routing: 'deep_research',
             tracePrefix: 'dr',
+            cancelGroup: 'session:s1',
             maxRounds: 5,
             fanoutPerRound: 4,
             maxPerRoundChars: 2000,

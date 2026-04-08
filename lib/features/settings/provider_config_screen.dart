@@ -10,6 +10,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../../core/models/app_settings.dart';
 import '../../core/models/expression_event.dart';
 import '../../core/models/provider_config.dart';
+import '../../core/models/runtime_capability_snapshot.dart';
 import '../../core/models/stage_action.dart';
 import '../../core/repositories/settings_repository.dart';
 import '../../core/services/runtime_hub.dart';
@@ -30,14 +31,17 @@ class ProviderConfigScreen extends StatelessWidget {
       builder: (context, _) {
         final settings = settingsRepository.settings;
         return DefaultTabController(
-          length: 3,
+          length: 5,
           child: Scaffold(
             appBar: AppBar(
-              title: const Text('模型与能力配置'),
+              title: const Text('设置与能力配置'),
               bottom: const TabBar(
+                isScrollable: true,
                 tabs: [
-                  Tab(text: '模式与组合'),
-                  Tab(text: '能力清单'),
+                  Tab(text: '运行'),
+                  Tab(text: '交互'),
+                  Tab(text: '代理'),
+                  Tab(text: '模型'),
                   Tab(text: '软件信息'),
                 ],
               ),
@@ -53,11 +57,22 @@ class ProviderConfigScreen extends StatelessWidget {
                     constraints: BoxConstraints(maxWidth: maxWidth),
                     child: TabBarView(
                       children: [
-                        _ModeTab(
+                        _RuntimeTab(
                           settingsRepository: settingsRepository,
                           settings: settings,
                         ),
-                        _CatalogTab(settingsRepository: settingsRepository),
+                        _InteractionTab(
+                          settingsRepository: settingsRepository,
+                          settings: settings,
+                        ),
+                        _AgentTab(
+                          settingsRepository: settingsRepository,
+                          settings: settings,
+                        ),
+                        _ModelTab(
+                          settingsRepository: settingsRepository,
+                          settings: settings,
+                        ),
                         const _AppInfoTab(),
                       ],
                     ),
@@ -72,8 +87,8 @@ class ProviderConfigScreen extends StatelessWidget {
   }
 }
 
-class _ModeTab extends StatelessWidget {
-  const _ModeTab({required this.settingsRepository, required this.settings});
+class _RuntimeTab extends StatelessWidget {
+  const _RuntimeTab({required this.settingsRepository, required this.settings});
 
   final SettingsRepository settingsRepository;
   final AppSettings settings;
@@ -115,7 +130,27 @@ class _ModeTab extends StatelessWidget {
           settingsRepository: settingsRepository,
           settings: settings,
         ),
-        const SizedBox(height: 24),
+        const SizedBox(height: 12),
+        const _RuntimeCapabilityStatusCard(),
+      ],
+    );
+  }
+}
+
+class _InteractionTab extends StatelessWidget {
+  const _InteractionTab({
+    required this.settingsRepository,
+    required this.settings,
+  });
+
+  final SettingsRepository settingsRepository;
+  final AppSettings settings;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
         const _SectionHeader(title: '人设与交互', subtitle: '角色风格、Live3D 与交互表现'),
         const SizedBox(height: 12),
         _PersonaCard(
@@ -140,18 +175,6 @@ class _ModeTab extends StatelessWidget {
           settings: settings,
         ),
         const SizedBox(height: 24),
-        const _SectionHeader(title: '记忆与动作', subtitle: '后台记忆抽取与动作执行策略'),
-        const SizedBox(height: 12),
-        _MemoryAgentCard(
-          settingsRepository: settingsRepository,
-          settings: settings,
-        ),
-        const SizedBox(height: 12),
-        _MotionAgentCard(
-          settingsRepository: settingsRepository,
-          settings: settings,
-        ),
-        const SizedBox(height: 24),
         const _SectionHeader(title: '界面与布局', subtitle: '主题、玻璃强度和面板布局'),
         const SizedBox(height: 12),
         _AppearanceCard(
@@ -163,7 +186,51 @@ class _ModeTab extends StatelessWidget {
           settingsRepository: settingsRepository,
           settings: settings,
         ),
-        const SizedBox(height: 24),
+      ],
+    );
+  }
+}
+
+class _AgentTab extends StatelessWidget {
+  const _AgentTab({required this.settingsRepository, required this.settings});
+
+  final SettingsRepository settingsRepository;
+  final AppSettings settings;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        const _SectionHeader(title: '记忆与动作', subtitle: '后台记忆抽取与动作执行策略'),
+        const SizedBox(height: 12),
+        _MemoryAgentCard(
+          settingsRepository: settingsRepository,
+          settings: settings,
+        ),
+        const SizedBox(height: 12),
+        _MotionAgentCard(
+          settingsRepository: settingsRepository,
+          settings: settings,
+        ),
+      ],
+    );
+  }
+}
+
+class _ModelTab extends StatelessWidget {
+  const _ModelTab({required this.settingsRepository, required this.settings});
+
+  final SettingsRepository settingsRepository;
+  final AppSettings settings;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        const _SectionHeader(title: '模型组合', subtitle: '按当前路由配置模型栈与语音能力'),
+        const SizedBox(height: 12),
         if (settings.route == ModelRoute.standard) ...[
           _SectionHeader(
             title: '普通 LLM 组合',
@@ -287,22 +354,10 @@ class _ModeTab extends StatelessWidget {
           ),
           const SizedBox(height: 24),
         ],
-      ],
-    );
-  }
-}
-
-class _CatalogTab extends StatelessWidget {
-  const _CatalogTab({required this.settingsRepository});
-
-  final SettingsRepository settingsRepository;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(20),
-      children: [
-        _SectionHeader(title: '模型与能力清单', subtitle: '管理所有 Provider 与高级参数'),
+        const _SectionHeader(
+          title: 'Provider 清单',
+          subtitle: '管理所有 Provider 与高级参数',
+        ),
         const SizedBox(height: 12),
         _ProviderCatalog(settingsRepository: settingsRepository),
       ],
@@ -1690,9 +1745,9 @@ class _VoiceChannelCardState extends State<_VoiceChannelCard> {
             const SizedBox(height: 6),
             Text(
               '监听源（语音软件输出/播放设备）',
-              style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 6),
             Text(
@@ -1706,19 +1761,20 @@ class _VoiceChannelCardState extends State<_VoiceChannelCard> {
             FutureBuilder<List<AudioOutputDeviceInfo>>(
               future: _outputDevicesFuture,
               builder: (context, snapshot) {
-                  final devices = snapshot.data ?? const [];
-                  final items = <DropdownMenuItem<String>>[
-                    const DropdownMenuItem(value: '', child: Text('不指定（仅作提示）')),
-                    ...devices.map(
-                      (device) => DropdownMenuItem(
-                        value: device.id,
-                        child: Text(device.name),
+                final devices = snapshot.data ?? const [];
+                final items = <DropdownMenuItem<String>>[
+                  const DropdownMenuItem(value: '', child: Text('不指定（仅作提示）')),
+                  ...devices.map(
+                    (device) => DropdownMenuItem(
+                      value: device.id,
+                      child: Text(device.name),
                     ),
                   ),
                 ];
                 final selectedId = settings.voiceChannelPlaybackDeviceId ?? '';
                 final hasSelected =
-                    selectedId.isEmpty || devices.any((d) => d.id == selectedId);
+                    selectedId.isEmpty ||
+                    devices.any((d) => d.id == selectedId);
                 final effectiveValue = hasSelected ? selectedId : '';
 
                 AudioOutputDeviceInfo? defaultDevice;
@@ -1731,18 +1787,19 @@ class _VoiceChannelCardState extends State<_VoiceChannelCard> {
 
                 final selectedDeviceName = effectiveValue.isNotEmpty
                     ? devices
-                        .firstWhere(
-                          (d) => d.id == effectiveValue,
-                          orElse: () => const AudioOutputDeviceInfo(
-                            id: '',
-                            name: '',
-                            isDefault: false,
-                          ),
-                        )
-                        .name
+                          .firstWhere(
+                            (d) => d.id == effectiveValue,
+                            orElse: () => const AudioOutputDeviceInfo(
+                              id: '',
+                              name: '',
+                              isDefault: false,
+                            ),
+                          )
+                          .name
                     : (defaultDevice?.name ?? '');
-                final pairedRecording =
-                    _suggestPairedRecordingDeviceName(selectedDeviceName);
+                final pairedRecording = _suggestPairedRecordingDeviceName(
+                  selectedDeviceName,
+                );
 
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1767,10 +1824,12 @@ class _VoiceChannelCardState extends State<_VoiceChannelCard> {
                                   .name;
                               settingsRepository.updateSettings(
                                 settings.copyWith(
-                                  voiceChannelPlaybackDeviceId:
-                                      id.isEmpty ? null : id,
-                                  voiceChannelPlaybackDeviceLabel:
-                                      id.isEmpty ? null : label,
+                                  voiceChannelPlaybackDeviceId: id.isEmpty
+                                      ? null
+                                      : id,
+                                  voiceChannelPlaybackDeviceLabel: id.isEmpty
+                                      ? null
+                                      : label,
                                 ),
                               );
                             },
@@ -1857,18 +1916,19 @@ class _VoiceChannelCardState extends State<_VoiceChannelCard> {
 
                 final selectedDeviceName = effectiveValue.isNotEmpty
                     ? devices
-                        .firstWhere(
-                          (d) => d.id == effectiveValue,
-                          orElse: () => const AudioInputDeviceInfo(
-                            id: '',
-                            name: '',
-                            isDefault: false,
-                          ),
-                        )
-                        .name
+                          .firstWhere(
+                            (d) => d.id == effectiveValue,
+                            orElse: () => const AudioInputDeviceInfo(
+                              id: '',
+                              name: '',
+                              isDefault: false,
+                            ),
+                          )
+                          .name
                     : (defaultDevice?.name ?? '');
-                final pairedPlayback =
-                    _suggestPairedPlaybackDeviceName(selectedDeviceName);
+                final pairedPlayback = _suggestPairedPlaybackDeviceName(
+                  selectedDeviceName,
+                );
 
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2103,6 +2163,234 @@ class _ToolGatewayCard extends StatefulWidget {
   State<_ToolGatewayCard> createState() => _ToolGatewayCardState();
 }
 
+class _RuntimeCapabilityStatusCard extends StatefulWidget {
+  const _RuntimeCapabilityStatusCard();
+
+  @override
+  State<_RuntimeCapabilityStatusCard> createState() =>
+      _RuntimeCapabilityStatusCardState();
+}
+
+class _RuntimeCapabilityStatusCardState
+    extends State<_RuntimeCapabilityStatusCard> {
+  bool _refreshing = false;
+
+  Future<void> _refreshGateway() async {
+    setState(() => _refreshing = true);
+    try {
+      await RuntimeHub.instance.capabilities.refreshToolGateway(
+        forceRefresh: true,
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _refreshing = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: RuntimeHub.instance.capabilities,
+      builder: (context, _) {
+        final registry = RuntimeHub.instance.capabilities;
+        final snapshots = <RuntimeCapabilitySnapshot>[
+          registry.fastBrain,
+          registry.slowBrain,
+          registry.vision,
+          registry.realtimeBrain,
+          registry.omniBrain,
+          registry.toolGateway,
+        ];
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Expanded(
+                      child: _SectionHeader(
+                        title: '运行时能力状态',
+                        subtitle: '确认快脑、慢脑、视觉和工具网关当前是否可用',
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    TextButton.icon(
+                      onPressed: _refreshing ? null : _refreshGateway,
+                      icon: _refreshing
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.refresh, size: 18),
+                      label: const Text('刷新网关'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                ...snapshots.map(
+                  (snapshot) =>
+                      _RuntimeCapabilitySnapshotTile(snapshot: snapshot),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _RuntimeCapabilitySnapshotTile extends StatelessWidget {
+  const _RuntimeCapabilitySnapshotTile({required this.snapshot});
+
+  final RuntimeCapabilitySnapshot snapshot;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final tone = _toneForState(scheme, snapshot.state);
+    final title =
+        snapshot.providerLabel ??
+        runtimeCapabilityFallbackTitle(snapshot.capabilityId);
+    final detail = runtimeCapabilityDetail(snapshot);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        color: tone.withValues(alpha: 0.08),
+        border: Border.all(color: tone.withValues(alpha: 0.22)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(_iconForState(snapshot.state), color: tone, size: 18),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: tone.withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        child: Text(
+                          snapshot.state.label,
+                          style: Theme.of(context).textTheme.labelSmall
+                              ?.copyWith(
+                                color: tone,
+                                fontWeight: FontWeight.w800,
+                              ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                if (detail != null)
+                  Text(
+                    detail,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                if ((snapshot.summary ?? '').isNotEmpty) ...[
+                  if (detail != null) const SizedBox(height: 4),
+                  Text(
+                    snapshot.summary!,
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: scheme.onSurface),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String runtimeCapabilityFallbackTitle(String capabilityId) {
+  return switch (capabilityId) {
+    'fast_brain' => '快速对话脑',
+    'slow_brain' => '慢速推理脑',
+    'vision' => '视觉理解脑',
+    'realtime_brain' => '实时语音脑',
+    'omni_brain' => '全模态脑',
+    'tool_gateway' => '工具网关',
+    _ => capabilityId,
+  };
+}
+
+String? runtimeCapabilityDetail(RuntimeCapabilitySnapshot snapshot) {
+  if (snapshot.kind == RuntimeCapabilityKind.toolGateway) {
+    final parts = <String>[];
+    if (snapshot.routes.isNotEmpty) {
+      parts.add('路由 ${snapshot.routes.length}');
+    }
+    if (snapshot.features.isNotEmpty) {
+      parts.add('特性 ${snapshot.features.length}');
+    }
+    if (snapshot.activeRuns > 0) {
+      parts.add('活跃任务 ${snapshot.activeRuns}');
+    }
+    return parts.isEmpty ? null : parts.join(' · ');
+  }
+  final parts = <String>[];
+  final providerName = snapshot.providerLabel;
+  if (providerName != null && providerName.isNotEmpty) {
+    parts.add(providerName);
+  }
+  final model = snapshot.providerModel;
+  if (model != null && model.isNotEmpty) {
+    parts.add(model);
+  }
+  return parts.isEmpty ? null : parts.join(' · ');
+}
+
+Color _toneForState(ColorScheme scheme, RuntimeCapabilityState state) {
+  return switch (state) {
+    RuntimeCapabilityState.ready => const Color(0xFF1D7A46),
+    RuntimeCapabilityState.degraded => const Color(0xFFB26A00),
+    RuntimeCapabilityState.unavailable => scheme.error,
+    RuntimeCapabilityState.unknown => scheme.primary,
+  };
+}
+
+IconData _iconForState(RuntimeCapabilityState state) {
+  return switch (state) {
+    RuntimeCapabilityState.ready => Icons.check_circle_rounded,
+    RuntimeCapabilityState.degraded => Icons.warning_amber_rounded,
+    RuntimeCapabilityState.unavailable => Icons.error_rounded,
+    RuntimeCapabilityState.unknown => Icons.hourglass_top_rounded,
+  };
+}
+
 class _ToolGatewayCardState extends State<_ToolGatewayCard> {
   late final TextEditingController _baseUrlController;
   late final TextEditingController _tokenController;
@@ -2297,8 +2585,11 @@ class _ToolGatewayCardState extends State<_ToolGatewayCard> {
                 if (value &&
                     Platform.isAndroid &&
                     kDebugMode &&
-                    settings.toolGatewayBaseUrl.trim() == 'http://127.0.0.1:4891') {
-                  next = next.copyWith(toolGatewayBaseUrl: 'http://10.0.2.2:4891');
+                    settings.toolGatewayBaseUrl.trim() ==
+                        'http://127.0.0.1:4891') {
+                  next = next.copyWith(
+                    toolGatewayBaseUrl: 'http://10.0.2.2:4891',
+                  );
                   _baseUrlController.text = next.toolGatewayBaseUrl;
                 }
                 _updateSettings(next);
@@ -2327,9 +2618,9 @@ class _ToolGatewayCardState extends State<_ToolGatewayCard> {
               Text(
                 'Android 端不会在本机启动后端或 OpenCode。请把网关部署在 PC 上（同一局域网），并填写 PC 的 IP:4891。\n'
                 '在 Android 模拟器中，访问宿主机可使用 http://10.0.2.2:4891。',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: chrome.textSecondary,
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: chrome.textSecondary),
               ),
             ],
             const SizedBox(height: 12),
@@ -2374,8 +2665,9 @@ class _ToolGatewayCardState extends State<_ToolGatewayCard> {
                 ),
                 const SizedBox(width: 8),
                 OutlinedButton.icon(
-                  onPressed:
-                      (Platform.isAndroid || Platform.isIOS) ? null : (_checking ? null : _createPairing),
+                  onPressed: (Platform.isAndroid || Platform.isIOS)
+                      ? null
+                      : (_checking ? null : _createPairing),
                   icon: const Icon(Icons.vpn_key),
                   label: const Text('创建配对'),
                 ),
@@ -2417,6 +2709,7 @@ class _ToolGatewayCardState extends State<_ToolGatewayCard> {
                         MaterialPageRoute<void>(
                           builder: (context) => OpenCodeSkillsScreen(
                             settingsRepository: widget.settingsRepository,
+                            toolRouter: RuntimeHub.instance.toolRouter,
                           ),
                         ),
                       );

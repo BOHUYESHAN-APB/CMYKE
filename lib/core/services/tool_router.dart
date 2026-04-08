@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../models/tool_gateway_skill.dart';
 import '../models/tool_intent.dart';
 
 class ToolGatewayConfig {
@@ -22,11 +24,53 @@ class ToolGatewayConfig {
   );
 }
 
+class ToolGatewayProbeResult {
+  const ToolGatewayProbeResult({
+    required this.ok,
+    required this.enabled,
+    required this.supportsRun,
+    required this.supportsCancel,
+    required this.routes,
+    required this.features,
+    required this.activeRuns,
+    required this.checkedAt,
+    this.error,
+  });
+
+  final bool ok;
+  final bool enabled;
+  final bool supportsRun;
+  final bool supportsCancel;
+  final Set<String> routes;
+  final Set<String> features;
+  final int activeRuns;
+  final DateTime checkedAt;
+  final String? error;
+
+  bool supportsFeature(String feature) => features.contains(feature);
+}
+
+class ToolGatewayCancelResult {
+  const ToolGatewayCancelResult({
+    required this.ok,
+    required this.accepted,
+    required this.activeRunsSignaled,
+    this.error,
+  });
+
+  final bool ok;
+  final bool accepted;
+  final int activeRunsSignaled;
+  final String? error;
+}
+
 class ToolRouter {
   ToolRouter({http.Client? client}) : _client = client ?? http.Client();
 
   final http.Client _client;
   ToolGatewayConfig _config = ToolGatewayConfig.disabled;
+  ToolGatewayProbeResult? _probeCache;
+  static const Duration _probeCacheTtl = Duration(seconds: 10);
 
   String _sanitizeRelSegment(String raw) {
     final trimmed = raw.trim();
@@ -73,21 +117,289 @@ class ToolRouter {
 
   void updateGatewayConfig(ToolGatewayConfig config) {
     _config = config;
+    _probeCache = null;
   }
 
   Future<void> dispose() async {
     _client.close();
   }
 
+  Future<ToolGatewayProbeResult> probeCapabilities({
+    bool forceRefresh = false,
+  }) async {
+    final now = DateTime.now();
+    if (!forceRefresh && _probeCache != null) {
+      final age = now.difference(_probeCache!.checkedAt);
+      if (age <= _probeCacheTtl) {
+        return _probeCache!;
+      }
+    }
+    final error = _gatewayConfigError();
+    if (error != null) {
+      return _cacheProbe(
+        ToolGatewayProbeResult(
+          ok: false,
+          enabled: _config.enabled,
+          supportsRun: false,
+          supportsCancel: false,
+          routes: const <String>{},
+          features: const <String>{},
+          activeRuns: 0,
+          checkedAt: now,
+          error: error,
+        ),
+      );
+    }
+    final uri = _buildGatewayUri(
+      _config.baseUrl,
+      '/api/v1/gateway/capabilities',
+    );
+    try {
+      final response = await _client
+          .get(uri)
+          .timeout(const Duration(seconds: 2));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        return _cacheProbe(
+          ToolGatewayProbeResult(
+            ok: false,
+            enabled: true,
+            supportsRun: false,
+            supportsCancel: false,
+            routes: const <String>{},
+            features: const <String>{},
+            activeRuns: 0,
+            checkedAt: now,
+            error: '工具网关错误：HTTP ${response.statusCode}',
+          ),
+        );
+      }
+      final data = jsonDecode(response.body);
+      if (data is! Map<String, dynamic>) {
+        return _cacheProbe(
+          ToolGatewayProbeResult(
+            ok: false,
+            enabled: true,
+            supportsRun: false,
+            supportsCancel: false,
+            routes: const <String>{},
+            features: const <String>{},
+            activeRuns: 0,
+            checkedAt: now,
+            error: '工具网关响应异常。',
+          ),
+        );
+      }
+      final routes = ((data['routes'] as List<dynamic>? ?? const <dynamic>[]))
+          .map((entry) => entry.toString().trim())
+          .where((entry) => entry.isNotEmpty)
+          .toSet();
+      final features =
+          ((data['features'] as List<dynamic>? ?? const <dynamic>[]))
+              .map((entry) => entry.toString().trim())
+              .where((entry) => entry.isNotEmpty)
+              .toSet();
+      final runtime = data['runtime'] as Map<String, dynamic>?;
+      return _cacheProbe(
+        ToolGatewayProbeResult(
+          ok: data['ok'] == true,
+          enabled: true,
+          supportsRun: routes.contains('/api/v1/opencode/run'),
+          supportsCancel: routes.contains('/api/v1/opencode/cancel'),
+          routes: routes,
+          features: features,
+          activeRuns: (runtime?['active_runs'] as num?)?.toInt() ?? 0,
+          checkedAt: now,
+          error: data['ok'] == true ? null : '工具网关能力探测失败。',
+        ),
+      );
+    } on TimeoutException {
+      return _cacheProbe(
+        ToolGatewayProbeResult(
+          ok: false,
+          enabled: true,
+          supportsRun: false,
+          supportsCancel: false,
+          routes: const <String>{},
+          features: const <String>{},
+          activeRuns: 0,
+          checkedAt: now,
+          error: '工具网关能力探测超时。',
+        ),
+      );
+    } catch (error) {
+      return _cacheProbe(
+        ToolGatewayProbeResult(
+          ok: false,
+          enabled: true,
+          supportsRun: false,
+          supportsCancel: false,
+          routes: const <String>{},
+          features: const <String>{},
+          activeRuns: 0,
+          checkedAt: now,
+          error: '工具网关请求失败：$error',
+        ),
+      );
+    }
+  }
+
+  Future<ToolGatewayCancelResult> cancelActiveRun({
+    String? sessionId,
+    String? cancelGroup,
+    String? reason,
+  }) async {
+    final error = _gatewayConfigError();
+    if (error != null) {
+      return ToolGatewayCancelResult(
+        ok: false,
+        accepted: false,
+        activeRunsSignaled: 0,
+        error: error,
+      );
+    }
+    final probe = await probeCapabilities();
+    if (!probe.ok || !probe.supportsCancel) {
+      return ToolGatewayCancelResult(
+        ok: false,
+        accepted: false,
+        activeRunsSignaled: 0,
+        error: probe.error ?? '工具网关不支持取消。',
+      );
+    }
+    final trimmedSessionId = sessionId?.trim();
+    final trimmedCancelGroup = cancelGroup?.trim();
+    if ((trimmedSessionId == null || trimmedSessionId.isEmpty) &&
+        (trimmedCancelGroup == null || trimmedCancelGroup.isEmpty)) {
+      return const ToolGatewayCancelResult(
+        ok: false,
+        accepted: false,
+        activeRunsSignaled: 0,
+        error: 'session_id or cancel_group required',
+      );
+    }
+    final payload = <String, dynamic>{
+      'pairing_token': _config.pairingToken.trim(),
+      if (trimmedSessionId != null && trimmedSessionId.isNotEmpty)
+        'session_id': trimmedSessionId,
+      if (trimmedCancelGroup != null && trimmedCancelGroup.isNotEmpty)
+        'cancel_group': trimmedCancelGroup,
+      if (reason != null && reason.trim().isNotEmpty) 'reason': reason.trim(),
+    };
+    final uri = _buildGatewayUri(_config.baseUrl, '/api/v1/opencode/cancel');
+    try {
+      final response = await _client.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
+      );
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        return ToolGatewayCancelResult(
+          ok: false,
+          accepted: false,
+          activeRunsSignaled: 0,
+          error: '工具网关错误：HTTP ${response.statusCode}',
+        );
+      }
+      final data = jsonDecode(response.body);
+      if (data is! Map<String, dynamic>) {
+        return const ToolGatewayCancelResult(
+          ok: false,
+          accepted: false,
+          activeRunsSignaled: 0,
+          error: '工具网关响应异常。',
+        );
+      }
+      return ToolGatewayCancelResult(
+        ok: data['ok'] == true,
+        accepted: data['accepted'] == true,
+        activeRunsSignaled:
+            (data['active_runs_signaled'] as num?)?.toInt() ?? 0,
+        error: data['ok'] == true ? null : data['error']?.toString(),
+      );
+    } catch (error) {
+      return ToolGatewayCancelResult(
+        ok: false,
+        accepted: false,
+        activeRunsSignaled: 0,
+        error: '工具网关请求失败：$error',
+      );
+    }
+  }
+
+  Future<ToolGatewaySkillsCatalogResult> fetchInstalledSkills({
+    String? workspace,
+  }) async {
+    await _ensureGatewayOperationAvailable(
+      route: '/api/v1/opencode/skills/installed',
+      feature: 'skills_catalog',
+      label: 'skills 目录读取',
+    );
+    final data = await _postGatewayJson(
+      path: '/api/v1/opencode/skills/installed',
+      payload: _buildSkillPayload(workspace: workspace),
+    );
+    if (data['ok'] != true) {
+      throw Exception(_gatewayMessageFromBody(data, '读取已安装 skills 失败。'));
+    }
+    return ToolGatewaySkillsCatalogResult.fromJson(data);
+  }
+
+  Future<ToolGatewaySkillsPreviewResult> previewSkillsImport({
+    required ToolGatewaySkillImportSource source,
+    bool overwrite = false,
+    int limit = 2000,
+    String? workspace,
+  }) async {
+    await _ensureGatewayOperationAvailable(
+      route: '/api/v1/opencode/skills/preview',
+      feature: 'skills_preview',
+      label: 'skills 预览',
+    );
+    final data = await _postGatewayJson(
+      path: '/api/v1/opencode/skills/preview',
+      payload: _buildSkillImportPayload(
+        source: source,
+        overwrite: overwrite,
+        limit: limit,
+        workspace: workspace,
+      ),
+    );
+    if (data['ok'] != true) {
+      throw Exception(_gatewayMessageFromBody(data, 'skills 预览失败。'));
+    }
+    return ToolGatewaySkillsPreviewResult.fromJson(data);
+  }
+
+  Future<ToolGatewaySkillsInstallResult> installSkills({
+    required ToolGatewaySkillImportSource source,
+    bool overwrite = false,
+    int limit = 2000,
+    String? workspace,
+  }) async {
+    await _ensureGatewayOperationAvailable(
+      route: '/api/v1/opencode/skills/install',
+      feature: 'skills_install',
+      label: 'skills 安装',
+    );
+    final data = await _postGatewayJson(
+      path: '/api/v1/opencode/skills/install',
+      payload: _buildSkillImportPayload(
+        source: source,
+        overwrite: overwrite,
+        limit: limit,
+        workspace: workspace,
+      ),
+    );
+    if (data['ok'] != true) {
+      throw Exception(_gatewayMessageFromBody(data, 'skills 安装失败。'));
+    }
+    return ToolGatewaySkillsInstallResult.fromJson(data);
+  }
+
   Future<String> dispatch(ToolIntent intent) async {
-    if (!_config.enabled) {
-      return '工具网关未启用。';
-    }
-    if (_config.baseUrl.trim().isEmpty) {
-      return '工具网关地址未配置。';
-    }
-    if (_config.pairingToken.trim().isEmpty) {
-      return '工具网关 pairing token 未配置。';
+    final error = _gatewayConfigError();
+    if (error != null) {
+      return error;
     }
     switch (intent.action) {
       case ToolAction.code:
@@ -103,6 +415,13 @@ class ToolRouter {
   }
 
   Future<String> _dispatchViaOpenCode(ToolIntent intent) async {
+    final probe = await probeCapabilities();
+    if (!probe.ok) {
+      return probe.error ?? '工具网关能力探测失败。';
+    }
+    if (!probe.supportsRun) {
+      return '当前工具网关未暴露 `/api/v1/opencode/run`。';
+    }
     final sessionId = intent.sessionId?.trim().isNotEmpty == true
         ? intent.sessionId!
         : 'default';
@@ -118,6 +437,10 @@ class ToolRouter {
     if (intent.traceId != null && intent.traceId!.trim().isNotEmpty) {
       payload['trace_id'] = intent.traceId!.trim();
     }
+    if (intent.cancelGroup != null && intent.cancelGroup!.trim().isNotEmpty) {
+      payload['cancel_group'] = intent.cancelGroup!.trim();
+    }
+    payload['interruptible'] = intent.interruptible;
     final uri = _buildGatewayUri(_config.baseUrl, '/api/v1/opencode/run');
     try {
       final response = await _client.post(
@@ -160,6 +483,124 @@ class ToolRouter {
       return uri.replace(path: path);
     }
     return uri.replace(path: '${uri.path}$path');
+  }
+
+  ToolGatewayProbeResult _cacheProbe(ToolGatewayProbeResult result) {
+    _probeCache = result;
+    return result;
+  }
+
+  Future<void> _ensureGatewayOperationAvailable({
+    required String route,
+    required String label,
+    String? feature,
+  }) async {
+    final probe = await probeCapabilities();
+    if (!probe.ok) {
+      throw Exception(probe.error ?? '工具网关能力探测失败。');
+    }
+    if (probe.routes.contains(route)) {
+      return;
+    }
+    if (feature != null && probe.supportsFeature(feature)) {
+      return;
+    }
+    throw Exception('当前工具网关未暴露 `$route`，无法执行$label。');
+  }
+
+  Future<Map<String, dynamic>> _postGatewayJson({
+    required String path,
+    required Map<String, dynamic> payload,
+  }) async {
+    final error = _gatewayConfigError();
+    if (error != null) {
+      throw Exception(error);
+    }
+    final uri = _buildGatewayUri(_config.baseUrl, path);
+    try {
+      final response = await _client
+          .post(
+            uri,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode(payload),
+          )
+          .timeout(const Duration(seconds: 20));
+      final data = _tryDecodeJsonMap(response.body);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw Exception(
+          _gatewayMessageFromBody(data, '工具网关错误：HTTP ${response.statusCode}'),
+        );
+      }
+      if (data == null) {
+        throw Exception('工具网关响应异常。');
+      }
+      return data;
+    } on TimeoutException {
+      throw Exception('工具网关请求超时。');
+    } on Exception {
+      rethrow;
+    } catch (error) {
+      throw Exception('工具网关请求失败：$error');
+    }
+  }
+
+  Map<String, dynamic>? _tryDecodeJsonMap(String body) {
+    try {
+      final data = jsonDecode(body);
+      return data is Map<String, dynamic> ? data : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _gatewayMessageFromBody(Map<String, dynamic>? data, String fallback) {
+    final message = data?['error']?.toString().trim();
+    if (message != null && message.isNotEmpty) {
+      return message;
+    }
+    final errors = (data?['errors'] as List<dynamic>? ?? const <dynamic>[])
+        .map((entry) => entry.toString().trim())
+        .where((entry) => entry.isNotEmpty)
+        .toList();
+    if (errors.isNotEmpty) {
+      return errors.first;
+    }
+    return fallback;
+  }
+
+  Map<String, dynamic> _buildSkillPayload({String? workspace}) {
+    return <String, dynamic>{
+      'pairing_token': _config.pairingToken.trim(),
+      if (workspace != null && workspace.trim().isNotEmpty)
+        'workspace': workspace.trim(),
+    };
+  }
+
+  Map<String, dynamic> _buildSkillImportPayload({
+    required ToolGatewaySkillImportSource source,
+    required bool overwrite,
+    required int limit,
+    String? workspace,
+  }) {
+    return <String, dynamic>{
+      ..._buildSkillPayload(workspace: workspace),
+      'overwrite': overwrite,
+      'limit': limit,
+      'source': source.toJson(),
+    };
+  }
+
+  String? _gatewayConfigError() {
+    if (!_config.enabled) {
+      return '工具网关未启用。';
+    }
+    if (_config.baseUrl.trim().isEmpty) {
+      return '工具网关地址未配置。';
+    }
+    if (_config.pairingToken.trim().isEmpty) {
+      return '工具网关 pairing token 未配置。';
+    }
+    return null;
   }
 
   String _buildMessage(ToolIntent intent) {

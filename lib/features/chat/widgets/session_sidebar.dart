@@ -15,6 +15,7 @@ class SessionSidebar extends StatelessWidget {
     this.memoryRepository,
     this.onAddMemory,
     this.onOpenTier,
+    this.onOpenNotes,
     this.onOpenSettings,
     this.dense = false,
     this.onSelect,
@@ -26,6 +27,7 @@ class SessionSidebar extends StatelessWidget {
   final MemoryRepository? memoryRepository;
   final VoidCallback? onAddMemory;
   final void Function(MemoryTier tier)? onOpenTier;
+  final VoidCallback? onOpenNotes;
   final VoidCallback? onOpenSettings;
   final bool dense;
   final VoidCallback? onSelect;
@@ -160,6 +162,20 @@ class SessionSidebar extends StatelessWidget {
                   onOpenTier: onOpenTier,
                   sessionId: chatRepository.activeSessionId,
                   dense: true,
+                ),
+              ),
+            if (onOpenNotes != null)
+              Divider(height: 1, color: chrome.separator),
+            if (onOpenNotes != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: onOpenNotes,
+                    icon: const Icon(Icons.note_alt_outlined),
+                    label: const Text('笔记与资料'),
+                  ),
                 ),
               ),
             if (onOpenSettings != null)

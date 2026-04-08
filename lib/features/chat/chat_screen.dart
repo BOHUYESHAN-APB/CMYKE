@@ -13,6 +13,7 @@ import '../../core/models/memory_tier.dart';
 import '../../core/models/research_job.dart';
 import '../../core/repositories/chat_repository.dart';
 import '../../core/repositories/memory_repository.dart';
+import '../../core/repositories/note_repository.dart';
 import '../../core/repositories/settings_repository.dart';
 import '../../core/services/chat_export_service.dart';
 import '../../core/services/chat_engine.dart';
@@ -23,6 +24,7 @@ import '../../core/services/workspace_service.dart';
 import '../../ui/theme/cmyke_chrome.dart';
 import '../common/live3d_preview.dart';
 import '../memory/memory_tier_screen.dart';
+import '../notes/notes_screen.dart';
 import '../settings/provider_config_screen.dart';
 import '../deep_research/deep_research_screen.dart';
 import '../autonomy/autonomy_screen.dart';
@@ -36,6 +38,7 @@ class ChatScreen extends StatefulWidget {
     super.key,
     required this.chatRepository,
     required this.memoryRepository,
+    required this.noteRepository,
     required this.settingsRepository,
     required this.workspaceService,
     this.embeddingConfigMissing = false,
@@ -43,6 +46,7 @@ class ChatScreen extends StatefulWidget {
 
   final ChatRepository chatRepository;
   final MemoryRepository memoryRepository;
+  final NoteRepository noteRepository;
   final SettingsRepository settingsRepository;
   final WorkspaceService workspaceService;
   final bool embeddingConfigMissing;
@@ -201,7 +205,10 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       final inputs = result.files
           .where((f) => f.name.trim().isNotEmpty)
-          .map((f) => IngestFileInput(fileName: f.name, path: f.path, bytes: f.bytes))
+          .map(
+            (f) =>
+                IngestFileInput(fileName: f.name, path: f.path, bytes: f.bytes),
+          )
           .toList(growable: false);
       final ingested = await _attachmentIngest.ingestToLibraryAndWorkspace(
         sessionId: sessionId,
@@ -503,6 +510,17 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  void _openNotes() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => NotesScreen(
+          noteRepository: widget.noteRepository,
+          memoryRepository: widget.memoryRepository,
+        ),
+      ),
+    );
+  }
+
   void _openDeepResearch() {
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -572,6 +590,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         memoryRepository: widget.memoryRepository,
                         onAddMemory: _openManualMemoryDialog,
                         onOpenTier: _openMemoryTier,
+                        onOpenNotes: _openNotes,
                         onOpenSettings: _openSettings,
                         onRemoveSession: _removeSession,
                         onCreateSession: () => _createSessionForRoute(),
@@ -645,6 +664,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                   memoryRepository: widget.memoryRepository,
                                   onAddMemory: _openManualMemoryDialog,
                                   onOpenTier: _openMemoryTier,
+                                  onOpenNotes: _openNotes,
                                   onOpenSettings: _openSettings,
                                   onRemoveSession: _removeSession,
                                   onCreateSession: () =>
@@ -865,7 +885,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                     controller: _composerController,
                                     onSend: _handleSend,
                                     onPickAttachments: _pickAttachments,
-                                    onRemoveAttachment: _removePendingAttachment,
+                                    onRemoveAttachment:
+                                        _removePendingAttachment,
                                     pendingAttachments: _pendingAttachments,
                                     onToggleListening:
                                         _chatEngine.toggleListening,

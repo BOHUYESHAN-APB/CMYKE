@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
-import 'dart:collection';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -11,15 +10,20 @@ import 'package:image/image.dart' as img;
 import 'package:speech_to_text/speech_to_text.dart';
 
 import '../models/app_settings.dart';
+import '../models/brain_contract.dart';
+import '../models/brain_reintegration.dart';
 import '../models/chat_attachment.dart';
 import '../models/chat_message.dart';
 import '../models/chat_session.dart';
+import '../models/danmaku_event.dart';
 import '../models/llm_stream_event.dart';
 import '../models/lipsync_frame.dart';
 import '../models/memory_tier.dart';
 import '../models/memory_record.dart';
 import '../models/provider_config.dart';
 import '../models/research_job.dart';
+import '../models/runtime_capability_snapshot.dart';
+import '../models/runtime_event.dart';
 import '../models/tool_intent.dart';
 import '../prompts/persona_lumi.dart';
 import '../repositories/chat_repository.dart';
@@ -27,8 +31,13 @@ import '../repositories/memory_repository.dart';
 import '../repositories/settings_repository.dart';
 import '../models/voice_transcript_event.dart';
 import 'audio_stream_player.dart';
+import 'brain_router.dart';
+import 'chat_turn_decision.dart';
+import 'incremental_tts_controller.dart';
 import 'llm_client.dart';
+import 'runtime_event_arbitrator.dart';
 import 'speech_client.dart';
+import 'streaming_text_chunker.dart';
 import 'token_estimator.dart';
 import 'universal_agent.dart';
 import 'runtime_hub.dart';
@@ -79,6 +88,9 @@ class ChatEngine extends ChangeNotifier {
       _updateTalkingState();
       notifyListeners();
     });
+    _danmakuSubscription = RuntimeHub.instance.bus.danmakuEvents.listen(
+      _handleDanmakuEvent,
+    );
     _universalAgent = UniversalAgent(
       settingsRepository: _settingsRepository,
       memoryRepository: _memoryRepository,
@@ -101,7 +113,11 @@ class ChatEngine extends ChangeNotifier {
   final FlutterTts _tts = FlutterTts();
   final AudioStreamPlayer _audioPlayer = AudioStreamPlayer();
   StreamSubscription<bool>? _audioPlayingSubscription;
+  StreamSubscription<DanmakuEvent>? _danmakuSubscription;
   final Random _lipSyncRandom = Random();
+  final BrainRouter _brainRouter = const BrainRouter();
+  BrainReintegrationState _brainReintegrationState =
+      const BrainReintegrationState.idle();
   Timer? _lipSyncTimer;
   bool _lipSyncActive = false;
   bool _isTalking = false;
@@ -120,14 +136,15 @@ class ChatEngine extends ChangeNotifier {
   bool _isVoiceChannelMonitoring = false;
   String _voiceChannelPartialTranscript = '';
   final List<VoiceTranscriptEvent> _voiceChannelHistory = [];
-  final Queue<VoiceTranscriptEvent> _voiceChannelPending = Queue();
-  bool _voiceChannelInjecting = false;
+  bool _runtimeInboundInjecting = false;
+  DateTime? _danmakuQueueCursor;
   Timer? _voiceChannelRestartTimer;
   bool _speechReady = false;
   String _sttStatus = '';
   String _sttLastError = '';
   int _estimatedTokens = 0;
   int? _tokenLimit;
+  int _streamRunEpoch = 0;
 
   static const int _compressionKeepMessages = 8;
   static const double _compressionTriggerRatio = 0.92;
@@ -145,6 +162,8 @@ class ChatEngine extends ChangeNotifier {
   String get sttLastError => _sttLastError;
   int get estimatedTokens => _estimatedTokens;
   int? get tokenLimit => _tokenLimit;
+  BrainReintegrationState get brainReintegrationState =>
+      _brainReintegrationState;
 
   Future<void> sendText(
     String text, {
@@ -157,11 +176,17 @@ class ChatEngine extends ChangeNotifier {
     if (trimmed.isEmpty && attachments.isEmpty) {
       return;
     }
-    final helpTopic = _parseHelpTopic(trimmed);
-    if (helpTopic != null) {
+    final turnDecision = RuntimeHub.instance.controlAgent.decideTurn(trimmed);
+    final routeDecision = _brainRouter.decide(
+      contract: _settingsRepository.brainContract,
+      turnDecision: turnDecision,
+      text: trimmed,
+      hasAttachments: attachments.isNotEmpty,
+    );
+    if (turnDecision.kind == ChatTurnDecisionKind.help) {
       await _sendCommandHelp(
         trimmed,
-        topic: helpTopic,
+        topic: turnDecision.helpTopic ?? '',
         sourceKind: sourceKind,
         sourceId: sourceId,
         priority: priority,
@@ -266,8 +291,8 @@ class ChatEngine extends ChangeNotifier {
       );
       return;
     }
-    final toolCommand = _parseToolCommand(trimmed);
-    if (toolCommand != null) {
+    if (turnDecision.kind == ChatTurnDecisionKind.tool) {
+      final toolCommand = turnDecision.toolCommand!;
       if (toolCommand.showHelp || toolCommand.query.trim().isEmpty) {
         await _sendCommandHelp(
           trimmed,
@@ -287,90 +312,33 @@ class ChatEngine extends ChangeNotifier {
       );
       return;
     }
-    final agentCommand = _parseAgentCommand(trimmed);
-    if (agentCommand != null) {
+    if (turnDecision.kind == ChatTurnDecisionKind.agent) {
+      final agentCommand = turnDecision.agentCommand!;
       await _runUniversalAgent(agentCommand);
       return;
     }
-    final tagCommand = _parseTagCommand(trimmed);
-    if (tagCommand != null) {
-      if (tagCommand.type == _TagCommandType.help) {
-        await _sendCommandHelp(
-          trimmed,
-          topic: tagCommand.topic ?? '',
-          sourceKind: sourceKind,
-          sourceId: sourceId,
-          priority: priority,
-        );
-        return;
-      }
-      if (tagCommand.type == _TagCommandType.tool) {
-        if (tagCommand.payload.trim().isEmpty) {
-          await _sendCommandHelp(
-            trimmed,
-            topic: 'tool',
-            sourceKind: sourceKind,
-            sourceId: sourceId,
-            priority: priority,
-          );
-          return;
-        }
-        await _runToolCommand(
-          trimmed,
-          _ToolCommand(
-            action: tagCommand.action ?? ToolAction.code,
-            query: tagCommand.payload,
-          ),
-          sourceKind: sourceKind,
-          sourceId: sourceId,
-          priority: priority,
-        );
-        return;
-      }
-      if (tagCommand.type == _TagCommandType.agent) {
-        if (tagCommand.payload.trim().isEmpty) {
-          await _sendCommandHelp(
-            trimmed,
-            topic: 'agent',
-            sourceKind: sourceKind,
-            sourceId: sourceId,
-            priority: priority,
-          );
-          return;
-        }
-        await _runUniversalAgent(
-          _AgentCommand(
-            goal: tagCommand.payload,
-            deliverable: tagCommand.deliverable ?? ResearchDeliverable.report,
-            depth: tagCommand.depth ?? ResearchDepth.deep,
-          ),
-        );
-        return;
-      }
-      if (tagCommand.type == _TagCommandType.info) {
-        await _sendCommandHelp(
-          trimmed,
-          topic: tagCommand.topic ?? '',
-          sourceKind: sourceKind,
-          sourceId: sourceId,
-          priority: priority,
-        );
-        return;
-      }
+    if (turnDecision.kind == ChatTurnDecisionKind.info) {
+      await _sendCommandHelp(
+        trimmed,
+        topic: turnDecision.infoTopic ?? '',
+        sourceKind: sourceKind,
+        sourceId: sourceId,
+        priority: priority,
+      );
+      return;
     }
     await interrupt();
 
-    final normalizedText =
-        trimmed.isEmpty && attachments.isNotEmpty
-            ? '（发送了 ${attachments.length} 个附件）'
-            : trimmed;
+    final normalizedText = trimmed.isEmpty && attachments.isNotEmpty
+        ? '（发送了 ${attachments.length} 个附件）'
+        : trimmed;
 
     final resolvedAttachments = attachments.isEmpty
         ? const <ChatAttachment>[]
         : await _maybeAnalyzeUserAttachments(
-          normalizedText,
-          attachments: attachments,
-        );
+            normalizedText,
+            attachments: attachments,
+          );
     final attachmentContext = _formatAttachmentContext(resolvedAttachments);
 
     await _chatRepository.sendUserMessage(
@@ -389,7 +357,8 @@ class ChatEngine extends ChangeNotifier {
     );
     await _chatRepository.addMessage(assistantMessage, persist: false);
 
-    final provider = _activeProvider();
+    _refreshRuntimeProviderSnapshots();
+    final provider = _resolveChatProvider(routeDecision);
     if (provider == null) {
       await _chatRepository.updateMessageContent(
         assistantMessage.id,
@@ -397,6 +366,14 @@ class ChatEngine extends ChangeNotifier {
         persist: true,
       );
       return;
+    }
+
+    final useRightBrainAssist = routeDecision.usesRightBrain;
+    if (useRightBrainAssist) {
+      await _beginRightBrainAssist(
+        routeDecision: routeDecision,
+        provider: provider,
+      );
     }
 
     await _maybeCompressSession(provider);
@@ -419,12 +396,126 @@ class ChatEngine extends ChangeNotifier {
       webSearchContext: autoSearch.contextSnippet,
       attachmentContext: attachmentContext,
     );
+    _emitBrainRoutingMetric(routeDecision, provider.id);
+    if (useRightBrainAssist) {
+      _setBrainReintegrationState(
+        _brainReintegrationState.copyWith(
+          phase: BrainReintegrationPhase.waiting,
+          providerId: provider.id,
+        ),
+      );
+    }
     _isStreaming = true;
     _updateTalkingState();
     notifyListeners();
+    final runEpoch = ++_streamRunEpoch;
     final buffer = StringBuffer();
     bool receivedAudio = false;
     Future<void>? audioStartFuture;
+    final incrementalTtsProvider = _resolveIncrementalTtsProvider();
+    final enableIncrementalTts = incrementalTtsProvider != null;
+    final ttsChunker = enableIncrementalTts ? StreamingTextChunker() : null;
+    final incrementalTts = IncrementalTtsController();
+    final incrementalTtsTraceId =
+        'inc_tts_${DateTime.now().millisecondsSinceEpoch}_${assistantMessage.id}';
+
+    void emitIncrementalTtsTelemetry(String phase) {
+      if (!enableIncrementalTts) {
+        return;
+      }
+      final metrics = incrementalTts.captureMetrics();
+      RuntimeHub.instance.bus.emitRuntimeMetric(
+        name: 'incremental_tts_queue',
+        source: RuntimeEventSource.chatEngine,
+        priority: RuntimeEventPriority.low,
+        sessionId: _chatRepository.activeSession?.id,
+        traceId: incrementalTtsTraceId,
+        attributes: {'phase': phase, 'providerId': incrementalTtsProvider.id},
+        metrics: {
+          'pendingChunkCount': metrics.pendingChunkCount,
+          'pendingCharCount': metrics.pendingCharCount,
+          'streamedRequestCount': metrics.streamedRequestCount,
+          'streamedAudioChunkCount': metrics.streamedAudioChunkCount,
+          'maxPendingChunkCount': metrics.maxPendingChunkCount,
+          'maxPendingCharCount': metrics.maxPendingCharCount,
+          'started': incrementalTts.hasStarted,
+          'finalizeRequested': incrementalTts.isFinalizeRequested,
+          'completed': incrementalTts.isCompleted,
+          'failed': incrementalTts.hasFailed,
+          'producedAudio': incrementalTts.hasProducedAudio,
+        },
+      );
+    }
+
+    Future<void> drainIncrementalTtsChunks() async {
+      if (!enableIncrementalTts ||
+          incrementalTts.isDraining ||
+          ttsChunker == null) {
+        return;
+      }
+      if (runEpoch != _streamRunEpoch) {
+        return;
+      }
+      incrementalTts.beginDrain();
+      try {
+        while (incrementalTts.hasPendingChunks) {
+          if (runEpoch != _streamRunEpoch || receivedAudio) {
+            incrementalTts.clearPendingChunks();
+            emitIncrementalTtsTelemetry('aborted');
+            return;
+          }
+          if (!incrementalTts.shouldStartPlayback()) {
+            emitIncrementalTtsTelemetry('prebuffer_wait');
+            return;
+          }
+          final chunk = incrementalTts.takeNextChunk();
+          if (chunk == null) {
+            continue;
+          }
+          if (!incrementalTts.hasStarted) {
+            await _audioPlayer.start(
+              contentType: _contentTypeForFormat(
+                incrementalTtsProvider.audioFormat ?? 'wav',
+              ),
+            );
+            incrementalTts.markStarted();
+            emitIncrementalTtsTelemetry('started');
+          }
+          incrementalTts.recordRequest();
+          await for (final audioChunk in _speechClient.streamSpeech(
+            provider: incrementalTtsProvider,
+            text: chunk,
+          )) {
+            if (runEpoch != _streamRunEpoch || receivedAudio) {
+              incrementalTts.clearPendingChunks();
+              emitIncrementalTtsTelemetry('aborted');
+              return;
+            }
+            incrementalTts.markProducedAudio();
+            incrementalTts.recordAudioChunk();
+            await _audioPlayer.addChunk(audioChunk);
+          }
+          emitIncrementalTtsTelemetry('chunk_drain');
+        }
+
+        if (incrementalTts.isFinalizeRequested &&
+            !incrementalTts.isCompleted &&
+            runEpoch == _streamRunEpoch) {
+          if (incrementalTts.hasStarted) {
+            await _audioPlayer.finish();
+          }
+          incrementalTts.markCompleted();
+          emitIncrementalTtsTelemetry('finalized');
+        }
+      } catch (_) {
+        incrementalTts.markFailed();
+        incrementalTts.clearPendingChunks();
+        await _audioPlayer.stop();
+        emitIncrementalTtsTelemetry('failed');
+      } finally {
+        incrementalTts.endDrain();
+      }
+    }
 
     final session = _chatRepository.activeSession;
     final messageHistory = session == null
@@ -434,6 +525,15 @@ class ChatEngine extends ChangeNotifier {
     Future<void> handleEvent(LlmStreamEvent event) async {
       if (event.hasText) {
         buffer.write(event.textDelta);
+        if (enableIncrementalTts &&
+            !receivedAudio &&
+            ttsChunker != null &&
+            event.textDelta != null &&
+            event.textDelta!.isNotEmpty) {
+          incrementalTts.enqueueChunks(ttsChunker.pushDelta(event.textDelta!));
+          emitIncrementalTtsTelemetry('enqueue');
+          unawaited(drainIncrementalTtsChunks());
+        }
         final snapshot = buffer.toString();
         final display = _shouldSoftCleanStreaming(snapshot)
             ? _stripForbiddenAsides(snapshot)
@@ -445,6 +545,15 @@ class ChatEngine extends ChangeNotifier {
         );
       }
       if (event.hasAudio) {
+        if (enableIncrementalTts && !incrementalTts.isCompleted) {
+          incrementalTts.clearPendingChunks();
+          incrementalTts.requestFinalize();
+          emitIncrementalTtsTelemetry('model_audio_override');
+          if (incrementalTts.hasStarted) {
+            await _audioPlayer.stop();
+          }
+          incrementalTts.markCompleted();
+        }
         if (!_supportsStreamingAudio()) {
           return;
         }
@@ -468,6 +577,9 @@ class ChatEngine extends ChangeNotifier {
           (event) => unawaited(handleEvent(event)),
           onError: (error) async {
             _isStreaming = false;
+            if (useRightBrainAssist) {
+              _setBrainReintegrationState(const BrainReintegrationState.idle());
+            }
             _updateTalkingState();
             notifyListeners();
             await _audioPlayer.stop();
@@ -498,14 +610,49 @@ class ChatEngine extends ChangeNotifier {
               content: provisional,
               modelProvidedAudio: receivedAudio,
             );
+            if (useRightBrainAssist) {
+              _setBrainReintegrationState(
+                _brainReintegrationState.copyWith(
+                  phase: BrainReintegrationPhase.reintegrating,
+                ),
+              );
+            }
             final parts = _splitAssistantResponse(content);
             await _applyAssistantResponse(assistantMessage, parts);
+            if (useRightBrainAssist) {
+              await _chatRepository.addMessage(
+                ChatMessage(
+                  id: DateTime.now().microsecondsSinceEpoch.toString(),
+                  role: ChatRole.system,
+                  content: '右脑整理完成，当前结果已回到左脑表达。',
+                  createdAt: DateTime.now(),
+                  sourceKind: ChatSourceKind.system,
+                  priority: ChatPriority.low,
+                ),
+                persist: true,
+              );
+              _setBrainReintegrationState(const BrainReintegrationState.idle());
+            }
+            if (enableIncrementalTts && !receivedAudio && ttsChunker != null) {
+              incrementalTts.enqueueChunks(ttsChunker.flush());
+              incrementalTts.requestFinalize();
+              emitIncrementalTtsTelemetry('flush_finalize');
+              await drainIncrementalTtsChunks();
+            }
             if (receivedAudio && audioStartFuture != null) {
               await audioStartFuture;
               await _audioPlayer.finish();
             }
             if (_shouldSpeakResponse(modelProvidedAudio: receivedAudio)) {
-              await _playTts(parts.join('\n'));
+              final incrementalHandled =
+                  enableIncrementalTts &&
+                  !receivedAudio &&
+                  incrementalTts.isCompleted &&
+                  incrementalTts.hasProducedAudio &&
+                  !incrementalTts.hasFailed;
+              if (!incrementalHandled) {
+                await _playTts(parts.join('\n'));
+              }
             }
             _refreshTokenUsage();
             unawaited(
@@ -600,61 +747,12 @@ class ChatEngine extends ChangeNotifier {
     ResearchDeliverable deliverable = ResearchDeliverable.report,
     ResearchDepth depth = ResearchDepth.deep,
   }) async {
-    final command = _AgentCommand(
+    final command = ChatAgentCommand(
       goal: goal,
       deliverable: deliverable,
       depth: depth,
     );
     await _runUniversalAgent(command);
-  }
-
-  _AgentCommand? _parseAgentCommand(String text) {
-    final trimmed = text.trim();
-    if (trimmed.startsWith('/agent ')) {
-      return _AgentCommand(
-        goal: trimmed.substring(7).trim(),
-        deliverable: ResearchDeliverable.report,
-        depth: ResearchDepth.deep,
-      );
-    }
-    if (trimmed.startsWith('/research ')) {
-      return _AgentCommand(
-        goal: trimmed.substring(10).trim(),
-        deliverable: ResearchDeliverable.report,
-        depth: ResearchDepth.deep,
-      );
-    }
-    if (trimmed.startsWith('/summary ')) {
-      return _AgentCommand(
-        goal: trimmed.substring(9).trim(),
-        deliverable: ResearchDeliverable.summary,
-        depth: ResearchDepth.quick,
-      );
-    }
-    return null;
-  }
-
-  String? _parseHelpTopic(String text) {
-    final trimmed = text.trim();
-    if (trimmed == '/help' || trimmed == '/commands' || trimmed == '/?') {
-      return '';
-    }
-    if (trimmed.startsWith('/help ')) {
-      return trimmed.substring(6).trim();
-    }
-    if (trimmed.startsWith('/commands ')) {
-      return trimmed.substring(10).trim();
-    }
-    if (trimmed == '/mcp') {
-      return 'mcp';
-    }
-    if (trimmed == '/skills') {
-      return 'skills';
-    }
-    if (trimmed == '/agents') {
-      return 'agents';
-    }
-    return null;
   }
 
   Future<void> _sendCommandHelp(
@@ -685,45 +783,9 @@ class ChatEngine extends ChangeNotifier {
     );
   }
 
-  _ToolCommand? _parseToolCommand(String text) {
-    final trimmed = text.trim();
-    if (!(trimmed == '/tool' || trimmed.startsWith('/tool '))) {
-      return null;
-    }
-    final rest = trimmed.substring(5).trim();
-    if (rest.isEmpty) {
-      return const _ToolCommand(
-        action: ToolAction.code,
-        query: '',
-        showHelp: true,
-      );
-    }
-    if (rest == 'help' || rest == '?' || rest == 'h') {
-      return const _ToolCommand(
-        action: ToolAction.code,
-        query: '',
-        showHelp: true,
-      );
-    }
-    final parts = rest.split(RegExp(r'\s+'));
-    if (parts.isEmpty) {
-      return null;
-    }
-    final action = _parseToolAction(parts.first);
-    if (action != null) {
-      final query = rest.substring(parts.first.length).trim();
-      return _ToolCommand(
-        action: action,
-        query: query,
-        showHelp: query.isEmpty,
-      );
-    }
-    return _ToolCommand(action: ToolAction.code, query: rest);
-  }
-
   Future<void> _runToolCommand(
     String rawText,
-    _ToolCommand command, {
+    ChatToolCommand command, {
     required ChatSourceKind sourceKind,
     required String? sourceId,
     required ChatPriority priority,
@@ -736,10 +798,15 @@ class ChatEngine extends ChangeNotifier {
       priority: priority,
     );
     final sessionId = _chatRepository.activeSession?.id;
+    final traceId =
+        'tool_${DateTime.now().millisecondsSinceEpoch}_${command.action.name}';
+    final cancelGroup = sessionToolCancelGroup(sessionId);
     final intent = ToolIntent(
       action: command.action,
       query: command.query,
       sessionId: sessionId,
+      traceId: traceId,
+      cancelGroup: cancelGroup,
       routing: 'gateway',
     );
     final result = await RuntimeHub.instance.controlAgent.dispatchToolIntent(
@@ -758,88 +825,8 @@ class ChatEngine extends ChangeNotifier {
     );
   }
 
-  ToolAction? _parseToolAction(String token) {
-    final normalized = token.trim().toLowerCase();
-    switch (normalized) {
-      case 'code':
-      case 'shell':
-      case 'run':
-      case 'cli':
-        return ToolAction.code;
-      case 'search':
-      case 'web':
-      case 'find':
-        return ToolAction.search;
-      case 'crawl':
-      case 'fetch':
-      case 'http':
-        return ToolAction.crawl;
-      case 'analyze':
-      case 'analysis':
-        return ToolAction.analyze;
-      case 'summarize':
-      case 'summary':
-      case 'sum':
-        return ToolAction.summarize;
-      case 'image':
-      case 'img':
-      case 'imagegen':
-      case 'imagine':
-        return ToolAction.imageGen;
-      case 'vision':
-      case 'imageanalyze':
-      case 'imganalyze':
-        return ToolAction.imageAnalyze;
-      default:
-        return null;
-    }
-  }
-
-  _TagCommand? _parseTagCommand(String text) {
-    final trimmed = text.trim();
-    if (!trimmed.startsWith('#')) {
-      return null;
-    }
-    final match = RegExp(
-      r'^#([A-Za-z][\w-]*)(?:\s+(.+))?$',
-    ).firstMatch(trimmed);
-    if (match == null) {
-      return null;
-    }
-    final tag = match.group(1)!.toLowerCase();
-    final payload = (match.group(2) ?? '').trim();
-    if (tag == 'help' || tag == '?') {
-      return _TagCommand.help(topic: payload);
-    }
-    if (tag == 'mcp' || tag == 'skills' || tag == 'agents') {
-      return _TagCommand.info(topic: tag);
-    }
-    if (tag == 'agent' || tag == 'research') {
-      return _TagCommand.agent(
-        payload: payload,
-        deliverable: ResearchDeliverable.report,
-        depth: ResearchDepth.deep,
-      );
-    }
-    if (tag == 'summary') {
-      return _TagCommand.tool(action: ToolAction.summarize, payload: payload);
-    }
-    if (tag == 'tool') {
-      return _TagCommand.tool(action: ToolAction.code, payload: payload);
-    }
-    final action = _parseToolAction(tag);
-    if (action != null) {
-      return _TagCommand.tool(action: action, payload: payload);
-    }
-    return null;
-  }
-
   bool _isCommandMessage(String text) {
-    final trimmed = text.trim();
-    if (trimmed.startsWith('/')) {
-      return true;
-    }
-    return _parseTagCommand(trimmed) != null;
+    return RuntimeHub.instance.controlAgent.decideTurn(text).isCommand;
   }
 
   Future<_AutoWebSearchResult> _tryAutoWebSearchForStandardMode(
@@ -857,6 +844,15 @@ class ChatEngine extends ChangeNotifier {
         settings.toolGatewayPairingToken.trim().isEmpty) {
       return const _AutoWebSearchResult();
     }
+    final snapshot = await RuntimeHub.instance.capabilities
+        .refreshToolGateway();
+    final gatewayDegradeMessage = standardModeAutoSearchGatewayDegradeMessage(
+      settings: settings,
+      snapshot: snapshot,
+    );
+    if (gatewayDegradeMessage != null) {
+      return _AutoWebSearchResult(statusMessage: gatewayDegradeMessage);
+    }
     if (!_shouldAutoWebSearch(userText)) {
       return const _AutoWebSearchResult();
     }
@@ -872,6 +868,7 @@ class ChatEngine extends ChangeNotifier {
       sessionId: sessionId,
       routing: 'standard_chat',
       tracePrefix: tracePrefix,
+      cancelGroup: sessionToolCancelGroup(sessionId),
       maxResultsChars: 6000,
     );
 
@@ -1065,7 +1062,7 @@ class ChatEngine extends ChangeNotifier {
     return lines.join('\n');
   }
 
-  Future<void> _runUniversalAgent(_AgentCommand command) async {
+  Future<void> _runUniversalAgent(ChatAgentCommand command) async {
     final goal = command.goal.trim();
     if (goal.isEmpty) {
       return;
@@ -1160,6 +1157,17 @@ class ChatEngine extends ChangeNotifier {
   }
 
   Future<void> interrupt() async {
+    _streamRunEpoch += 1;
+    final coordination = buildInterruptCoordination(
+      _chatRepository.activeSession?.id,
+    );
+    await RuntimeHub.instance.controlAgent.emitInterruptStart(
+      cancelGroup: coordination.cancelGroup,
+      reason: coordination.reason,
+      sessionId: coordination.sessionId,
+      traceId: coordination.traceId,
+    );
+
     await _streamSubscription?.cancel();
     _streamSubscription = null;
     _isStreaming = false;
@@ -1168,11 +1176,24 @@ class ChatEngine extends ChangeNotifier {
     _partialTranscript = '';
     await _audioPlayer.stop();
     await _tts.stop();
+    unawaited(
+      RuntimeHub.instance.toolRouter.cancelActiveRun(
+        sessionId: coordination.sessionId,
+        cancelGroup: coordination.cancelGroup,
+        reason: coordination.reason,
+      ),
+    );
     _setLipSyncActive(false);
     _updateTalkingState();
     if (_isListening) {
       await stopListening();
     }
+    await RuntimeHub.instance.controlAgent.emitInterruptEnd(
+      cancelGroup: coordination.cancelGroup,
+      reason: coordination.reason,
+      sessionId: coordination.sessionId,
+      traceId: coordination.traceId,
+    );
     notifyListeners();
   }
 
@@ -1283,6 +1304,7 @@ class ChatEngine extends ChangeNotifier {
 
     _voiceChannelRestartTimer?.cancel();
     _voiceChannelRestartTimer = null;
+    RuntimeHub.instance.arbitrator.clearLane(RuntimeArbitrationLane.voice);
     _voiceChannelPartialTranscript = '';
     _isVoiceChannelMonitoring = true;
     notifyListeners();
@@ -1295,7 +1317,7 @@ class ChatEngine extends ChangeNotifier {
     _voiceChannelRestartTimer = null;
     _isVoiceChannelMonitoring = false;
     _voiceChannelPartialTranscript = '';
-    _voiceChannelPending.clear();
+    RuntimeHub.instance.arbitrator.clearLane(RuntimeArbitrationLane.voice);
     notifyListeners();
     if (_speech.isListening) {
       await _speech.stop();
@@ -1335,8 +1357,8 @@ class ChatEngine extends ChangeNotifier {
               );
             }
             RuntimeHub.instance.bus.emitVoiceTranscript(event);
-            _voiceChannelPending.add(event);
-            unawaited(_maybeInjectVoiceChannelPending());
+            _enqueueVoiceChannelEvent(event);
+            unawaited(_drainRuntimeInboundQueue());
           }
           // Close this recognition session after we got a full utterance.
           // We'll restart if monitoring is still enabled.
@@ -1357,39 +1379,173 @@ class ChatEngine extends ChangeNotifier {
     }
   }
 
-  Future<void> _maybeInjectVoiceChannelPending() async {
-    if (_voiceChannelInjecting) {
+  Future<void> _drainRuntimeInboundQueue() async {
+    if (_runtimeInboundInjecting) {
       return;
     }
-    if (!_settingsRepository.settings.voiceChannelInjectEnabled) {
-      _voiceChannelPending.clear();
-      return;
-    }
-    _voiceChannelInjecting = true;
+    _runtimeInboundInjecting = true;
     try {
-      while (_voiceChannelPending.isNotEmpty) {
-        if (!_isVoiceChannelMonitoring) {
-          _voiceChannelPending.clear();
+      while (true) {
+        final next = RuntimeHub.instance.arbitrator.dequeueReady();
+        if (next == null) {
           break;
+        }
+        final payload = next.payload;
+        if (payload is! _RuntimeInboundCue) {
+          continue;
+        }
+        if (!_isRuntimeInboundCueEnabled(payload)) {
+          continue;
         }
         // Don't preempt user chats or TTS playback. Voice-channel should feel
         // "background" and only inject when the assistant is idle.
         if (_isStreaming || isSpeaking || _isCompressing || _isListening) {
+          RuntimeHub.instance.arbitrator.enqueue<_RuntimeInboundCue>(
+            id: payload.id,
+            lane: payload.lane,
+            payload: payload,
+            notBefore: DateTime.now().add(const Duration(milliseconds: 280)),
+          );
           await Future.delayed(const Duration(milliseconds: 400));
           continue;
         }
-        final next = _voiceChannelPending.removeFirst();
-        // Prefix keeps UI readable until we have proper message metadata.
         await sendText(
-          next.text,
-          sourceKind: ChatSourceKind.voiceChannel,
-          priority: ChatPriority.voiceChannel,
+          payload.text,
+          sourceKind: payload.sourceKind,
+          priority: payload.priority,
         );
-        // Small cooldown to avoid rapid-fire injections.
-        await Future.delayed(const Duration(milliseconds: 200));
+        await Future.delayed(payload.cooldown);
       }
     } finally {
-      _voiceChannelInjecting = false;
+      _runtimeInboundInjecting = false;
+    }
+  }
+
+  void _enqueueVoiceChannelEvent(VoiceTranscriptEvent event) {
+    if (!_settingsRepository.settings.voiceChannelInjectEnabled) {
+      return;
+    }
+    final cue = _RuntimeInboundCue(
+      id: event.id,
+      lane: RuntimeArbitrationLane.voice,
+      text: event.text,
+      sourceKind: ChatSourceKind.voiceChannel,
+      priority: ChatPriority.voiceChannel,
+      cooldown: const Duration(milliseconds: 220),
+    );
+    RuntimeHub.instance.arbitrator.enqueue<_RuntimeInboundCue>(
+      id: cue.id,
+      lane: cue.lane,
+      payload: cue,
+    );
+  }
+
+  void _handleDanmakuEvent(DanmakuEvent event) {
+    final cue = _buildDanmakuCue(event);
+    if (cue == null) {
+      return;
+    }
+
+    final now = DateTime.now();
+    var notBefore = now;
+    if (_danmakuQueueCursor != null && _danmakuQueueCursor!.isAfter(now)) {
+      notBefore = _danmakuQueueCursor!;
+    }
+    _danmakuQueueCursor = notBefore.add(const Duration(milliseconds: 900));
+
+    RuntimeHub.instance.arbitrator.enqueue<_RuntimeInboundCue>(
+      id: cue.id,
+      lane: cue.lane,
+      payload: cue,
+      now: now,
+      notBefore: notBefore,
+      priorityBias: _danmakuPriorityBias(event),
+    );
+    unawaited(_drainRuntimeInboundQueue());
+  }
+
+  _RuntimeInboundCue? _buildDanmakuCue(DanmakuEvent event) {
+    if (!_isDanmakuInjectionEnabled()) {
+      return null;
+    }
+
+    final text = _formatDanmakuCueText(event);
+    if (text.isEmpty) {
+      return null;
+    }
+
+    return _RuntimeInboundCue(
+      id: 'danmaku_${event.timestamp.microsecondsSinceEpoch}',
+      lane: RuntimeArbitrationLane.danmaku,
+      text: text,
+      sourceKind: ChatSourceKind.barrage,
+      priority: ChatPriority.barrage,
+      cooldown: const Duration(milliseconds: 160),
+    );
+  }
+
+  int _danmakuPriorityBias(DanmakuEvent event) {
+    switch (event.type) {
+      case DanmakuEventType.superChat:
+        return 80;
+      case DanmakuEventType.gift:
+      case DanmakuEventType.guardBuy:
+        return 40;
+      case DanmakuEventType.danmaku:
+      case DanmakuEventType.unknown:
+        return 0;
+    }
+  }
+
+  bool _isDanmakuInjectionEnabled() {
+    final route = _settingsRepository.settings.route;
+    if (route != ModelRoute.realtime && route != ModelRoute.omni) {
+      return false;
+    }
+    return _chatRepository.activeSession != null;
+  }
+
+  String _formatDanmakuCueText(DanmakuEvent event) {
+    final user = (event.userName ?? '观众').trim();
+    switch (event.type) {
+      case DanmakuEventType.superChat:
+        final money = event.price == null
+            ? ''
+            : '（SC ¥${event.price!.toStringAsFixed(0)}）';
+        final msg = (event.message ?? '').trim();
+        if (msg.isEmpty) {
+          return '直播间消息：$user 发送了超级留言$money。';
+        }
+        return '直播间消息：$user 发送超级留言$money：$msg';
+      case DanmakuEventType.gift:
+      case DanmakuEventType.guardBuy:
+        final msg = (event.message ?? '').trim();
+        if (msg.isEmpty) {
+          return '直播间消息：$user 送出了礼物。';
+        }
+        return '直播间消息：$user $msg';
+      case DanmakuEventType.danmaku:
+        final msg = (event.message ?? '').trim();
+        if (msg.isEmpty) {
+          return '';
+        }
+        return '直播弹幕：$user 说：$msg';
+      case DanmakuEventType.unknown:
+        return '';
+    }
+  }
+
+  bool _isRuntimeInboundCueEnabled(_RuntimeInboundCue cue) {
+    switch (cue.lane) {
+      case RuntimeArbitrationLane.voice:
+        return _isVoiceChannelMonitoring &&
+            _settingsRepository.settings.voiceChannelInjectEnabled;
+      case RuntimeArbitrationLane.danmaku:
+        return _isDanmakuInjectionEnabled();
+      case RuntimeArbitrationLane.moderation:
+      case RuntimeArbitrationLane.chat:
+      case RuntimeArbitrationLane.proactive:
+        return true;
     }
   }
 
@@ -1445,16 +1601,66 @@ class ChatEngine extends ChangeNotifier {
     await _tts.speak(text);
   }
 
-  ProviderConfig? _activeProvider() {
-    final settings = _settingsRepository.settings;
-    switch (settings.route) {
-      case ModelRoute.standard:
-        return _settingsRepository.findProvider(settings.llmProviderId);
-      case ModelRoute.realtime:
-        return _settingsRepository.findProvider(settings.realtimeProviderId);
-      case ModelRoute.omni:
-        return _settingsRepository.findProvider(settings.omniProviderId);
+  ProviderConfig? _resolveFastBrainProvider() {
+    return _settingsRepository.resolveBrainProvider(BrainRole.left);
+  }
+
+  ProviderConfig? _resolveSlowBrainProvider() {
+    return _settingsRepository.resolveBrainProvider(BrainRole.right);
+  }
+
+  ProviderConfig? _resolveChatProvider(BrainRouteDecision decision) {
+    if (decision.usesRightBrain) {
+      return _resolveSlowBrainProvider() ?? _resolveFastBrainProvider();
     }
+    return _resolveFastBrainProvider();
+  }
+
+  void _emitBrainRoutingMetric(
+    BrainRouteDecision decision,
+    String? providerId,
+  ) {
+    RuntimeHub.instance.bus.emitRuntimeMetric(
+      name: 'brain_router_decision',
+      metrics: const {'count': 1},
+      source: RuntimeEventSource.chatEngine,
+      priority: RuntimeEventPriority.low,
+      sessionId: _chatRepository.activeSession?.id,
+      attributes: {
+        'mode': decision.mode.name,
+        'reason': decision.reason,
+        'providerId': providerId ?? '',
+      },
+    );
+  }
+
+  void _setBrainReintegrationState(BrainReintegrationState state) {
+    _brainReintegrationState = state;
+    notifyListeners();
+  }
+
+  Future<void> _beginRightBrainAssist({
+    required BrainRouteDecision routeDecision,
+    required ProviderConfig provider,
+  }) async {
+    _setBrainReintegrationState(
+      BrainReintegrationState(
+        phase: BrainReintegrationPhase.escalating,
+        reason: routeDecision.reason,
+        providerId: provider.id,
+      ),
+    );
+    await _chatRepository.addMessage(
+      ChatMessage(
+        id: DateTime.now().microsecondsSinceEpoch.toString(),
+        role: ChatRole.system,
+        content: '左脑判断这次问题需要更深入整理，正在调用右脑辅助。',
+        createdAt: DateTime.now(),
+        sourceKind: ChatSourceKind.system,
+        priority: ChatPriority.low,
+      ),
+      persist: true,
+    );
   }
 
   ProviderConfig _resolveSummarizerProvider(ProviderConfig fallback) {
@@ -1482,6 +1688,24 @@ class ChatEngine extends ChangeNotifier {
   ProviderConfig? _resolveTtsProvider() {
     final settings = _settingsRepository.settings;
     return _settingsRepository.findProvider(settings.ttsProviderId);
+  }
+
+  ProviderConfig? _resolveIncrementalTtsProvider() {
+    final settings = _settingsRepository.settings;
+    if (settings.route != ModelRoute.standard) {
+      return null;
+    }
+    if (!_supportsStreamingAudio()) {
+      return null;
+    }
+    final provider = _resolveTtsProvider();
+    if (provider == null) {
+      return null;
+    }
+    if (provider.protocol == ProviderProtocol.deviceBuiltin) {
+      return null;
+    }
+    return provider;
   }
 
   ProviderConfig? _resolveSttProvider() {
@@ -2640,7 +2864,8 @@ $original
   }
 
   void _refreshTokenUsage() {
-    final provider = _activeProvider();
+    _refreshRuntimeProviderSnapshots();
+    final provider = _resolveFastBrainProvider();
     final nextLimit = provider?.contextWindowTokens;
     var shouldNotify = false;
     if (nextLimit != _tokenLimit) {
@@ -2924,7 +3149,9 @@ $original
         final dim = (a.width != null && a.height != null)
             ? '${a.width}x${a.height}'
             : 'unknown';
-        final kb = a.bytes == null ? '?' : ((a.bytes! / 1024).round()).toString();
+        final kb = a.bytes == null
+            ? '?'
+            : ((a.bytes! / 1024).round()).toString();
         final caption = a.caption?.trim();
         final token = Uri.file(a.localPath).toString();
         buffer.writeln(
@@ -2941,8 +3168,12 @@ $original
       buffer.writeln('文件：');
       for (var i = 0; i < files.length; i += 1) {
         final a = files[i];
-        final kb = a.bytes == null ? '?' : ((a.bytes! / 1024).round()).toString();
-        buffer.writeln('- FILE${i + 1}: ${a.fileName} (~${kb}KB) path=${a.localPath}');
+        final kb = a.bytes == null
+            ? '?'
+            : ((a.bytes! / 1024).round()).toString();
+        buffer.writeln(
+          '- FILE${i + 1}: ${a.fileName} (~${kb}KB) path=${a.localPath}',
+        );
         if (buffer.length > 3900) {
           buffer.writeln('...');
           break;
@@ -2958,11 +3189,18 @@ $original
     if (explicit != null && explicit.isNotEmpty) {
       return _settingsRepository.findProvider(explicit);
     }
-    final main = _activeProvider();
+    final main = _resolveSlowBrainProvider() ?? _resolveFastBrainProvider();
     if (main != null && main.capabilities.contains(ProviderCapability.vision)) {
       return main;
     }
     return null;
+  }
+
+  void _refreshRuntimeProviderSnapshots() {
+    RuntimeHub.instance.capabilities.updateProviderSnapshots(
+      settings: _settingsRepository.settings,
+      findProvider: _settingsRepository.findProvider,
+    );
   }
 
   Future<List<ChatAttachment>> _maybeAnalyzeUserAttachments(
@@ -3004,10 +3242,12 @@ $original
 3) type 只能取：sticker,meme,screenshot,photo,chart,document,other；
 4) caption 要能被引用（偏客观描述）；不确定写“待核验”。
 ''';
-    final prompt = '''
+    final prompt =
+        '''
 用户消息：$userText
 请逐张图输出结构化结果。tags 可以包含：表情包/流程图/截图/网页/代码/表格/人物/风景/Logo 等。
-'''.trim();
+'''
+            .trim();
 
     String raw;
     try {
@@ -3150,12 +3390,14 @@ $original
       final caption = (item['caption'] ?? '').toString().trim();
       final tags = (item['tags'] is List)
           ? (item['tags'] as List)
-              .map((e) => e.toString().trim())
-              .where((e) => e.isNotEmpty)
-              .toList(growable: false)
+                .map((e) => e.toString().trim())
+                .where((e) => e.isNotEmpty)
+                .toList(growable: false)
           : const <String>[];
       if (idx <= 0 || caption.isEmpty) continue;
-      out.add(_VisionJsonEntry(index: idx, type: type, caption: caption, tags: tags));
+      out.add(
+        _VisionJsonEntry(index: idx, type: type, caption: caption, tags: tags),
+      );
     }
     return out;
   }
@@ -3164,8 +3406,11 @@ $original
   void dispose() {
     _voiceChannelRestartTimer?.cancel();
     _voiceChannelRestartTimer = null;
+    RuntimeHub.instance.arbitrator.clearLane(RuntimeArbitrationLane.voice);
+    RuntimeHub.instance.arbitrator.clearLane(RuntimeArbitrationLane.danmaku);
     _streamSubscription?.cancel();
     _audioPlayingSubscription?.cancel();
+    _danmakuSubscription?.cancel();
     _lipSyncTimer?.cancel();
     _chatRepository.removeListener(_refreshTokenUsage);
     _memoryRepository.removeListener(_refreshTokenUsage);
@@ -3179,11 +3424,85 @@ $original
   }
 }
 
+class _RuntimeInboundCue {
+  const _RuntimeInboundCue({
+    required this.id,
+    required this.lane,
+    required this.text,
+    required this.sourceKind,
+    required this.priority,
+    required this.cooldown,
+  });
+
+  final String id;
+  final RuntimeArbitrationLane lane;
+  final String text;
+  final ChatSourceKind sourceKind;
+  final ChatPriority priority;
+  final Duration cooldown;
+}
+
+String? standardModeAutoSearchGatewayDegradeMessage({
+  required AppSettings settings,
+  required RuntimeCapabilitySnapshot snapshot,
+}) {
+  if (settings.route != ModelRoute.standard) {
+    return null;
+  }
+  if (!settings.standardWebSearchEnabled) {
+    return null;
+  }
+  if (!settings.toolGatewayEnabled ||
+      settings.toolGatewayBaseUrl.trim().isEmpty ||
+      settings.toolGatewayPairingToken.trim().isEmpty) {
+    return null;
+  }
+  if (!snapshot.isUsable) {
+    return snapshot.error ?? snapshot.summary ?? '工具网关暂不可用，已跳过自动搜索。';
+  }
+  if (!snapshot.routes.contains('/api/v1/opencode/run')) {
+    return '基础模式联网搜索跳过：当前工具网关未暴露运行接口。';
+  }
+  return null;
+}
+
 class _AutoWebSearchResult {
   const _AutoWebSearchResult({this.statusMessage, this.contextSnippet = ''});
 
   final String? statusMessage;
   final String contextSnippet;
+}
+
+String sessionToolCancelGroup(String? sessionId) {
+  final normalized = sessionId?.trim();
+  return 'session:${normalized == null || normalized.isEmpty ? 'default' : normalized}';
+}
+
+InterruptCoordination buildInterruptCoordination(String? sessionId) {
+  final normalized = sessionId?.trim();
+  final normalizedSessionId = normalized == null || normalized.isEmpty
+      ? null
+      : normalized;
+  return InterruptCoordination(
+    sessionId: normalizedSessionId,
+    traceId: 'interrupt_${DateTime.now().millisecondsSinceEpoch}',
+    cancelGroup: sessionToolCancelGroup(normalizedSessionId),
+    reason: 'chat_interrupt',
+  );
+}
+
+class InterruptCoordination {
+  const InterruptCoordination({
+    required this.sessionId,
+    required this.traceId,
+    required this.cancelGroup,
+    required this.reason,
+  });
+
+  final String? sessionId;
+  final String traceId;
+  final String cancelGroup;
+  final String reason;
 }
 
 class _VisionJsonEntry {
@@ -3198,70 +3517,6 @@ class _VisionJsonEntry {
   final String type;
   final String caption;
   final List<String> tags;
-}
-
-class _AgentCommand {
-  const _AgentCommand({
-    required this.goal,
-    required this.deliverable,
-    required this.depth,
-  });
-
-  final String goal;
-  final ResearchDeliverable deliverable;
-  final ResearchDepth depth;
-}
-
-class _ToolCommand {
-  const _ToolCommand({
-    required this.action,
-    required this.query,
-    this.showHelp = false,
-  });
-
-  final ToolAction action;
-  final String query;
-  final bool showHelp;
-}
-
-enum _TagCommandType { tool, agent, help, info }
-
-class _TagCommand {
-  const _TagCommand({
-    required this.type,
-    this.action,
-    this.payload = '',
-    this.deliverable,
-    this.depth,
-    this.topic,
-  });
-
-  const _TagCommand.tool({required ToolAction action, required String payload})
-    : this(type: _TagCommandType.tool, action: action, payload: payload);
-
-  const _TagCommand.agent({
-    required String payload,
-    required ResearchDeliverable deliverable,
-    required ResearchDepth depth,
-  }) : this(
-         type: _TagCommandType.agent,
-         payload: payload,
-         deliverable: deliverable,
-         depth: depth,
-       );
-
-  const _TagCommand.help({String topic = ''})
-    : this(type: _TagCommandType.help, topic: topic);
-
-  const _TagCommand.info({required String topic})
-    : this(type: _TagCommandType.info, topic: topic);
-
-  final _TagCommandType type;
-  final ToolAction? action;
-  final String payload;
-  final ResearchDeliverable? deliverable;
-  final ResearchDepth? depth;
-  final String? topic;
 }
 
 class _AsidePattern {

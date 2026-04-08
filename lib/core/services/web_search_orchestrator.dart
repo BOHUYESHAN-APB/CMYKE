@@ -16,6 +16,8 @@ class WebSearchOrchestrator {
     required String? sessionId,
     required String routing,
     required String tracePrefix,
+    String? cancelGroup,
+    bool interruptible = true,
     int maxResultsChars = 5000,
   }) async {
     final normalized = _normalizeQueries(queries);
@@ -42,6 +44,8 @@ class WebSearchOrchestrator {
             sessionId: sessionId,
             traceId: traceId,
             routing: routing,
+            cancelGroup: cancelGroup,
+            interruptible: interruptible,
           ),
         ),
       );
@@ -115,6 +119,8 @@ class WebSearchOrchestrator {
         sessionId: config.sessionId,
         routing: config.routing,
         tracePrefix: '${config.tracePrefix}_r$round',
+        cancelGroup: config.cancelGroup,
+        interruptible: config.interruptible,
         maxResultsChars: config.maxPerRoundChars,
       );
 
@@ -306,6 +312,8 @@ class WebSearchLoopConfig {
     required this.sessionId,
     required this.routing,
     required this.tracePrefix,
+    this.cancelGroup,
+    this.interruptible = true,
     required this.maxRounds,
     required this.fanoutPerRound,
     required this.maxPerRoundChars,
@@ -319,6 +327,8 @@ class WebSearchLoopConfig {
   final String? sessionId;
   final String routing;
   final String tracePrefix;
+  final String? cancelGroup;
+  final bool interruptible;
   final int maxRounds;
   final int fanoutPerRound;
   final int maxPerRoundChars;

@@ -57,7 +57,7 @@ class LocalDatabase {
       return ffi.databaseFactoryFfi.openDatabase(
         dbPath,
         options: OpenDatabaseOptions(
-          version: 27,
+          version: 29,
           onConfigure: (db) async {
             await db.execute('PRAGMA foreign_keys = ON');
           },
@@ -68,7 +68,7 @@ class LocalDatabase {
     }
     return openDatabase(
       dbPath,
-      version: 27,
+      version: 29,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
       },
@@ -259,6 +259,22 @@ class LocalDatabase {
         layout_show_right_panel INTEGER NOT NULL DEFAULT 1
       )
     ''');
+    await db.execute('''
+      CREATE TABLE notes (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        summary TEXT NOT NULL DEFAULT '',
+        type TEXT NOT NULL DEFAULT 'text',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        category TEXT NOT NULL DEFAULT 'default',
+        memory_tier TEXT,
+        memory_record_id TEXT,
+        memory_synced_at TEXT
+      )
+    ''');
+    await db.execute('CREATE INDEX idx_notes_updated_at ON notes(updated_at)');
   }
 
   Future<void> _upgradeSchema(
@@ -484,6 +500,28 @@ class LocalDatabase {
       await db.execute(
         'ALTER TABLE app_settings ADD COLUMN voice_channel_tts_inject_enabled INTEGER NOT NULL DEFAULT 0',
       );
+    }
+    if (oldVersion < 28) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS notes (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          content TEXT NOT NULL,
+          summary TEXT NOT NULL DEFAULT '',
+          type TEXT NOT NULL DEFAULT 'text',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          category TEXT NOT NULL DEFAULT 'default'
+        )
+      ''');
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_notes_updated_at ON notes(updated_at)',
+      );
+    }
+    if (oldVersion < 29) {
+      await db.execute('ALTER TABLE notes ADD COLUMN memory_tier TEXT');
+      await db.execute('ALTER TABLE notes ADD COLUMN memory_record_id TEXT');
+      await db.execute('ALTER TABLE notes ADD COLUMN memory_synced_at TEXT');
     }
   }
 }

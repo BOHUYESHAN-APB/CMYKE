@@ -108,19 +108,16 @@ class UniversalAgent {
     }
     final buffer = StringBuffer('$base\n');
     _appendMemoryBlock(buffer, '会话记忆', contextRecords);
-    final byTier = <MemoryTier, List<String>>{};
+    final byTier = <MemoryTier, List<MemoryRecord>>{};
     for (final record in relevant) {
-      byTier.putIfAbsent(record.tier, () => []).add(record.content);
+      byTier.putIfAbsent(record.tier, () => []).add(record);
     }
     void appendTier(MemoryTier tier, String label) {
-      final items = byTier[tier];
-      if (items == null || items.isEmpty) {
+      final records = byTier[tier];
+      if (records == null || records.isEmpty) {
         return;
       }
-      buffer.writeln('\n[$label]');
-      for (final item in items) {
-        buffer.writeln('- $item');
-      }
+      _appendMemoryBlock(buffer, label, records);
     }
 
     appendTier(MemoryTier.crossSession, '跨会话记忆');
@@ -138,8 +135,37 @@ class UniversalAgent {
       return;
     }
     buffer.writeln('\n[$label]');
+    final seen = <String>{};
     for (final record in records) {
-      buffer.writeln('- ${record.content}');
+      final formatted = _formatMemoryLine(record);
+      if (formatted == null || !seen.add(formatted)) {
+        continue;
+      }
+      buffer.writeln('- $formatted');
+    }
+  }
+
+  String? _formatMemoryLine(MemoryRecord record) {
+    final content = record.content.trim();
+    if (content.isEmpty) {
+      return null;
+    }
+    switch (record.tier) {
+      case MemoryTier.crossSession:
+        final keyTag = record.tags.firstWhere(
+          (tag) => tag.startsWith('core_key:'),
+          orElse: () => '',
+        );
+        final coreKey = keyTag.isEmpty
+            ? ''
+            : keyTag.substring('core_key:'.length).trim();
+        return coreKey.isEmpty ? content : '$coreKey: $content';
+      case MemoryTier.autonomous:
+        final day = record.createdAt.toIso8601String().substring(0, 10);
+        return '$day $content';
+      case MemoryTier.context:
+      case MemoryTier.external:
+        return content;
     }
   }
 

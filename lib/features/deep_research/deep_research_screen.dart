@@ -176,8 +176,9 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
 
     var session = _activeSession;
     session ??= await _repository.createSession(title: _deriveTitle(text));
-    final pendingAttachments =
-        List<ChatAttachment>.from(_pendingAttachmentsBySession[session.id] ?? []);
+    final pendingAttachments = List<ChatAttachment>.from(
+      _pendingAttachmentsBySession[session.id] ?? [],
+    );
     if (text.isEmpty) {
       if (pendingAttachments.isNotEmpty) {
         await _repository.addMessage(
@@ -243,7 +244,10 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
       }
       final inputs = result.files
           .where((f) => f.name.trim().isNotEmpty)
-          .map((f) => IngestFileInput(fileName: f.name, path: f.path, bytes: f.bytes))
+          .map(
+            (f) =>
+                IngestFileInput(fileName: f.name, path: f.path, bytes: f.bytes),
+          )
           .toList(growable: false);
       final ingested = await _attachmentIngest.ingestToLibraryAndWorkspace(
         sessionId: sessionId,
@@ -261,9 +265,9 @@ class _DeepResearchScreenState extends State<DeepResearchScreen> {
         return;
       }
       setState(() {
-        _pendingAttachmentsBySession.putIfAbsent(sessionId, () => []).addAll(
-          ingested,
-        );
+        _pendingAttachmentsBySession
+            .putIfAbsent(sessionId, () => [])
+            .addAll(ingested);
       });
     } catch (e) {
       await _repository.addMessage(
@@ -372,7 +376,9 @@ type 只能取：sticker,meme,screenshot,photo,chart,document,other。
       );
     }
     if (updatedById.isEmpty) return attachments;
-    return attachments.map((a) => updatedById[a.id] ?? a).toList(growable: false);
+    return attachments
+        .map((a) => updatedById[a.id] ?? a)
+        .toList(growable: false);
   }
 
   Future<Uint8List?> _readFileBytesSafe(String path) async {
@@ -438,12 +444,14 @@ type 只能取：sticker,meme,screenshot,photo,chart,document,other。
       final caption = (item['caption'] ?? '').toString().trim();
       final tags = (item['tags'] is List)
           ? (item['tags'] as List)
-              .map((e) => e.toString().trim())
-              .where((e) => e.isNotEmpty)
-              .toList(growable: false)
+                .map((e) => e.toString().trim())
+                .where((e) => e.isNotEmpty)
+                .toList(growable: false)
           : const <String>[];
       if (idx <= 0 || caption.isEmpty) continue;
-      out.add(_VisionJsonEntry(index: idx, type: type, caption: caption, tags: tags));
+      out.add(
+        _VisionJsonEntry(index: idx, type: type, caption: caption, tags: tags),
+      );
     }
     return out;
   }
@@ -612,9 +620,7 @@ type 只能取：sticker,meme,screenshot,photo,chart,document,other。
         final caption = (a.caption ?? '').trim();
         final captionPart = caption.isEmpty ? '' : ' caption=$caption';
         final token = Uri.file(a.localPath).toString();
-        buffer.writeln(
-          '- [Image $idx] $name$captionPart$tags [IMAGE: $token]',
-        );
+        buffer.writeln('- [Image $idx] $name$captionPart$tags [IMAGE: $token]');
       } else {
         final mime = (a.mimeType ?? '').trim();
         final mimePart = mime.isEmpty ? '' : ' mime=$mime';
@@ -643,6 +649,19 @@ type 只能取：sticker,meme,screenshot,photo,chart,document,other。
     if (gatewayError != null) {
       return _GatewaySearchResult(statusMessage: gatewayError);
     }
+    final snapshot = await RuntimeHub.instance.capabilities
+        .refreshToolGateway();
+    if (!snapshot.isUsable) {
+      return _GatewaySearchResult(
+        statusMessage:
+            snapshot.error ?? snapshot.summary ?? '工具网关能力探测失败，本轮仅使用模型与本地上下文。',
+      );
+    }
+    if (!snapshot.routes.contains('/api/v1/opencode/run')) {
+      return const _GatewaySearchResult(
+        statusMessage: '工具网关未暴露运行接口，本轮仅使用模型与本地上下文。',
+      );
+    }
 
     final tracePrefix =
         'dr_${DateTime.now().millisecondsSinceEpoch}_$sessionId';
@@ -658,6 +677,7 @@ type 只能取：sticker,meme,screenshot,photo,chart,document,other。
         sessionId: sessionId,
         routing: 'deep_research',
         tracePrefix: tracePrefix,
+        cancelGroup: _sessionToolCancelGroup(sessionId),
         maxRounds: maxRounds,
         fanoutPerRound: fanout,
         maxPerRoundChars: 9000,
@@ -759,6 +779,11 @@ type 只能取：sticker,meme,screenshot,photo,chart,document,other。
     return null;
   }
 
+  String _sessionToolCancelGroup(String? sessionId) {
+    final normalized = sessionId?.trim();
+    return 'session:${normalized == null || normalized.isEmpty ? 'default' : normalized}';
+  }
+
   bool _isToolSearchFailure(String message) {
     final lower = message.toLowerCase();
     return lower.contains('未启用') ||
@@ -818,6 +843,7 @@ type 只能取：sticker,meme,screenshot,photo,chart,document,other。
             sessionId: sessionId,
             routing: 'deep_research',
             traceId: traceId,
+            cancelGroup: _sessionToolCancelGroup(sessionId),
           ),
         ).timeout(const Duration(seconds: 25), onTimeout: () => 'timeout'),
       );
@@ -1260,7 +1286,9 @@ $metaLines
       result: result,
       sessionId: sessionId,
     );
-    final outputsRoot = await widget.workspaceService.outputsDirectory(sessionId);
+    final outputsRoot = await widget.workspaceService.outputsDirectory(
+      sessionId,
+    );
     final runId = DateTime.now().millisecondsSinceEpoch.toString();
     final runDir = Directory(
       p.join(outputsRoot.path, 'deep_research', 'runs', runId),
@@ -2107,11 +2135,10 @@ $metaLines
                             onSend: _handleSend,
                             onPickAttachments: _pickAttachments,
                             onRemoveAttachment: _removePendingAttachment,
-                            pendingAttachments:
-                                session == null
-                                    ? const []
-                                    : (_pendingAttachmentsBySession[session.id] ??
-                                        const []),
+                            pendingAttachments: session == null
+                                ? const []
+                                : (_pendingAttachmentsBySession[session.id] ??
+                                      const []),
                             promptHint: session == null
                                 ? '提交目标后将先进入问卷澄清，再开始研究。'
                                 : _questionnairesBySession[session.id] == null

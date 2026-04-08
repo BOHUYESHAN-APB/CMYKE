@@ -35,12 +35,7 @@ class MemoryTierScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  _tierDescription(tier),
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: const Color(0xFF5E636F),
-                  ),
-                ),
+                _TierGuideCard(tier: tier),
                 const SizedBox(height: 16),
                 Expanded(
                   child: tier == MemoryTier.external
@@ -69,6 +64,69 @@ enum _MemoryTierAction { export, import, forge }
 enum _KnowledgeBaseAction { exportAll, importAll }
 
 enum _KnowledgeCollectionAction { export, importInto, forge }
+
+class _TierGuideCard extends StatelessWidget {
+  const _TierGuideCard({required this.tier});
+
+  final MemoryTier tier;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              tier.description,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 12),
+            _GuideLine(label: '写入规则', content: tier.writeRule),
+            const SizedBox(height: 8),
+            _GuideLine(label: '调用方式', content: tier.retrievalRule),
+            const SizedBox(height: 8),
+            _GuideLine(
+              label: '不要放',
+              content: tier.avoidRule,
+              color: scheme.error,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _GuideLine extends StatelessWidget {
+  const _GuideLine({required this.label, required this.content, this.color});
+
+  final String label;
+  final String content;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final effectiveColor = color ?? Theme.of(context).colorScheme.primary;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '$label：',
+          style: Theme.of(context).textTheme.labelLarge?.copyWith(
+            fontWeight: FontWeight.w700,
+            color: effectiveColor,
+          ),
+        ),
+        Expanded(
+          child: Text(content, style: Theme.of(context).textTheme.bodySmall),
+        ),
+      ],
+    );
+  }
+}
 
 class _SingleTierEditor extends StatelessWidget {
   const _SingleTierEditor({
@@ -505,11 +563,8 @@ class _RecordTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final title = record.title ?? _snippet(record.content);
-    final scopeLabel = _scopeLabel(record.scope);
-    final subtitle = scopeLabel == null
-        ? record.content
-        : '$scopeLabel · ${record.content}';
+    final title = _displayTitle(record);
+    final subtitle = _buildSubtitle(record);
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 6),
       child: ListTile(
@@ -542,6 +597,41 @@ class _RecordTile extends StatelessWidget {
     return trimmed.length > 18 ? '${trimmed.substring(0, 18)}...' : trimmed;
   }
 
+  String _displayTitle(MemoryRecord record) {
+    final titled = record.title?.trim();
+    if (titled != null && titled.isNotEmpty) {
+      return titled;
+    }
+    if (record.tier == MemoryTier.crossSession) {
+      final coreKey = _extractCoreKey(record.tags);
+      if (coreKey != null) {
+        return coreKey;
+      }
+    }
+    if (record.tier == MemoryTier.autonomous) {
+      return '事件 ${_formatDay(record.createdAt)}';
+    }
+    return _snippet(record.content);
+  }
+
+  String _buildSubtitle(MemoryRecord record) {
+    switch (record.tier) {
+      case MemoryTier.crossSession:
+        final coreKey = _extractCoreKey(record.tags);
+        return coreKey == null
+            ? '长期稳定记忆 · ${record.content}'
+            : 'core_key=$coreKey · ${record.content}';
+      case MemoryTier.autonomous:
+        return '${_formatDay(record.createdAt)} · ${record.content}';
+      case MemoryTier.context:
+      case MemoryTier.external:
+        final scopeLabel = _scopeLabel(record.scope);
+        return scopeLabel == null
+            ? record.content
+            : '$scopeLabel · ${record.content}';
+    }
+  }
+
   String? _scopeLabel(String? scope) {
     final trimmed = scope?.trim();
     if (trimmed == null || trimmed.isEmpty) {
@@ -555,6 +645,10 @@ class _RecordTile extends StatelessWidget {
       default:
         return trimmed;
     }
+  }
+
+  String _formatDay(DateTime value) {
+    return value.toIso8601String().substring(0, 10);
   }
 }
 
@@ -573,19 +667,6 @@ class _EmptyState extends StatelessWidget {
         ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF7A7F8A)),
       ),
     );
-  }
-}
-
-String _tierDescription(MemoryTier tier) {
-  switch (tier) {
-    case MemoryTier.context:
-      return '会话上下文记忆（含会话摘要），仅绑定当前会话，适合短期信息与压缩锚点。';
-    case MemoryTier.crossSession:
-      return '核心记忆会被持续注入系统提示词，用于稳定的人设、偏好与关键事实（应避免写入短期琐碎信息）。';
-    case MemoryTier.autonomous:
-      return '日记记忆用于记录可追溯的“发生过的事”（按时间检索更准），适合回答“昨天聊了什么/上周去了哪里”。';
-    case MemoryTier.external:
-      return '知识库支持多分类，按需检索时调用，适合文档/资料等外部信息。';
   }
 }
 
@@ -1110,26 +1191,63 @@ Future<void> _openRecordDialog(
 }) async {
   final titleController = TextEditingController(text: record?.title ?? '');
   final contentController = TextEditingController(text: record?.content ?? '');
+  final keyController = TextEditingController(
+    text: tier == MemoryTier.crossSession
+        ? (_extractCoreKey(record?.tags ?? const []) ?? '')
+        : '',
+  );
+  final occurredAtController = TextEditingController(
+    text: tier == MemoryTier.autonomous
+        ? _formatIsoMinute(record?.createdAt ?? DateTime.now())
+        : '',
+  );
   await showDialog<void>(
     context: context,
     builder: (context) {
       return AlertDialog(
-        title: Text(record == null ? '新增记忆' : '编辑记忆'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: titleController,
-              decoration: const InputDecoration(labelText: '标题 (可选)'),
+        title: Text(record == null ? '新增${tier.label}' : '编辑${tier.label}'),
+        content: SizedBox(
+          width: 560,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _TierGuideCard(tier: tier),
+                const SizedBox(height: 12),
+                if (tier == MemoryTier.crossSession) ...[
+                  TextField(
+                    controller: keyController,
+                    decoration: const InputDecoration(
+                      labelText: 'core_key',
+                      hintText: '例如 persona.style / user.preference.editor',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                if (tier == MemoryTier.autonomous) ...[
+                  TextField(
+                    controller: occurredAtController,
+                    decoration: const InputDecoration(
+                      labelText: '发生时间',
+                      hintText: '2026-04-08T14:30',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                TextField(
+                  controller: titleController,
+                  decoration: const InputDecoration(labelText: '标题 (可选)'),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: contentController,
+                  minLines: 3,
+                  maxLines: 6,
+                  decoration: const InputDecoration(labelText: '内容'),
+                ),
+              ],
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: contentController,
-              minLines: 3,
-              maxLines: 6,
-              decoration: const InputDecoration(labelText: '内容'),
-            ),
-          ],
+          ),
         ),
         actions: [
           TextButton(
@@ -1142,34 +1260,94 @@ Future<void> _openRecordDialog(
               if (content.isEmpty) {
                 return;
               }
-              final nextRecord = MemoryRecord(
-                id:
-                    record?.id ??
-                    DateTime.now().microsecondsSinceEpoch.toString(),
-                tier: tier,
-                content: content,
-                createdAt: record?.createdAt ?? DateTime.now(),
-                title: titleController.text.trim().isEmpty
-                    ? null
-                    : titleController.text.trim(),
-                sourceMessageId: record?.sourceMessageId,
-                tags: record?.tags ?? const [],
-                sessionId: record?.sessionId ?? sessionId,
-                scope: record?.scope,
-              );
-              if (record == null) {
-                await repository.addRecord(
-                  tier: tier,
-                  record: nextRecord,
-                  collectionId: collectionId,
-                  sessionId: sessionId,
-                );
-              } else {
-                await repository.updateRecord(
-                  collectionId: collectionId,
-                  record: nextRecord,
-                  sessionId: sessionId,
-                );
+              final title = titleController.text.trim().isEmpty
+                  ? null
+                  : titleController.text.trim();
+              switch (tier) {
+                case MemoryTier.crossSession:
+                  final key = keyController.text.trim();
+                  if (key.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('核心记忆必须提供 core_key。')),
+                    );
+                    return;
+                  }
+                  final previousKey = _extractCoreKey(record?.tags ?? const []);
+                  await repository.upsertCoreMemory(
+                    key: key,
+                    content: content,
+                    title: title,
+                    sourceMessageId: record?.sourceMessageId,
+                    tags: _editableTags(record?.tags ?? const []),
+                    includeAgentTag: false,
+                  );
+                  if (record != null && previousKey != key) {
+                    await repository.removeRecord(
+                      collectionId: collectionId,
+                      recordId: record.id,
+                    );
+                  }
+                  break;
+                case MemoryTier.autonomous:
+                  final occurredAt = _parseOccurredAt(
+                    occurredAtController.text,
+                    fallback: record?.createdAt ?? DateTime.now(),
+                  );
+                  if (record == null) {
+                    await repository.addDiaryMemory(
+                      occurredAt: occurredAt,
+                      content: content,
+                      title: title,
+                      sourceMessageId: record?.sourceMessageId,
+                      tags: _editableTags(record?.tags ?? const []),
+                      includeAgentTag: false,
+                    );
+                  } else {
+                    await repository.updateRecord(
+                      collectionId: collectionId,
+                      record: record.copyWith(
+                        content: content,
+                        createdAt: occurredAt,
+                        title: title,
+                        tags: _normalizedDiaryTags(
+                          record.tags,
+                          occurredAt: occurredAt,
+                        ),
+                      ),
+                      sessionId: sessionId,
+                    );
+                  }
+                  break;
+                case MemoryTier.context:
+                case MemoryTier.external:
+                  final nextRecord = MemoryRecord(
+                    id:
+                        record?.id ??
+                        DateTime.now().microsecondsSinceEpoch.toString(),
+                    tier: tier,
+                    content: content,
+                    createdAt: record?.createdAt ?? DateTime.now(),
+                    title: title,
+                    sourceMessageId: record?.sourceMessageId,
+                    tags: record?.tags ?? const [],
+                    sessionId: record?.sessionId ?? sessionId,
+                    scope: record?.scope,
+                  );
+                  if (record == null) {
+                    await repository.addRecord(
+                      tier: tier,
+                      record: nextRecord,
+                      collectionId: collectionId,
+                      sessionId: sessionId,
+                    );
+                  } else {
+                    await repository.updateRecord(
+                      collectionId: collectionId,
+                      record: nextRecord,
+                      sessionId: sessionId,
+                    );
+                  }
+                  break;
               }
               if (!context.mounted) {
                 return;
@@ -1184,4 +1362,61 @@ Future<void> _openRecordDialog(
   );
   titleController.dispose();
   contentController.dispose();
+  keyController.dispose();
+  occurredAtController.dispose();
+}
+
+String? _extractCoreKey(List<String> tags) {
+  for (final tag in tags) {
+    final trimmed = tag.trim();
+    if (!trimmed.startsWith('core_key:')) {
+      continue;
+    }
+    final key = trimmed.substring('core_key:'.length).trim();
+    if (key.isNotEmpty) {
+      return key;
+    }
+  }
+  return null;
+}
+
+List<String> _editableTags(List<String> tags) {
+  final normalized = <String>{};
+  for (final tag in tags) {
+    final trimmed = tag.trim();
+    if (trimmed.isEmpty ||
+        trimmed == 'agent:auto' ||
+        trimmed.startsWith('core_key:') ||
+        trimmed.startsWith('day:')) {
+      continue;
+    }
+    normalized.add(trimmed);
+  }
+  return normalized.toList(growable: false);
+}
+
+List<String> _normalizedDiaryTags(
+  List<String> tags, {
+  required DateTime occurredAt,
+}) {
+  return <String>{
+    ..._editableTags(tags),
+    'day:${occurredAt.toIso8601String().substring(0, 10)}',
+  }.toList(growable: false);
+}
+
+DateTime _parseOccurredAt(String raw, {required DateTime fallback}) {
+  final trimmed = raw.trim();
+  if (trimmed.isEmpty) {
+    return fallback;
+  }
+  try {
+    return DateTime.parse(trimmed);
+  } catch (_) {
+    return fallback;
+  }
+}
+
+String _formatIsoMinute(DateTime value) {
+  return value.toIso8601String().substring(0, 16);
 }

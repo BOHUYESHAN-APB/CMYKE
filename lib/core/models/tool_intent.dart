@@ -19,6 +19,8 @@ class ToolIntent {
     this.routing,
     this.sessionId,
     this.traceId,
+    this.cancelGroup,
+    this.interruptible = true,
   });
 
   final ToolAction action;
@@ -28,4 +30,6 @@ class ToolIntent {
   final String? routing; // e.g. "standard" | "realtime"
   final String? sessionId;
   final String? traceId;
+  final String? cancelGroup;
+  final bool interruptible;
 }

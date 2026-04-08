@@ -7,6 +7,7 @@ import 'core/models/app_settings.dart';
 import 'core/models/provider_config.dart';
 import 'core/repositories/chat_repository.dart';
 import 'core/repositories/memory_repository.dart';
+import 'core/repositories/note_repository.dart';
 import 'core/repositories/settings_repository.dart';
 import 'core/services/local_database.dart';
 import 'core/services/local_storage.dart';
@@ -30,6 +31,7 @@ class _CMYKEAppState extends State<CMYKEApp> {
   late final LocalStorage _legacyStorage;
   late final ChatRepository _chatRepository;
   late final MemoryRepository _memoryRepository;
+  late final NoteRepository _noteRepository;
   late final SettingsRepository _settingsRepository;
   late final WorkspaceService _workspaceService;
   late final ToolGatewayBootstrapper _toolGatewayBootstrapper;
@@ -58,6 +60,7 @@ class _CMYKEAppState extends State<CMYKEApp> {
       legacyStorage: _legacyStorage,
       resolveEmbeddingProvider: _resolveEmbeddingProvider,
     );
+    _noteRepository = NoteRepository(database: _database);
     _settingsRepository.addListener(_handleSettingsChanged);
     PetDesktopController.instance.attach(_settingsRepository);
     _bootstrap();
@@ -77,20 +80,23 @@ class _CMYKEAppState extends State<CMYKEApp> {
       await Future.wait([
         _chatRepository.load(),
         _memoryRepository.load(),
+        _noteRepository.load(),
         _settingsRepository.load(),
       ]);
-      RuntimeHub.instance.configureToolGateway(_settingsRepository.settings);
+      _syncRuntimeCapabilities();
       // Desktop release target: bundle backend + auto-start when enabled, and
       // best-effort auto-pair for a smoother out-of-box experience.
       if (!Platform.environment.containsKey('FLUTTER_TEST')) {
         final settings = _settingsRepository.settings;
-        final allowAutoStartLocal = kReleaseMode && shouldAutoStartToolGateway(settings);
+        final allowAutoStartLocal =
+            kReleaseMode && shouldAutoStartToolGateway(settings);
         await _toolGatewayBootstrapper.ensureReady(
           settingsRepository: _settingsRepository,
           allowAutoStartLocal: allowAutoStartLocal,
-          allowAutoPairing: Platform.isWindows || Platform.isMacOS || Platform.isLinux,
+          allowAutoPairing:
+              Platform.isWindows || Platform.isMacOS || Platform.isLinux,
         );
-        RuntimeHub.instance.configureToolGateway(_settingsRepository.settings);
+        _syncRuntimeCapabilities();
       }
       final savedModelPath = _settingsRepository.settings.live3dModelPath
           ?.trim();
@@ -164,6 +170,7 @@ class _CMYKEAppState extends State<CMYKEApp> {
       chatRepository: _chatRepository,
       memoryRepository: _memoryRepository,
       settingsRepository: _settingsRepository,
+      noteRepository: _noteRepository,
       workspaceService: _workspaceService,
       embeddingConfigMissing: _embeddingConfigMissing,
     );
@@ -212,10 +219,19 @@ class _CMYKEAppState extends State<CMYKEApp> {
     if (!_ready || !mounted) {
       return;
     }
-    RuntimeHub.instance.configureToolGateway(_settingsRepository.settings);
+    _syncRuntimeCapabilities();
     setState(() {
       _embeddingConfigMissing = _isEmbeddingMissing();
     });
+  }
+
+  void _syncRuntimeCapabilities() {
+    final settings = _settingsRepository.settings;
+    RuntimeHub.instance.configureToolGateway(settings);
+    RuntimeHub.instance.capabilities.updateProviderSnapshots(
+      settings: settings,
+      findProvider: _settingsRepository.findProvider,
+    );
   }
 }
 

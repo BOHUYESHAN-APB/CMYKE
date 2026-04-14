@@ -3485,4 +3485,292 @@ Ignored body paragraph.
         assert_eq!(expires_at, payload.expires_at);
         assert!(payload.expires_at >= now_ts() + 30);
     }
+
+    #[tokio::test]
+    async fn pairing_create_respects_min_expiry_and_verify_returns_pairing() {
+        let state = test_shared_state();
+
+        let create_response = build_app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/gateway/pairing/create")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"mode":"desktop","label":"alpha","expires_in_sec":1}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(create_response.status(), StatusCode::OK);
+        let create_body = to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: PairingCreateResponse = serde_json::from_slice(&create_body).unwrap();
+        assert_eq!(created.pairing.mode, "desktop");
+        assert_eq!(created.pairing.label.as_deref(), Some("alpha"));
+        assert!(created.pairing.expires_at - created.pairing.created_at >= 60);
+
+        let verify_payload = serde_json::json!({"token": created.pairing.token}).to_string();
+        let verify_response = build_app(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/gateway/pairing/verify")
+                    .header("content-type", "application/json")
+                    .body(Body::from(verify_payload))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(verify_response.status(), StatusCode::OK);
+        let verify_body = to_bytes(verify_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let verified: PairingVerifyResponse = serde_json::from_slice(&verify_body).unwrap();
+        assert!(verified.ok);
+        assert_eq!(
+            verified.pairing.as_ref().map(|pairing| pairing.id.as_str()),
+            Some(created.pairing.id.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn pairing_verify_rejects_unknown_token_and_pairing_list_filters_expired() {
+        let state = test_shared_state();
+        let now = now_ts();
+        {
+            let mut guard = state.lock().await;
+            guard.pairings.insert(
+                "expired".to_string(),
+                Pairing {
+                    id: "expired".to_string(),
+                    token: "expired-token".to_string(),
+                    mode: "desktop".to_string(),
+                    label: None,
+                    created_at: now - 120,
+                    expires_at: now - 1,
+                },
+            );
+            guard.pairings.insert(
+                "active".to_string(),
+                Pairing {
+                    id: "active".to_string(),
+                    token: "active-token".to_string(),
+                    mode: "desktop".to_string(),
+                    label: Some("live".to_string()),
+                    created_at: now,
+                    expires_at: now + 3600,
+                },
+            );
+        }
+
+        let verify_response = build_app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/gateway/pairing/verify")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"token":"missing-token"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(verify_response.status(), StatusCode::OK);
+        let verify_body = to_bytes(verify_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let verified: PairingVerifyResponse = serde_json::from_slice(&verify_body).unwrap();
+        assert!(!verified.ok);
+        assert!(verified.pairing.is_none());
+
+        let list_response = build_app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/gateway/pairing/list")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_body = to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let listed: Vec<Pairing> = serde_json::from_slice(&list_body).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "active");
+        assert_eq!(listed[0].label.as_deref(), Some("live"));
+
+        let guard = state.lock().await;
+        assert!(!guard.pairings.contains_key("expired"));
+        assert!(guard.pairings.contains_key("active"));
+    }
+
+    #[tokio::test]
+    async fn gateway_info_returns_expected_identity_payload() {
+        let response = build_app(test_shared_state())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/gateway/info")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["service"], "cmyke-backend");
+        assert_eq!(payload["mode"], "gateway");
+        assert_eq!(payload["version"], env!("CARGO_PKG_VERSION"));
+    }
+
+    #[tokio::test]
+    async fn opencode_cancel_rejects_invalid_session_id() {
+        let state = test_shared_state();
+        insert_test_pairing(&state, "pairing-token").await;
+
+        let response = build_app(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/opencode/cancel")
+                    .header("content-type", "application/json")
+                    .header("x-pairing-token", "pairing-token")
+                    .body(Body::from(r#"{"session_id":"../bad"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error"], "invalid session_id");
+    }
+
+    #[tokio::test]
+    async fn opencode_cancel_requires_session_or_group_selector() {
+        let state = test_shared_state();
+        insert_test_pairing(&state, "pairing-token").await;
+
+        let response = build_app(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/opencode/cancel")
+                    .header("content-type", "application/json")
+                    .header("x-pairing-token", "pairing-token")
+                    .body(Body::from(r#"{}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error"], "session_id or cancel_group required");
+    }
+
+    #[tokio::test]
+    async fn opencode_cancel_clamps_ttl_to_max_and_signals_interruptible_runs() {
+        let state = test_shared_state();
+        insert_test_pairing(&state, "pairing-token").await;
+
+        let now = now_ts();
+        {
+            let mut guard = state.lock().await;
+            guard.active_runs.insert(
+                "run-1".to_string(),
+                ActiveRun {
+                    trace_id: "run-1".to_string(),
+                    session_id: "session-a".to_string(),
+                    cancel_group: Some("group-a".to_string()),
+                    interruptible: true,
+                    started_at: now,
+                },
+            );
+            guard.active_runs.insert(
+                "run-2".to_string(),
+                ActiveRun {
+                    trace_id: "run-2".to_string(),
+                    session_id: "session-b".to_string(),
+                    cancel_group: Some("group-a".to_string()),
+                    interruptible: true,
+                    started_at: now,
+                },
+            );
+            guard.active_runs.insert(
+                "run-3".to_string(),
+                ActiveRun {
+                    trace_id: "run-3".to_string(),
+                    session_id: "session-a".to_string(),
+                    cancel_group: Some("group-a".to_string()),
+                    interruptible: false,
+                    started_at: now,
+                },
+            );
+        }
+
+        let before = now_ts();
+        let response = build_app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/opencode/cancel")
+                    .header("content-type", "application/json")
+                    .header("x-pairing-token", "pairing-token")
+                    .body(Body::from(
+                        r#"{"session_id":"session-a","cancel_group":"group-a","ttl_sec":999999}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: OpencodeCancelResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload.active_runs_signaled, 2);
+        assert!(payload.expires_at >= before + 3599);
+        assert!(payload.expires_at <= before + 3601);
+
+        let guard = state.lock().await;
+        assert!(guard.canceled_sessions.contains_key("session-a"));
+        assert!(guard.canceled_groups.contains_key("group-a"));
+    }
+
+    #[tokio::test]
+    async fn opencode_cancel_clamps_ttl_to_minimum_window() {
+        let state = test_shared_state();
+        insert_test_pairing(&state, "pairing-token").await;
+
+        let before = now_ts();
+        let response = build_app(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/opencode/cancel")
+                    .header("content-type", "application/json")
+                    .header("x-pairing-token", "pairing-token")
+                    .body(Body::from(r#"{"session_id":"session-a","ttl_sec":-10}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: OpencodeCancelResponse = serde_json::from_slice(&body).unwrap();
+        assert!(payload.expires_at >= before + 29);
+        assert!(payload.expires_at <= before + 31);
+    }
 }

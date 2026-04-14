@@ -1,5 +1,5 @@
 use axum::{
-    extract::State,
+    extract::{Path as AxumPath, Query, State},
     http::{HeaderMap, StatusCode},
     routing::{get, post},
     Json, Router,
@@ -167,6 +167,65 @@ struct OpencodeCancelResponse {
     active_runs_signaled: usize,
     expires_at: i64,
     reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OpencodeRunListResponse {
+    ok: bool,
+    active_runs: Vec<ActiveRun>,
+    canceled_sessions: Vec<String>,
+    canceled_groups: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OpencodeRunDetailResponse {
+    ok: bool,
+    active_run: ActiveRun,
+    canceled_by_session: bool,
+    canceled_by_group: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OpencodeCompletedRunSummary {
+    trace_id: String,
+    session_id: String,
+    ok: bool,
+    exit_code: i32,
+    timed_out: bool,
+    duration_ms: u128,
+    at: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct OpencodeCompletedRunsQuery {
+    workspace: Option<String>,
+    session_id: Option<String>,
+    ok: Option<bool>,
+    timed_out: Option<bool>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OpencodeCompletedRunsResponse {
+    ok: bool,
+    workspace_root: String,
+    limit: usize,
+    runs: Vec<OpencodeCompletedRunSummary>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct OpencodeCompletedRunDetailQuery {
+    workspace: Option<String>,
+    session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OpencodeCompletedRunDetailResponse {
+    ok: bool,
+    workspace_root: String,
+    artifact_path: String,
+    run: OpencodeCompletedRunSummary,
+    artifact: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -458,6 +517,10 @@ async fn gateway_capabilities(
             "/api/v1/gateway/inbound".to_string(),
             "/api/v1/gateway/outbound".to_string(),
             "/api/v1/opencode/run".to_string(),
+            "/api/v1/opencode/runs".to_string(),
+            "/api/v1/opencode/runs/{trace_id}".to_string(),
+            "/api/v1/opencode/history".to_string(),
+            "/api/v1/opencode/history/{trace_id}".to_string(),
             "/api/v1/opencode/cancel".to_string(),
             "/api/v1/opencode/skills/installed".to_string(),
             "/api/v1/opencode/skills/preview".to_string(),
@@ -469,6 +532,10 @@ async fn gateway_capabilities(
         features: vec![
             "pairing".to_string(),
             "opencode_run".to_string(),
+            "opencode_run_inspect".to_string(),
+            "opencode_run_detail".to_string(),
+            "opencode_run_history".to_string(),
+            "opencode_run_history_detail".to_string(),
             "opencode_cancel".to_string(),
             "skills_install".to_string(),
             "skills_preview".to_string(),
@@ -571,6 +638,188 @@ async fn opencode_cancel(
         active_runs_signaled,
         expires_at,
         reason: payload.reason,
+    }))
+}
+
+async fn opencode_runs(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Json<OpencodeRunListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    require_valid_pairing(&state, &headers, None).await?;
+
+    let mut guard = state.lock().await;
+    cleanup_cancellations(&mut guard);
+
+    let mut active_runs = guard.active_runs.values().cloned().collect::<Vec<_>>();
+    active_runs.sort_by(|left, right| {
+        left.started_at
+            .cmp(&right.started_at)
+            .then_with(|| left.trace_id.cmp(&right.trace_id))
+    });
+
+    let mut canceled_sessions = guard.canceled_sessions.keys().cloned().collect::<Vec<_>>();
+    canceled_sessions.sort();
+
+    let mut canceled_groups = guard.canceled_groups.keys().cloned().collect::<Vec<_>>();
+    canceled_groups.sort();
+
+    Ok(Json(OpencodeRunListResponse {
+        ok: true,
+        active_runs,
+        canceled_sessions,
+        canceled_groups,
+    }))
+}
+
+async fn opencode_run_detail(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    AxumPath(trace_id): AxumPath<String>,
+) -> Result<Json<OpencodeRunDetailResponse>, (StatusCode, Json<ErrorResponse>)> {
+    require_valid_pairing(&state, &headers, None).await?;
+
+    let mut guard = state.lock().await;
+    cleanup_cancellations(&mut guard);
+
+    let active_run = guard.active_runs.get(&trace_id).cloned().ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                ok: false,
+                error: "active run not found".to_string(),
+            }),
+        )
+    })?;
+
+    let canceled_by_session = guard.canceled_sessions.contains_key(&active_run.session_id);
+    let canceled_by_group = active_run
+        .cancel_group
+        .as_ref()
+        .map(|group| guard.canceled_groups.contains_key(group))
+        .unwrap_or(false);
+
+    Ok(Json(OpencodeRunDetailResponse {
+        ok: true,
+        active_run,
+        canceled_by_session,
+        canceled_by_group,
+    }))
+}
+
+async fn opencode_completed_runs(
+    headers: HeaderMap,
+    Query(query): Query<OpencodeCompletedRunsQuery>,
+    State(state): State<SharedState>,
+) -> Result<Json<OpencodeCompletedRunsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    require_valid_pairing(&state, &headers, None).await?;
+
+    let workspace_root =
+        resolve_workspace_container_root(query.workspace.as_deref()).map_err(|err| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    ok: false,
+                    error: err,
+                }),
+            )
+        })?;
+    let session_id = query
+        .session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(session_id) = session_id {
+        if !is_safe_session_id(session_id) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    ok: false,
+                    error: "invalid session_id".to_string(),
+                }),
+            ));
+        }
+    }
+    let limit = query.limit.unwrap_or(10).clamp(1, 50);
+    let runs = load_recent_completed_runs(
+        &workspace_root,
+        session_id,
+        query.ok,
+        query.timed_out,
+        limit,
+    )
+    .await;
+
+    Ok(Json(OpencodeCompletedRunsResponse {
+        ok: true,
+        workspace_root: workspace_root.to_string_lossy().to_string(),
+        limit,
+        runs,
+    }))
+}
+
+async fn opencode_completed_run_detail(
+    headers: HeaderMap,
+    AxumPath(trace_id): AxumPath<String>,
+    Query(query): Query<OpencodeCompletedRunDetailQuery>,
+    State(state): State<SharedState>,
+) -> Result<Json<OpencodeCompletedRunDetailResponse>, (StatusCode, Json<ErrorResponse>)> {
+    require_valid_pairing(&state, &headers, None).await?;
+
+    let workspace_root =
+        resolve_workspace_container_root(query.workspace.as_deref()).map_err(|err| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    ok: false,
+                    error: err,
+                }),
+            )
+        })?;
+    let session_id = query
+        .session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(session_id) = session_id {
+        if !is_safe_session_id(session_id) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    ok: false,
+                    error: "invalid session_id".to_string(),
+                }),
+            ));
+        }
+    }
+
+    let trace_id = trace_id.trim();
+    if trace_id.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                ok: false,
+                error: "trace_id required".to_string(),
+            }),
+        ));
+    }
+
+    let detail = load_completed_run_detail(&workspace_root, session_id, trace_id).await;
+    let Some((run, artifact_path, artifact)) = detail else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                ok: false,
+                error: "completed run not found".to_string(),
+            }),
+        ));
+    };
+
+    Ok(Json(OpencodeCompletedRunDetailResponse {
+        ok: true,
+        workspace_root: workspace_root.to_string_lossy().to_string(),
+        artifact_path,
+        run,
+        artifact,
     }))
 }
 
@@ -1404,6 +1653,224 @@ fn preview_text(text: &str, max_chars: usize) -> String {
     }
     out.push_str("...");
     out
+}
+
+async fn load_recent_completed_runs(
+    workspace_container_root: &Path,
+    session_filter: Option<&str>,
+    ok_filter: Option<bool>,
+    timed_out_filter: Option<bool>,
+    limit: usize,
+) -> Vec<OpencodeCompletedRunSummary> {
+    let root = workspace_container_root.to_path_buf();
+    let session_filter = session_filter.map(|value| value.to_string());
+    tokio::task::spawn_blocking(move || {
+        let mut out = Vec::new();
+        let session_dirs = match std::fs::read_dir(&root) {
+            Ok(rd) => rd,
+            Err(_) => return out,
+        };
+
+        for entry in session_dirs.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name == "_shared" {
+                continue;
+            }
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(_) => continue,
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+
+            let artifact_dir = path.join("logs").join("opencode_runs");
+            let artifacts = match std::fs::read_dir(&artifact_dir) {
+                Ok(rd) => rd,
+                Err(_) => continue,
+            };
+
+            for artifact in artifacts.flatten() {
+                let file_type = match artifact.file_type() {
+                    Ok(file_type) => file_type,
+                    Err(_) => continue,
+                };
+                if !file_type.is_file() {
+                    continue;
+                }
+                let artifact_path = artifact.path();
+                let Ok(raw) = std::fs::read_to_string(&artifact_path) else {
+                    continue;
+                };
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+                    continue;
+                };
+                let Some(response) = value.get("response") else {
+                    continue;
+                };
+                let Some(trace_id) = value.get("trace_id").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                let Some(session_id) = value.get("session_id").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                if let Some(session_filter) = session_filter.as_deref() {
+                    if session_id != session_filter {
+                        continue;
+                    }
+                }
+                let Some(ok) = response.get("ok").and_then(|v| v.as_bool()) else {
+                    continue;
+                };
+                let Some(exit_code) = response.get("exit_code").and_then(|v| v.as_i64()) else {
+                    continue;
+                };
+                let Some(duration_ms) = response.get("duration_ms").and_then(|v| v.as_u64()) else {
+                    continue;
+                };
+                let timed_out = value
+                    .get("timed_out")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if let Some(ok_filter) = ok_filter {
+                    if ok != ok_filter {
+                        continue;
+                    }
+                }
+                if let Some(timed_out_filter) = timed_out_filter {
+                    if timed_out != timed_out_filter {
+                        continue;
+                    }
+                }
+                let at = value.get("at").and_then(|v| v.as_i64()).unwrap_or_default();
+
+                out.push(OpencodeCompletedRunSummary {
+                    trace_id: trace_id.to_string(),
+                    session_id: session_id.to_string(),
+                    ok,
+                    exit_code: exit_code as i32,
+                    timed_out,
+                    duration_ms: duration_ms as u128,
+                    at,
+                });
+            }
+        }
+
+        out.sort_by(|left, right| {
+            right
+                .at
+                .cmp(&left.at)
+                .then_with(|| left.trace_id.cmp(&right.trace_id))
+        });
+        out.truncate(limit);
+        out
+    })
+    .await
+    .unwrap_or_default()
+}
+
+async fn load_completed_run_detail(
+    workspace_container_root: &Path,
+    session_filter: Option<&str>,
+    trace_filter: &str,
+) -> Option<(OpencodeCompletedRunSummary, String, serde_json::Value)> {
+    let root = workspace_container_root.to_path_buf();
+    let session_filter = session_filter.map(|value| value.to_string());
+    let trace_filter = trace_filter.to_string();
+    tokio::task::spawn_blocking(move || {
+        let session_dirs = std::fs::read_dir(&root).ok()?;
+
+        for entry in session_dirs.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name == "_shared" {
+                continue;
+            }
+            let file_type = entry.file_type().ok()?;
+            if !file_type.is_dir() {
+                continue;
+            }
+
+            let artifact_dir = path.join("logs").join("opencode_runs");
+            let artifacts = match std::fs::read_dir(&artifact_dir) {
+                Ok(rd) => rd,
+                Err(_) => continue,
+            };
+
+            for artifact in artifacts.flatten() {
+                let file_type = match artifact.file_type() {
+                    Ok(file_type) => file_type,
+                    Err(_) => continue,
+                };
+                if !file_type.is_file() {
+                    continue;
+                }
+
+                let artifact_path = artifact.path();
+                let Ok(raw) = std::fs::read_to_string(&artifact_path) else {
+                    continue;
+                };
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+                    continue;
+                };
+                let Some(response) = value.get("response") else {
+                    continue;
+                };
+                let Some(trace_id) = value.get("trace_id").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                if trace_id != trace_filter {
+                    continue;
+                }
+                let Some(session_id) = value.get("session_id").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                if let Some(session_filter) = session_filter.as_deref() {
+                    if session_id != session_filter {
+                        continue;
+                    }
+                }
+                let Some(ok) = response.get("ok").and_then(|v| v.as_bool()) else {
+                    continue;
+                };
+                let Some(exit_code) = response.get("exit_code").and_then(|v| v.as_i64()) else {
+                    continue;
+                };
+                let Some(duration_ms) = response.get("duration_ms").and_then(|v| v.as_u64()) else {
+                    continue;
+                };
+                let timed_out = value
+                    .get("timed_out")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let at = value.get("at").and_then(|v| v.as_i64()).unwrap_or_default();
+                let rel_path = artifact_path
+                    .strip_prefix(&root)
+                    .ok()
+                    .map(|path| path.to_string_lossy().replace('\\', "/"))?;
+
+                return Some((
+                    OpencodeCompletedRunSummary {
+                        trace_id: trace_id.to_string(),
+                        session_id: session_id.to_string(),
+                        ok,
+                        exit_code: exit_code as i32,
+                        timed_out,
+                        duration_ms: duration_ms as u128,
+                        at,
+                    },
+                    rel_path,
+                    value,
+                ));
+            }
+        }
+
+        None
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 fn enforce_allowed_command(
@@ -3141,6 +3608,13 @@ fn build_app(shared_state: SharedState) -> Router {
         .route("/api/v1/gateway/inbound", post(inbound_message))
         .route("/api/v1/gateway/outbound", post(outbound_message))
         .route("/api/v1/opencode/run", post(opencode_run))
+        .route("/api/v1/opencode/runs", get(opencode_runs))
+        .route("/api/v1/opencode/runs/:trace_id", get(opencode_run_detail))
+        .route("/api/v1/opencode/history", get(opencode_completed_runs))
+        .route(
+            "/api/v1/opencode/history/:trace_id",
+            get(opencode_completed_run_detail),
+        )
         .route("/api/v1/opencode/cancel", post(opencode_cancel))
         .route(
             "/api/v1/opencode/skills/installed",
@@ -3772,5 +4246,591 @@ Ignored body paragraph.
         let payload: OpencodeCancelResponse = serde_json::from_slice(&body).unwrap();
         assert!(payload.expires_at >= before + 29);
         assert!(payload.expires_at <= before + 31);
+    }
+
+    #[tokio::test]
+    async fn opencode_runs_requires_pairing_token() {
+        let response = build_app(test_shared_state())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/opencode/runs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error"], "pairing token required");
+    }
+
+    #[tokio::test]
+    async fn opencode_runs_returns_sorted_active_runs_and_pending_cancellations() {
+        let state = test_shared_state();
+        insert_test_pairing(&state, "pairing-token").await;
+
+        let now = now_ts();
+        {
+            let mut guard = state.lock().await;
+            guard.active_runs.insert(
+                "run-b".to_string(),
+                ActiveRun {
+                    trace_id: "run-b".to_string(),
+                    session_id: "session-b".to_string(),
+                    cancel_group: Some("group-b".to_string()),
+                    interruptible: true,
+                    started_at: now + 30,
+                },
+            );
+            guard.active_runs.insert(
+                "run-a".to_string(),
+                ActiveRun {
+                    trace_id: "run-a".to_string(),
+                    session_id: "session-a".to_string(),
+                    cancel_group: Some("group-a".to_string()),
+                    interruptible: false,
+                    started_at: now,
+                },
+            );
+            guard
+                .canceled_sessions
+                .insert("session-z".to_string(), now + 60);
+            guard
+                .canceled_groups
+                .insert("group-z".to_string(), now + 60);
+            guard
+                .canceled_groups
+                .insert("expired-group".to_string(), now - 1);
+        }
+
+        let response = build_app(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/opencode/runs")
+                    .header("x-pairing-token", "pairing-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: OpencodeRunListResponse = serde_json::from_slice(&body).unwrap();
+        assert!(payload.ok);
+        assert_eq!(payload.active_runs.len(), 2);
+        assert_eq!(payload.active_runs[0].trace_id, "run-a");
+        assert_eq!(payload.active_runs[1].trace_id, "run-b");
+        assert_eq!(payload.canceled_sessions, vec!["session-z".to_string()]);
+        assert_eq!(payload.canceled_groups, vec!["group-z".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn opencode_run_detail_requires_pairing_token() {
+        let response = build_app(test_shared_state())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/opencode/runs/run-a")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error"], "pairing token required");
+    }
+
+    #[tokio::test]
+    async fn opencode_run_detail_reports_cancel_state_for_active_run() {
+        let state = test_shared_state();
+        insert_test_pairing(&state, "pairing-token").await;
+
+        let now = now_ts();
+        {
+            let mut guard = state.lock().await;
+            guard.active_runs.insert(
+                "run-a".to_string(),
+                ActiveRun {
+                    trace_id: "run-a".to_string(),
+                    session_id: "session-a".to_string(),
+                    cancel_group: Some("group-a".to_string()),
+                    interruptible: true,
+                    started_at: now,
+                },
+            );
+            guard
+                .canceled_sessions
+                .insert("session-a".to_string(), now + 60);
+            guard
+                .canceled_groups
+                .insert("group-a".to_string(), now + 60);
+        }
+
+        let response = build_app(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/opencode/runs/run-a")
+                    .header("x-pairing-token", "pairing-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: OpencodeRunDetailResponse = serde_json::from_slice(&body).unwrap();
+        assert!(payload.ok);
+        assert_eq!(payload.active_run.trace_id, "run-a");
+        assert!(payload.canceled_by_session);
+        assert!(payload.canceled_by_group);
+    }
+
+    #[tokio::test]
+    async fn opencode_run_detail_returns_not_found_for_unknown_trace() {
+        let state = test_shared_state();
+        insert_test_pairing(&state, "pairing-token").await;
+
+        let response = build_app(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/opencode/runs/missing-run")
+                    .header("x-pairing-token", "pairing-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error"], "active run not found");
+    }
+
+    #[tokio::test]
+    async fn opencode_completed_runs_requires_pairing_token() {
+        let response = build_app(test_shared_state())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/opencode/history")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error"], "pairing token required");
+    }
+
+    #[tokio::test]
+    async fn opencode_completed_runs_returns_recent_artifacts_for_workspace() {
+        let state = test_shared_state();
+        insert_test_pairing(&state, "pairing-token").await;
+
+        let workspace_name = format!("history-test-{}", Uuid::new_v4());
+        let workspace_root = PathBuf::from("workspace").join(&workspace_name);
+        let session_a_dir = workspace_root
+            .join("session-a")
+            .join("logs")
+            .join("opencode_runs");
+        let session_b_dir = workspace_root
+            .join("session-b")
+            .join("logs")
+            .join("opencode_runs");
+        fs::create_dir_all(&session_a_dir).await.unwrap();
+        fs::create_dir_all(&session_b_dir).await.unwrap();
+
+        fs::write(
+            session_a_dir.join("run-a.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "event": "opencode_run",
+                "at": 100,
+                "trace_id": "run-a",
+                "session_id": "session-a",
+                "timed_out": false,
+                "response": {
+                    "ok": true,
+                    "exit_code": 0,
+                    "duration_ms": 1200
+                }
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        fs::write(
+            session_b_dir.join("run-b.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "event": "opencode_run",
+                "at": 200,
+                "trace_id": "run-b",
+                "session_id": "session-b",
+                "timed_out": true,
+                "response": {
+                    "ok": false,
+                    "exit_code": -1,
+                    "duration_ms": 3400
+                }
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let response = build_app(state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/opencode/history?workspace={}&limit=1",
+                        workspace_name
+                    ))
+                    .header("x-pairing-token", "pairing-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: OpencodeCompletedRunsResponse = serde_json::from_slice(&body).unwrap();
+        assert!(payload.ok);
+        assert_eq!(payload.limit, 1);
+        assert_eq!(payload.runs.len(), 1);
+        assert_eq!(payload.runs[0].trace_id, "run-b");
+        assert_eq!(payload.runs[0].session_id, "session-b");
+        assert!(payload.runs[0].timed_out);
+        assert_eq!(payload.runs[0].exit_code, -1);
+
+        let _ = fs::remove_dir_all(workspace_root).await;
+    }
+
+    #[tokio::test]
+    async fn opencode_completed_runs_filters_by_session_id() {
+        let state = test_shared_state();
+        insert_test_pairing(&state, "pairing-token").await;
+
+        let workspace_name = format!("history-filter-{}", Uuid::new_v4());
+        let workspace_root = PathBuf::from("workspace").join(&workspace_name);
+        let session_a_dir = workspace_root
+            .join("session-a")
+            .join("logs")
+            .join("opencode_runs");
+        let session_b_dir = workspace_root
+            .join("session-b")
+            .join("logs")
+            .join("opencode_runs");
+        fs::create_dir_all(&session_a_dir).await.unwrap();
+        fs::create_dir_all(&session_b_dir).await.unwrap();
+
+        fs::write(
+            session_a_dir.join("run-a.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "event": "opencode_run",
+                "at": 100,
+                "trace_id": "run-a",
+                "session_id": "session-a",
+                "timed_out": false,
+                "response": {
+                    "ok": true,
+                    "exit_code": 0,
+                    "duration_ms": 1200
+                }
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        fs::write(
+            session_b_dir.join("run-b.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "event": "opencode_run",
+                "at": 200,
+                "trace_id": "run-b",
+                "session_id": "session-b",
+                "timed_out": false,
+                "response": {
+                    "ok": true,
+                    "exit_code": 0,
+                    "duration_ms": 2200
+                }
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let response = build_app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/opencode/history?workspace={}&session_id=session-a&limit=5",
+                        workspace_name
+                    ))
+                    .header("x-pairing-token", "pairing-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: OpencodeCompletedRunsResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload.runs.len(), 1);
+        assert_eq!(payload.runs[0].trace_id, "run-a");
+        assert_eq!(payload.runs[0].session_id, "session-a");
+
+        let invalid_response = build_app(state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/opencode/history?workspace={}&session_id=../bad",
+                        workspace_name
+                    ))
+                    .header("x-pairing-token", "pairing-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(invalid_response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(invalid_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error"], "invalid session_id");
+
+        let _ = fs::remove_dir_all(workspace_root).await;
+    }
+
+    #[tokio::test]
+    async fn opencode_completed_run_detail_requires_pairing_token() {
+        let response = build_app(test_shared_state())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/opencode/history/run-a")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error"], "pairing token required");
+    }
+
+    #[tokio::test]
+    async fn opencode_completed_run_detail_returns_artifact_payload() {
+        let state = test_shared_state();
+        insert_test_pairing(&state, "pairing-token").await;
+
+        let workspace_name = format!("history-detail-{}", Uuid::new_v4());
+        let workspace_root = PathBuf::from("workspace").join(&workspace_name);
+        let session_dir = workspace_root
+            .join("session-a")
+            .join("logs")
+            .join("opencode_runs");
+        fs::create_dir_all(&session_dir).await.unwrap();
+
+        fs::write(
+            session_dir.join("run-a.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "event": "opencode_run",
+                "at": 123,
+                "trace_id": "run-a",
+                "session_id": "session-a",
+                "cwd": "session-a",
+                "format": "json",
+                "timeout_ms": 60000,
+                "command": "demo",
+                "model": "gpt-5",
+                "agent": "opencode",
+                "message": "hello",
+                "timed_out": false,
+                "response": {
+                    "ok": true,
+                    "exit_code": 0,
+                    "duration_ms": 4200,
+                    "stdout": "done"
+                }
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let response = build_app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/opencode/history/run-a?workspace={}&session_id=session-a",
+                        workspace_name
+                    ))
+                    .header("x-pairing-token", "pairing-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: OpencodeCompletedRunDetailResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload.run.trace_id, "run-a");
+        assert_eq!(payload.run.session_id, "session-a");
+        assert_eq!(payload.run.duration_ms, 4200);
+        assert_eq!(
+            payload.artifact_path,
+            "session-a/logs/opencode_runs/run-a.json"
+        );
+        assert_eq!(payload.artifact["response"]["stdout"], "done");
+
+        let missing = build_app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/opencode/history/missing?workspace={}&session_id=session-a",
+                        workspace_name
+                    ))
+                    .header("x-pairing-token", "pairing-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(missing.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error"], "completed run not found");
+
+        let invalid = build_app(state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/opencode/history/run-a?workspace={}&session_id=../bad",
+                        workspace_name
+                    ))
+                    .header("x-pairing-token", "pairing-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(invalid.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error"], "invalid session_id");
+
+        let _ = fs::remove_dir_all(workspace_root).await;
+    }
+
+    #[tokio::test]
+    async fn opencode_completed_runs_filters_by_ok_and_timed_out() {
+        let state = test_shared_state();
+        insert_test_pairing(&state, "pairing-token").await;
+
+        let workspace_name = format!("history-status-{}", Uuid::new_v4());
+        let workspace_root = PathBuf::from("workspace").join(&workspace_name);
+        let session_dir = workspace_root
+            .join("session-a")
+            .join("logs")
+            .join("opencode_runs");
+        fs::create_dir_all(&session_dir).await.unwrap();
+
+        fs::write(
+            session_dir.join("run-ok.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "event": "opencode_run",
+                "at": 300,
+                "trace_id": "run-ok",
+                "session_id": "session-a",
+                "timed_out": false,
+                "response": {
+                    "ok": true,
+                    "exit_code": 0,
+                    "duration_ms": 1000
+                }
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        fs::write(
+            session_dir.join("run-timeout.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "event": "opencode_run",
+                "at": 200,
+                "trace_id": "run-timeout",
+                "session_id": "session-a",
+                "timed_out": true,
+                "response": {
+                    "ok": false,
+                    "exit_code": 124,
+                    "duration_ms": 8000
+                }
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let response = build_app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/opencode/history?workspace={}&ok=true&timed_out=false&limit=5",
+                        workspace_name
+                    ))
+                    .header("x-pairing-token", "pairing-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: OpencodeCompletedRunsResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload.runs.len(), 1);
+        assert_eq!(payload.runs[0].trace_id, "run-ok");
+
+        let timeout_response = build_app(state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/opencode/history?workspace={}&ok=false&timed_out=true&limit=5",
+                        workspace_name
+                    ))
+                    .header("x-pairing-token", "pairing-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(timeout_response.status(), StatusCode::OK);
+        let body = to_bytes(timeout_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: OpencodeCompletedRunsResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload.runs.len(), 1);
+        assert_eq!(payload.runs[0].trace_id, "run-timeout");
+
+        let _ = fs::remove_dir_all(workspace_root).await;
     }
 }

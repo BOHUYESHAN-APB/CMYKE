@@ -37,12 +37,28 @@ curl http://127.0.0.1:4891/health
 
 - `GET /api/v1/gateway/info`：返回服务名、版本和运行模式。
 - `GET /api/v1/gateway/capabilities`：返回已挂载路由、特性开关和当前运行时快照。
+- `GET /api/v1/opencode/runs`：返回当前活动中的 OpenCode 运行与待生效取消标记；需要有效配对 token。
+- `GET /api/v1/opencode/runs/{trace_id}`：返回单个活动运行的详情，以及它是否已命中 session/group 取消标记；需要有效配对 token。
+- `GET /api/v1/opencode/history`：返回最近完成的运行摘要，可通过 `workspace`、`session_id`、`ok`、`timed_out` 和 `limit` 缩小范围；需要有效配对 token。
+- `GET /api/v1/opencode/history/{trace_id}`：返回单个已完成运行的完整 artifact 与摘要；可选 `workspace`、`session_id` 缩小查找范围；需要有效配对 token。
 - `POST /api/v1/opencode/cancel`：按 `session_id` 或 `cancel_group` 标记取消 OpenCode 任务；需要有效配对 token。
 
 示例：
 
 ```bash
 curl http://127.0.0.1:4891/api/v1/gateway/capabilities
+
+curl http://127.0.0.1:4891/api/v1/opencode/runs \
+  -H "x-pairing-token: <PAIRING_TOKEN>"
+
+curl http://127.0.0.1:4891/api/v1/opencode/runs/<TRACE_ID> \
+  -H "x-pairing-token: <PAIRING_TOKEN>"
+
+curl "http://127.0.0.1:4891/api/v1/opencode/history?workspace=demo&session_id=session-a&ok=true&timed_out=false&limit=5" \
+  -H "x-pairing-token: <PAIRING_TOKEN>"
+
+curl "http://127.0.0.1:4891/api/v1/opencode/history/<TRACE_ID>?workspace=demo&session_id=session-a" \
+  -H "x-pairing-token: <PAIRING_TOKEN>"
 
 curl -X POST http://127.0.0.1:4891/api/v1/opencode/cancel \
   -H "Content-Type: application/json" \

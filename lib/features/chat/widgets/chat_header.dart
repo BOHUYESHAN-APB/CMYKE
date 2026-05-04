@@ -18,6 +18,7 @@ class ChatHeader extends StatelessWidget {
     this.onOpenDrawer,
     this.onOpenAvatar,
     this.onOpenAutonomy,
+    this.onOpenDanmaku,
     this.onToggleLayout,
     this.onResetLayout,
     this.onToggleRightPanel,
@@ -37,6 +38,7 @@ class ChatHeader extends StatelessWidget {
   final VoidCallback? onOpenDrawer;
   final VoidCallback? onOpenAvatar;
   final VoidCallback? onOpenAutonomy;
+  final VoidCallback? onOpenDanmaku;
   final VoidCallback? onToggleLayout;
   final VoidCallback? onResetLayout;
   final VoidCallback? onToggleRightPanel;
@@ -122,6 +124,13 @@ class ChatHeader extends StatelessWidget {
                     label: const Text('自主模式'),
                   ),
                 if (onOpenAutonomy != null) const SizedBox(width: 6),
+                if (onOpenDanmaku != null)
+                  TextButton.icon(
+                    onPressed: onOpenDanmaku,
+                    icon: const Icon(Icons.chat_bubble_outline),
+                    label: const Text('直播弹幕'),
+                  ),
+                if (onOpenDanmaku != null) const SizedBox(width: 6),
                 TextButton.icon(
                   onPressed: onCreateSession,
                   icon: const Icon(Icons.add),
@@ -179,6 +188,9 @@ class ChatHeader extends StatelessWidget {
                       case _HeaderAction.autonomy:
                         onOpenAutonomy?.call();
                         break;
+                      case _HeaderAction.danmaku:
+                        onOpenDanmaku?.call();
+                        break;
                       case _HeaderAction.toggleLayout:
                         onToggleLayout?.call();
                         break;
@@ -214,6 +226,14 @@ class ChatHeader extends StatelessWidget {
                         const PopupMenuItem(
                           value: _HeaderAction.autonomy,
                           child: Text('自主模式'),
+                        ),
+                      );
+                    }
+                    if (onOpenDanmaku != null) {
+                      items.add(
+                        const PopupMenuItem(
+                          value: _HeaderAction.danmaku,
+                          child: Text('直播弹幕'),
                         ),
                       );
                     }
@@ -350,6 +370,7 @@ enum _HeaderAction {
   exportAll,
   deepResearch,
   autonomy,
+  danmaku,
   toggleLayout,
   resetLayout,
   toggleRightPanel,

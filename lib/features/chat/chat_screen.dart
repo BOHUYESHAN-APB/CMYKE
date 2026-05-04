@@ -21,6 +21,7 @@ import '../../core/services/autonomy_service.dart';
 import '../../core/services/attachment_ingest_service.dart';
 import '../../core/services/draft_service.dart';
 import '../../core/services/workspace_service.dart';
+import '../../core/services/runtime_hub.dart';
 import '../../ui/theme/cmyke_chrome.dart';
 import '../common/live3d_preview.dart';
 import '../memory/memory_tier_screen.dart';
@@ -28,6 +29,7 @@ import '../notes/notes_screen.dart';
 import '../settings/provider_config_screen.dart';
 import '../deep_research/deep_research_screen.dart';
 import '../autonomy/autonomy_screen.dart';
+import '../danmaku/danmaku_screen.dart';
 import 'widgets/chat_composer.dart';
 import 'widgets/chat_header.dart';
 import 'widgets/message_bubble.dart';
@@ -545,6 +547,17 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  void _openDanmaku() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => DanmakuScreen(
+          settingsRepository: widget.settingsRepository,
+          eventBus: RuntimeHub.instance.bus,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -693,6 +706,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                         _createSessionForRoute(),
                                     onOpenDeepResearch: _openDeepResearch,
                                     onOpenAutonomy: _openAutonomy,
+                                    onOpenDanmaku: _openDanmaku,
                                     showMenuButton: !isWide,
                                     estimatedTokens:
                                         _chatEngine.estimatedTokens,

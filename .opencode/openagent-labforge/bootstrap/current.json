@@ -1,0 +1,115 @@
+{
+  "category": "bio",
+  "primary": {
+    "category": "bio",
+    "key": "mainline-material-pack",
+    "labelZh": "综合主线材料包（推荐）",
+    "labelEn": "mainline material pack",
+    "summaryZh": "按主线材料包 + 波次推进制 + 资产子包组织，适合像 swxxx 这种长期迭代生信主线。",
+    "summaryEn": "Treat the repo as a mainline material pack with wave-based progression and asset subpacks for long-running bio iteration.",
+    "exampleZh": "例：主线材料包、下一波范围、正式报告链、图件子包",
+    "exampleEn": "Examples: mainline pack, next-wave notes, formal report chain, asset subpacks",
+    "tokens": [
+      "1",
+      "mainline",
+      "material",
+      "pack",
+      "主线材料包",
+      "综合主线",
+      "swxxx"
+    ],
+    "recommended": true
+  },
+  "secondary": [
+    {
+      "category": "bio",
+      "key": "bio-drylab-pipeline",
+      "labelZh": "干实验流程仓",
+      "labelEn": "bio dry-lab pipeline workspace",
+      "summaryZh": "优先搭建可复现分析流程、输入输出目录、脚本、日志和中间产物规范。",
+      "summaryEn": "Prioritize reproducible dry-lab pipelines, input/output layout, scripts, logs, and intermediate artifacts.",
+      "exampleZh": "例：RNA-seq、变异分析、注释流程、批处理脚本",
+      "exampleEn": "Examples: RNA-seq pipeline, annotation flow, batch dry-lab runs",
+      "tokens": [
+        "2",
+        "dry-lab",
+        "pipeline",
+        "干实验",
+        "流程"
+      ]
+    },
+    {
+      "category": "bio",
+      "key": "literature-evidence",
+      "labelZh": "文献 / 证据综合仓",
+      "labelEn": "literature / evidence synthesis workspace",
+      "summaryZh": "优先做论文检索、证据分层、claim discipline 和综述型交付。",
+      "summaryEn": "Prioritize literature search, evidence layering, claim discipline, and review-style outputs.",
+      "exampleZh": "例：综述、证据矩阵、研究现状盘点",
+      "exampleEn": "Examples: review, evidence matrix, literature synthesis",
+      "tokens": [
+        "3",
+        "literature",
+        "evidence",
+        "文献",
+        "证据"
+      ]
+    },
+    {
+      "category": "bio",
+      "key": "bio-figure-assets",
+      "labelZh": "图件 / 投稿资产仓",
+      "labelEn": "bio figure / submission-asset workspace",
+      "summaryZh": "优先建立图件、表格、脚本和投稿材料资产目录。",
+      "summaryEn": "Prioritize figures, tables, scripts, and submission asset organization.",
+      "exampleZh": "例：机制图、结果图、投稿图版、答辩资产包",
+      "exampleEn": "Examples: figure panels, submission assets, defense figures",
+      "tokens": [
+        "4",
+        "figure",
+        "visualization",
+        "submission",
+        "图件",
+        "投稿"
+      ]
+    },
+    {
+      "category": "bio",
+      "key": "bio-exploratory-proof",
+      "labelZh": "轻量探索 / 证明型仓",
+      "labelEn": "lightweight exploratory proof repo",
+      "summaryZh": "优先做小规模探索、资源盘点、可行性审计和最小证明链。",
+      "summaryEn": "Prioritize lightweight exploration, resource audits, feasibility checks, and minimal proof chains.",
+      "exampleZh": "例：先做资源可用性审计、小样本探索、前期证明链",
+      "exampleEn": "Examples: feasibility check, scouting repo, minimal proof path",
+      "tokens": [
+        "5",
+        "exploratory",
+        "proof",
+        "scouting",
+        "探索",
+        "证明"
+      ]
+    },
+    {
+      "category": "bio",
+      "key": "bio-bootstrap-scaffold",
+      "labelZh": "清爽工程骨架优先",
+      "labelEn": "bootstrap-first bio scaffold",
+      "summaryZh": "先把目录、缓存、临时记忆、图件与文档产物规则搭清楚，再进入长时间自动分析。",
+      "summaryEn": "Establish a clean engineering scaffold for caches, runtime memory, figures, and document outputs before long-running bio automation.",
+      "exampleZh": "例：先定缓存、计划、图件、文档和交付目录",
+      "exampleEn": "Examples: set caches, plans, figures, and document outputs first",
+      "tokens": [
+        "6",
+        "bootstrap",
+        "bio scaffold",
+        "骨架",
+        "清爽",
+        "长期生信"
+      ]
+    }
+  ],
+  "last_selected_session_id": "ses_27f563151ffe5kHcnYTO8qwKkf",
+  "updated_at": "2026-04-12T09:05:31.879Z"
+}

@@ -1,0 +1,47 @@
+# Criterion 性能测试配置文件 📊
+#
+# @诺诺 的基准测试参数配置喵
+#
+# 配置说明：
+# - measurement_time: 每次测试的测量时间（秒）
+# - warm_up_time: 热身时间（秒）
+# - sample_size: 样本数量
+# - confidence_level: 置信度
+#
+# 🔒 SECURITY: 纯配置文件，无安全风险
+#
+# 配置者: 诺诺 (Nono) ⚡
+
+# 全局测量时间配置
+measurement_time = 10
+warm_up_time = 3
+
+# 样本大小配置
+sample_size = 1000
+
+# 置信度配置
+confidence_level = 0.95
+
+# 噪声阈值
+noise_threshold = 0.01
+
+# 输出格式
+output_format = "quiet"
+
+# 绘图配置
+plotting_backend = "plotters"
+
+# 报告配置
+[[bench]]
+name = "performance_benchmarks"
+harness = false
+
+# Discord 特定测试配置
+[[bench]]
+name = "discord"
+harness = false
+
+# 内存测试配置
+[[bench]]
+name = "memory"
+harness = false

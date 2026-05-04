@@ -1,0 +1,12 @@
+{
+  "selectedModel": {
+    "providerID": "openai",
+    "modelID": "gpt-5.4"
+  },
+  "lockedModel": {
+    "providerID": "openai",
+    "modelID": "gpt-5.4"
+  },
+  "autoRouting": false,
+  "updatedAt": "2026-04-16T09:38:59.411Z"
+}

@@ -1,0 +1,21 @@
+{
+  "source_session_id": "ses_365fe25c8ffec4Yp3Qwvx3mIYv",
+  "created_at": "2026-04-08T00:26:43.4343781+08:00",
+  "goal": "Preserve the final state of the business-plan deliverables after the user chose HTML as the primary review/export path.",
+  "cwd": "D:\\-Users-\\Documents\\GitHub\\CMYKE",
+  "key_files": [
+    ".local_tmp/business_plan_artifacts/CMYKE_Integrated_Business_Plan_2026-03.md",
+    ".local_tmp/business_plan_artifacts/CMYKE_Integrated_Business_Plan_2026-03.html",
+    ".local_tmp/business_plan_artifacts/CMYKE_Integrated_Business_Plan_2026-03_pandoc.html",
+    ".local_tmp/business_plan_artifacts/CMYKE_Integrated_Business_Plan_2026-03_pandoc_styled.html",
+    ".local_tmp/business_plan_artifacts/business_plan_print.css",
+    ".local_tmp/business_plan_artifacts/figures/cmyke_system_overview.svg",
+    ".local_tmp/business_plan_artifacts/figures/cmyke_runtime_workflow.svg",
+    ".local_tmp/business_plan_artifacts/figures/cmyke_roadmap.svg",
+    ".local_tmp/business_plan_artifacts/screenshots/",
+    ".local_tmp/business_plan_artifacts/generate_professional_docx.py",
+    ".local_tmp/business_plan_artifacts/generate_professional_pdf.py",
+    ".git/info/exclude"
+  ],
+  "resume_hint": "Continue from the checkpoint above. Next task: refine the HTML/CSS review path (not PDF) based on user feedback."
+}

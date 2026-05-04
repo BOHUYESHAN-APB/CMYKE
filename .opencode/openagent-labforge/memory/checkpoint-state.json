@@ -1,0 +1,104 @@
+{
+  "sessions": [
+    {
+      "sessionID": "ses_20cdcac98ffeXlG2p8UbmUtvDN",
+      "workspaceRoot": "D:\\-Users-\\Documents\\GitHub\\CMYKE",
+      "checkpoints": [],
+      "metadata": {},
+      "createdAt": 1777900671861,
+      "lastActivity": 1777900671861
+    },
+    {
+      "sessionID": "ses_20cdc99e6ffe74Mh6sHcnVzClN",
+      "workspaceRoot": "D:\\-Users-\\Documents\\GitHub\\CMYKE",
+      "checkpoints": [],
+      "metadata": {},
+      "createdAt": 1777900676634,
+      "lastActivity": 1777900676634
+    },
+    {
+      "sessionID": "ses_20cc5c366ffeUTMtEjMV7XJKWK",
+      "workspaceRoot": "D:\\-Users-\\Documents\\GitHub\\CMYKE",
+      "checkpoints": [],
+      "metadata": {},
+      "createdAt": 1777902173339,
+      "lastActivity": 1777902173339
+    },
+    {
+      "sessionID": "ses_20c85887affeGIjbgMsaj4mNhu",
+      "workspaceRoot": "D:\\-Users-\\Documents\\GitHub\\CMYKE",
+      "checkpoints": [],
+      "metadata": {},
+      "createdAt": 1777906382727,
+      "lastActivity": 1777906382727
+    },
+    {
+      "sessionID": "ses_20c6b4ba1ffeSXebwVkIxo5Phk",
+      "workspaceRoot": "D:\\-Users-\\Documents\\GitHub\\CMYKE",
+      "checkpoints": [],
+      "metadata": {},
+      "createdAt": 1777908102248,
+      "lastActivity": 1777908102248
+    },
+    {
+      "sessionID": "ses_20c3c79faffeld7s17uvK27FK4",
+      "workspaceRoot": "D:\\-Users-\\Documents\\GitHub\\CMYKE",
+      "checkpoints": [],
+      "metadata": {},
+      "createdAt": 1777911170570,
+      "lastActivity": 1777911170570
+    },
+    {
+      "sessionID": "ses_20c3c7342ffeeUbOGFPK67YUBe",
+      "workspaceRoot": "D:\\-Users-\\Documents\\GitHub\\CMYKE",
+      "checkpoints": [],
+      "metadata": {},
+      "createdAt": 1777911172287,
+      "lastActivity": 1777911172287
+    },
+    {
+      "sessionID": "ses_20c3c6be5ffeOOn5B16XP1GpgS",
+      "workspaceRoot": "D:\\-Users-\\Documents\\GitHub\\CMYKE",
+      "checkpoints": [],
+      "metadata": {},
+      "createdAt": 1777911174171,
+      "lastActivity": 1777911174171
+    },
+    {
+      "sessionID": "ses_20c2fd84cffen6OR4JbDyywx93",
+      "workspaceRoot": "D:\\-Users-\\Documents\\GitHub\\CMYKE",
+      "checkpoints": [],
+      "metadata": {},
+      "createdAt": 1777911998388,
+      "lastActivity": 1777911998388
+    },
+    {
+      "sessionID": "ses_20c2fcf22ffeCKbFW0YqoZs5vg",
+      "workspaceRoot": "D:\\-Users-\\Documents\\GitHub\\CMYKE",
+      "checkpoints": [],
+      "metadata": {},
+      "createdAt": 1777912000735,
+      "lastActivity": 1777912000735
+    }
+  ],
+  "workspaces": [
+    {
+      "workspaceRoot": "D:\\-Users-\\Documents\\GitHub\\CMYKE",
+      "sessionIDs": [
+        "ses_20cdcac98ffeXlG2p8UbmUtvDN",
+        "ses_20cdc99e6ffe74Mh6sHcnVzClN",
+        "ses_20cc5c366ffeUTMtEjMV7XJKWK",
+        "ses_20c85887affeGIjbgMsaj4mNhu",
+        "ses_20c6b4ba1ffeSXebwVkIxo5Phk",
+        "ses_20c3c79faffeld7s17uvK27FK4",
+        "ses_20c3c7342ffeeUbOGFPK67YUBe",
+        "ses_20c3c6be5ffeOOn5B16XP1GpgS",
+        "ses_20c2fd84cffen6OR4JbDyywx93",
+        "ses_20c2fcf22ffeCKbFW0YqoZs5vg"
+      ],
+      "globalContext": {},
+      "lastActivity": 1777912000735
+    }
+  ],
+  "repositories": []
+}

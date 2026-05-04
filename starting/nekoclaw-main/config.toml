@@ -1,0 +1,11 @@
+version = "0.5.0"
+default_provider = "nvidia"
+default_model = "deepseek-ai/deepseek-v3.2"
+default_temperature = 0.7
+workspace = "/home/gengetsu/.openclaw/workspace"
+
+[providers.nvidia]
+base_url = "https://integrate.api.nvidia.com/v1"
+api_key = "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"
+timeout = 60
+max_retries = 3

@@ -1,0 +1,30 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets (IMPORTANT!)
+openclaw.json
+*.json.bak
+**/openclaw/
+**/.openclaw/
+
+# Logs
+*.log
+
+# Database
+*.db
+*.db-shm
+*.db-wal

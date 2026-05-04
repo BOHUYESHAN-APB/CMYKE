@@ -71,7 +71,9 @@ class SystemSttProvider extends SttProvider {
       localeId: localeId,
       listenFor: listenFor,
       pauseFor: pauseFor,
-      partialResults: partialResults,
+      listenOptions: SpeechListenOptions(
+        partialResults: partialResults,
+      ),
     );
   }
 

@@ -567,10 +567,13 @@ class ChatEngine extends ChangeNotifier {
       }
     }
 
+    final messages = messageHistory
+        .map((m) => {'role': m.role.name, 'content': m.content})
+        .toList();
     _streamSubscription = _llmClient
         .streamChat(
-          provider: provider,
-          messages: messageHistory,
+          provider,
+          messages,
           systemPrompt: systemPrompt,
         )
         .listen(
@@ -1947,9 +1950,12 @@ class ChatEngine extends ChangeNotifier {
           '$systemPrompt\n已有摘要如下，请在此基础上补充新增要点：\n'
           '$existing';
     }
+    final messageList = messages
+        .map((m) => {'role': m.role.name, 'content': m.content})
+        .toList();
     return _llmClient.completeChat(
-      provider: provider,
-      messages: messages,
+      provider,
+      messageList,
       systemPrompt: systemPrompt,
     );
   }
@@ -2436,9 +2442,12 @@ $original
         createdAt: DateTime.now(),
       ),
     ];
+    final messageList = rewriteMessages
+        .map((m) => {'role': m.role.name, 'content': m.content})
+        .toList();
     return _llmClient.completeChat(
-      provider: provider,
-      messages: rewriteMessages,
+      provider,
+      messageList,
       systemPrompt: rewriteSystemPrompt,
     );
   }
@@ -3253,9 +3262,9 @@ $original
     try {
       raw = await _llmClient
           .analyzeImageBytes(
-            provider: provider,
-            prompt: prompt,
-            images: prepared,
+            provider,
+            prompt,
+            prepared,
             systemPrompt: systemPrompt,
           )
           .timeout(const Duration(seconds: 25));

@@ -1,4 +1,3 @@
-import '../models/chat_message.dart';
 import '../models/memory_record.dart';
 import '../models/memory_tier.dart';
 import '../models/provider_config.dart';
@@ -178,14 +177,12 @@ class UniversalAgent {
   }) async {
     final instruction = _plannerInstruction(depth, deliverable);
     return _llmClient.completeChat(
-      provider: provider,
-      messages: [
-        ChatMessage(
-          id: DateTime.now().microsecondsSinceEpoch.toString(),
-          role: ChatRole.user,
-          content: goal,
-          createdAt: DateTime.now(),
-        ),
+      provider,
+      [
+        {
+          'role': 'user',
+          'content': goal,
+        },
       ],
       systemPrompt: '$basePrompt\n\n$instruction',
     );
@@ -202,14 +199,12 @@ class UniversalAgent {
     final instruction = _writerInstruction(depth, deliverable);
     final content = 'Goal: $goal\n\nPlan:\n$plan';
     return _llmClient.completeChat(
-      provider: provider,
-      messages: [
-        ChatMessage(
-          id: DateTime.now().microsecondsSinceEpoch.toString(),
-          role: ChatRole.user,
-          content: content,
-          createdAt: DateTime.now(),
-        ),
+      provider,
+      [
+        {
+          'role': 'user',
+          'content': content,
+        },
       ],
       systemPrompt: '$basePrompt\n\n$instruction',
     );

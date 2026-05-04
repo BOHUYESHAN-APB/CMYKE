@@ -11,7 +11,6 @@ import 'package:path/path.dart' as p;
 
 import '../../core/models/app_settings.dart';
 import '../../core/models/chat_attachment.dart';
-import '../../core/models/chat_message.dart';
 import '../../core/models/deep_research_message.dart';
 import '../../core/models/deep_research_session.dart';
 import '../../core/models/provider_config.dart';
@@ -343,9 +342,9 @@ type 只能取：sticker,meme,screenshot,photo,chart,document,other。
     try {
       raw = await _llmClient
           .analyzeImageBytes(
-            provider: provider,
-            prompt: prompt,
-            images: prepared,
+            provider,
+            prompt,
+            prepared,
             systemPrompt: systemPrompt,
           )
           .timeout(const Duration(seconds: 25));
@@ -909,9 +908,9 @@ $metaLines
 
     try {
       var analysis = await _llmClient.analyzeImageUrls(
-        provider: provider,
-        prompt: prompt,
-        imageUrls: selectedUrls,
+        provider,
+        prompt,
+        selectedUrls,
         systemPrompt: systemPrompt,
       );
       analysis = analysis.trim();
@@ -1185,14 +1184,12 @@ $metaLines
           ? '目标：$goal'
           : '目标：$goal\n\n已检索到的部分线索（供你提出下一轮更好的 queries）：\n$contextHint';
       final raw = await _llmClient.completeChat(
-        provider: provider,
-        messages: [
-          ChatMessage(
-            id: DateTime.now().microsecondsSinceEpoch.toString(),
-            role: ChatRole.user,
-            content: user,
-            createdAt: DateTime.now(),
-          ),
+        provider,
+        [
+          {
+            'role': 'user',
+            'content': user,
+          },
         ],
         systemPrompt: systemPrompt,
       );

@@ -5,6 +5,8 @@ import 'package:http/http.dart' as http;
 
 import '../models/tool_gateway_skill.dart';
 import '../models/tool_intent.dart';
+import '../registry/tool_definition.dart';
+import '../registry/tool_registry.dart';
 
 class ToolGatewayConfig {
   const ToolGatewayConfig({
@@ -397,6 +399,13 @@ class ToolRouter {
   }
 
   Future<String> dispatch(ToolIntent intent) async {
+    // Try local registry first
+    final localResult = await _tryDispatchLocal(intent);
+    if (localResult != null) {
+      return localResult;
+    }
+
+    // Fall back to gateway
     final error = _gatewayConfigError();
     if (error != null) {
       return error;
@@ -411,6 +420,59 @@ class ToolRouter {
       case ToolAction.imageGen:
       case ToolAction.imageAnalyze:
         return '该工具类型尚未接入网关。';
+    }
+  }
+
+  Future<String?> _tryDispatchLocal(ToolIntent intent) async {
+    final toolName = _mapActionToToolName(intent.action);
+    if (toolName == null) return null;
+
+    final registry = ToolRegistry.instance;
+    if (!registry.has(toolName)) return null;
+
+    final context = ToolContext(
+      sessionId: intent.sessionId,
+      traceId: intent.traceId,
+      metadata: <String, dynamic>{
+        'routing': intent.routing,
+        'urgency': intent.urgency.name,
+        'cancel_group': intent.cancelGroup,
+        'interruptible': intent.interruptible,
+      },
+    );
+
+    final parameters = <String, dynamic>{
+      if (intent.query != null) 'query': intent.query,
+      if (intent.context != null) 'context': intent.context,
+    };
+
+    final result = await registry.execute(toolName, parameters, context);
+    if (!result.success) {
+      return result.error ?? 'Tool execution failed';
+    }
+
+    final output = result.output;
+    if (output is String) return output;
+    if (output == null) return 'Tool execution completed';
+    return output.toString();
+  }
+
+  String? _mapActionToToolName(ToolAction action) {
+    switch (action) {
+      case ToolAction.search:
+        return 'web_search';
+      case ToolAction.crawl:
+        return 'web_crawl';
+      case ToolAction.analyze:
+        return 'content_analyze';
+      case ToolAction.summarize:
+        return 'content_summarize';
+      case ToolAction.code:
+        return 'code_execute';
+      case ToolAction.imageGen:
+        return 'image_generate';
+      case ToolAction.imageAnalyze:
+        return 'image_analyze';
     }
   }
 

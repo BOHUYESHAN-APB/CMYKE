@@ -1,141 +1,80 @@
-import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:http/http.dart' as http;
-
 import '../models/provider_config.dart';
+import '../providers/remote_stt_provider.dart';
+import '../providers/remote_tts_provider.dart';
+import '../providers/speech_provider.dart';
 
+/// Speech client facade that delegates to protocol-specific providers.
 class SpeechClient {
+  /// Synthesize speech from text and return complete audio bytes.
   Future<Uint8List> synthesizeSpeechBytes({
     required ProviderConfig provider,
     required String text,
     String responseFormat = 'wav',
-  }) async {
-    final uri = _buildSpeechUri(provider.baseUrl);
-    final headers = _headers(provider);
-    final payload = <String, dynamic>{
-      'model': provider.model,
-      'input': text,
-      'stream': false,
-      'response_format': responseFormat,
-    };
-    if (provider.outputSampleRate != null) {
-      payload['sample_rate'] = provider.outputSampleRate;
-    }
-    if (provider.audioVoice != null && provider.audioVoice!.isNotEmpty) {
-      payload['voice'] = provider.audioVoice;
-    }
-    final response = await http.post(
-      uri,
-      headers: headers,
-      body: jsonEncode(payload),
+  }) {
+    final ttsProvider = _createTtsProvider(provider);
+    return ttsProvider.synthesize(
+      text: text,
+      format: responseFormat,
     );
-    if (response.statusCode != HttpStatus.ok) {
-      final body = response.body.trim();
-      throw HttpException('TTS request failed: ${response.statusCode} $body');
-    }
-    return response.bodyBytes;
   }
 
+  /// Stream speech synthesis in chunks for real-time playback.
   Stream<Uint8List> streamSpeech({
     required ProviderConfig provider,
     required String text,
-  }) async* {
-    final uri = _buildSpeechUri(provider.baseUrl);
-    final headers = _headers(provider);
-    final payload = <String, dynamic>{
-      'model': provider.model,
-      'input': text,
-      'stream': true,
-      'response_format': provider.audioFormat ?? 'wav',
-    };
-    if (provider.outputSampleRate != null) {
-      payload['sample_rate'] = provider.outputSampleRate;
-    }
-    if (provider.audioVoice != null && provider.audioVoice!.isNotEmpty) {
-      payload['voice'] = provider.audioVoice;
-    }
-    final request = http.Request('POST', uri)
-      ..headers.addAll(headers)
-      ..body = jsonEncode(payload);
-
-    final response = await request.send();
-    if (response.statusCode != HttpStatus.ok) {
-      final body = await response.stream.bytesToString();
-      throw HttpException('TTS request failed: ${response.statusCode} $body');
-    }
-
-    await for (final chunk in response.stream) {
-      if (chunk.isEmpty) {
-        continue;
-      }
-      yield Uint8List.fromList(chunk);
-    }
+  }) {
+    final ttsProvider = _createTtsProvider(provider);
+    return ttsProvider.synthesizeStream(text: text);
   }
 
+  /// Transcribe audio file to text.
   Future<String> transcribeFile({
     required ProviderConfig provider,
     required File audioFile,
-  }) async {
-    final uri = _buildTranscriptionUri(provider.baseUrl);
-    final request = http.MultipartRequest('POST', uri)
-      ..headers.addAll(_headers(provider))
-      ..fields['model'] = provider.model
-      ..files.add(await http.MultipartFile.fromPath('file', audioFile.path));
-    final response = await request.send();
-    final body = await response.stream.bytesToString();
-    if (response.statusCode != HttpStatus.ok) {
-      throw HttpException('STT request failed: ${response.statusCode} $body');
-    }
-    final json = jsonDecode(body) as Map<String, dynamic>;
-    return json['text'] as String? ?? '';
+  }) {
+    final sttProvider = _createSttProvider(provider);
+    return sttProvider.transcribe(audioFile: audioFile);
   }
 
-  Uri _buildSpeechUri(String baseUrl) {
-    final uri = Uri.parse(baseUrl);
-    final path = uri.path;
-    if (path.endsWith('/audio/speech')) {
-      return uri;
-    }
-    if (path.endsWith('/v1')) {
-      return uri.replace(path: '$path/audio/speech');
-    }
-    if (path.endsWith('/v1/')) {
-      return uri.replace(path: '${path}audio/speech');
-    }
-    if (path.isEmpty || path == '/') {
-      return uri.replace(path: '/v1/audio/speech');
-    }
-    return uri.replace(path: '$path/v1/audio/speech');
+  /// Transcribe audio bytes to text.
+  Future<String> transcribeBytes({
+    required ProviderConfig provider,
+    required Uint8List audioBytes,
+    String? language,
+    String? format,
+  }) {
+    final sttProvider = _createSttProvider(provider);
+    return sttProvider.transcribeBytes(
+      audioBytes: audioBytes,
+      language: language,
+      format: format,
+    );
   }
 
-  Uri _buildTranscriptionUri(String baseUrl) {
-    final uri = Uri.parse(baseUrl);
-    final path = uri.path;
-    if (path.endsWith('/audio/transcriptions')) {
-      return uri;
+  TtsProvider _createTtsProvider(ProviderConfig config) {
+    switch (config.protocol) {
+      case ProviderProtocol.openaiCompatible:
+      case ProviderProtocol.ollamaNative:
+        return RemoteTtsProvider(config);
+      case ProviderProtocol.deviceBuiltin:
+        throw UnsupportedError(
+          'Use SystemTtsProvider directly for device builtin TTS.',
+        );
     }
-    if (path.endsWith('/v1')) {
-      return uri.replace(path: '$path/audio/transcriptions');
-    }
-    if (path.endsWith('/v1/')) {
-      return uri.replace(path: '${path}audio/transcriptions');
-    }
-    if (path.isEmpty || path == '/') {
-      return uri.replace(path: '/v1/audio/transcriptions');
-    }
-    return uri.replace(path: '$path/v1/audio/transcriptions');
   }
 
-  Map<String, String> _headers(ProviderConfig provider) {
-    final headers = <String, String>{
-      HttpHeaders.contentTypeHeader: 'application/json',
-    };
-    final apiKey = provider.apiKey?.trim();
-    if (apiKey != null && apiKey.isNotEmpty) {
-      headers[HttpHeaders.authorizationHeader] = 'Bearer $apiKey';
+  SttProvider _createSttProvider(ProviderConfig config) {
+    switch (config.protocol) {
+      case ProviderProtocol.openaiCompatible:
+      case ProviderProtocol.ollamaNative:
+        return RemoteSttProvider(config);
+      case ProviderProtocol.deviceBuiltin:
+        throw UnsupportedError(
+          'Use SystemSttProvider directly for device builtin STT.',
+        );
     }
-    return headers;
   }
 }

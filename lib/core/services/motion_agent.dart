@@ -95,17 +95,16 @@ class MotionAgent {
   - Prefer short, friendly gestures.
   ''';
 
+    final messageList = [
+      {
+        'role': ChatRole.user.name,
+        'content': jsonEncode(payload),
+      },
+    ];
     final response = await _llmClient.completeChat(
-      provider: provider,
+      provider,
+      messageList,
       systemPrompt: systemPrompt,
-      messages: [
-        ChatMessage(
-          id: 'motion_agent',
-          role: ChatRole.user,
-          content: jsonEncode(payload),
-          createdAt: DateTime.now(),
-        ),
-      ],
     );
     return _parseDecision(response);
   }

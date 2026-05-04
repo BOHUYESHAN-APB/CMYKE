@@ -172,17 +172,16 @@ Rules:
   - Use high confidence only when explicitly supported by the conversation.
 ''';
 
+    final messageList = [
+      {
+        'role': ChatRole.user.name,
+        'content': jsonEncode(payload),
+      },
+    ];
     final response = await _llmClient.completeChat(
-      provider: provider,
+      provider,
+      messageList,
       systemPrompt: systemPrompt,
-      messages: [
-        ChatMessage(
-          id: 'memory_agent',
-          role: ChatRole.user,
-          content: jsonEncode(payload),
-          createdAt: now,
-        ),
-      ],
     );
     return _parseResult(response, now: now);
   }

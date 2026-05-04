@@ -52,17 +52,16 @@ class MemoryForgeService {
     };
 
     final systemPrompt = _systemPromptForTier(tier);
+    final messageList = [
+      {
+        'role': ChatRole.user.name,
+        'content': jsonEncode(payload),
+      },
+    ];
     final response = await _llmClient.completeChat(
-      provider: provider,
+      provider,
+      messageList,
       systemPrompt: systemPrompt,
-      messages: [
-        ChatMessage(
-          id: 'memory_forge',
-          role: ChatRole.user,
-          content: jsonEncode(payload),
-          createdAt: timestamp,
-        ),
-      ],
     );
     return _parseDraft(response, tier: tier, now: timestamp);
   }

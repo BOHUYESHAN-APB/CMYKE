@@ -136,14 +136,17 @@ class AutonomyService extends ChangeNotifier {
         return;
       }
       final context = _recentMessages(session.messages, limit: 12);
+      final messageList = context
+          .map((m) => {'role': m.role.name, 'content': m.content})
+          .toList();
       final systemPrompt =
-          '你是 CMYKE 的“自主搭话”助手。现在用户处于闲置状态，请主动发起一条简短、友好、'
+          '你是 CMYKE 的"自主搭话"助手。现在用户处于闲置状态，请主动发起一条简短、友好、'
           '与当前对话有关或轻量延伸的问题/建议。'
           '不要编造真实经历或身份，不要冒充真人。除非用户明确询问，否则不要主动声明你是 AI。'
           '避免敏感或高风险话题。输出一条即可。';
       final content = await _llmClient.completeChat(
-        provider: provider,
-        messages: context,
+        provider,
+        messageList,
         systemPrompt: systemPrompt,
       );
       final cleaned = content.trim();
@@ -206,16 +209,15 @@ class AutonomyService extends ChangeNotifier {
           '语气符合平台气质。仅输出草稿正文，不要额外说明。';
       final userPrompt =
           '主题方向：$topic。\n输出格式：${format == DraftFormat.markdown ? 'Markdown' : '纯文本'}。';
+      final messageList = [
+        {
+          'role': ChatRole.user.name,
+          'content': userPrompt,
+        },
+      ];
       final content = await _llmClient.completeChat(
-        provider: provider,
-        messages: [
-          ChatMessage(
-            id: DateTime.now().microsecondsSinceEpoch.toString(),
-            role: ChatRole.user,
-            content: userPrompt,
-            createdAt: DateTime.now(),
-          ),
-        ],
+        provider,
+        messageList,
         systemPrompt: systemPrompt,
       );
       final cleaned = content.trim();

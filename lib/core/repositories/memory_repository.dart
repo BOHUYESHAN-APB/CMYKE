@@ -1060,7 +1060,7 @@ class MemoryRepository extends ChangeNotifier {
       return null;
     }
     try {
-      return await _llmClient.embedText(provider: provider, input: trimmed);
+      return await _llmClient.embedText(provider, trimmed);
     } catch (_) {
       return null;
     }
@@ -1072,7 +1072,7 @@ class MemoryRepository extends ChangeNotifier {
       return null;
     }
     try {
-      return await _llmClient.embedTexts(provider: provider, inputs: texts);
+      return await _llmClient.embedTexts(provider, texts);
     } catch (_) {
       return null;
     }

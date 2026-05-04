@@ -6,20 +6,26 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/danmaku_event.dart';
+import '../models/danmaku_adapter_state.dart';
 import 'event_bus.dart';
+import 'danmaku_adapter.dart';
 
-class BilibiliDanmakuService {
+class BilibiliDanmakuService implements DanmakuAdapter {
   BilibiliDanmakuService({required RuntimeEventBus bus, http.Client? httpClient})
       : _bus = bus,
         _http = httpClient ?? http.Client(),
         _ownsHttp = httpClient == null {
     _wbiSigner = _WbiSigner(_http);
+    _stateController = StreamController<DanmakuAdapterState>.broadcast();
+    _outputController = StreamController<DanmakuAdapterOutput>.broadcast();
   }
 
   final RuntimeEventBus _bus;
   final http.Client _http;
   final bool _ownsHttp;
   late final _WbiSigner _wbiSigner;
+  late final StreamController<DanmakuAdapterState> _stateController;
+  late final StreamController<DanmakuAdapterOutput> _outputController;
 
   WebSocket? _socket;
   StreamSubscription<dynamic>? _socketSub;
@@ -31,22 +37,47 @@ class BilibiliDanmakuService {
   bool _disposed = false;
   int? _roomId;
   int _seq = 1;
+  DanmakuAdapterState _state = const DanmakuAdapterState(phase: DanmakuAdapterPhase.idle);
 
+  @override
+  DanmakuAdapterState get state => _state;
+
+  @override
+  Stream<DanmakuAdapterState> get states => _stateController.stream;
+
+  @override
+  Stream<DanmakuAdapterOutput> get outputs => _outputController.stream;
+
+  @override
   bool get isConnected => _socket?.readyState == WebSocket.open;
+
+  @override
   int? get roomId => _roomId;
 
+  void _updateState(DanmakuAdapterState newState) {
+    _state = newState;
+    if (!_stateController.isClosed) {
+      _stateController.add(newState);
+      _outputController.add(DanmakuStateOutput(newState));
+    }
+  }
+
+  @override
   Future<bool> connect({
     required int roomId,
-    int uid = 0,
-    String? sessData,
-    String? biliJct,
-    String? buvid3,
-    int protocolVersion = 1,
-    Duration heartbeatInterval = const Duration(seconds: 30),
-    bool autoReconnect = true,
-    Duration reconnectDelay = const Duration(seconds: 5),
+    Map<String, dynamic>? credentials,
   }) async {
     if (_disposed) return false;
+    
+    final uid = credentials?['uid'] as int? ?? 0;
+    final sessData = credentials?['sessData'] as String?;
+    final biliJct = credentials?['biliJct'] as String?;
+    final buvid3 = credentials?['buvid3'] as String?;
+    final protocolVersion = credentials?['protocolVersion'] as int? ?? 1;
+    final heartbeatInterval = credentials?['heartbeatInterval'] as Duration? ?? const Duration(seconds: 30);
+    final autoReconnect = credentials?['autoReconnect'] as bool? ?? true;
+    final reconnectDelay = credentials?['reconnectDelay'] as Duration? ?? const Duration(seconds: 5);
+
     final config = _BilibiliConfig(
       roomId: roomId,
       uid: uid,
@@ -60,26 +91,42 @@ class BilibiliDanmakuService {
     );
     _config = config;
     _closing = false;
+    _updateState(const DanmakuAdapterState(phase: DanmakuAdapterPhase.connecting));
+    
     try {
       await _openWithConfig(config);
+      _updateState(const DanmakuAdapterState(phase: DanmakuAdapterPhase.connected));
       return true;
     } catch (e, st) {
       debugPrint('BilibiliDanmakuService: connect failed: $e');
       debugPrint('$st');
+      _updateState(DanmakuAdapterState(
+        phase: DanmakuAdapterPhase.failed,
+        failure: DanmakuAdapterFailure(
+          message: e.toString(),
+          timestamp: DateTime.now(),
+        ),
+      ));
       return false;
     }
   }
 
+  @override
   Future<void> disconnect() async {
     _closing = true;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
+    _updateState(const DanmakuAdapterState(phase: DanmakuAdapterPhase.disconnecting));
     await _closeSocket();
+    _updateState(const DanmakuAdapterState(phase: DanmakuAdapterPhase.disconnected));
   }
 
+  @override
   Future<void> dispose() async {
     _disposed = true;
     await disconnect();
+    await _stateController.close();
+    await _outputController.close();
     if (_ownsHttp) {
       _http.close();
     }
@@ -263,12 +310,15 @@ class BilibiliDanmakuService {
     if (_closing || _disposed) return;
     if (_reconnectTimer != null) return;
 
+    _updateState(const DanmakuAdapterState(phase: DanmakuAdapterPhase.reconnecting));
+
     _reconnectTimer = Timer(config.reconnectDelay, () async {
       _reconnectTimer = null;
       if (_closing || _disposed) return;
       debugPrint('BilibiliDanmakuService: reconnecting ($reason)...');
       try {
         await _openWithConfig(config);
+        _updateState(const DanmakuAdapterState(phase: DanmakuAdapterPhase.connected));
       } catch (e, st) {
         debugPrint('BilibiliDanmakuService: reconnect failed: $e');
         debugPrint('$st');
@@ -404,6 +454,20 @@ class BilibiliDanmakuService {
 
     if (event != null) {
       _bus.emitDanmaku(event);
+      // Also emit through adapter output stream
+      if (!_outputController.isClosed) {
+        _outputController.add(DanmakuEventOutput({
+          'type': event.type.name,
+          'roomId': event.roomId,
+          'timestamp': event.timestamp.toIso8601String(),
+          'userId': event.userId,
+          'userName': event.userName,
+          'message': event.message,
+          'price': event.price,
+          'emoticonUnique': event.emoticonUnique,
+          'emoticonUrl': event.emoticonUrl,
+        }));
+      }
     }
   }
 

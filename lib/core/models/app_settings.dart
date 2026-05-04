@@ -20,6 +20,8 @@ enum DraftFormatStrategy { platformDefault, markdown, text }
 
 enum AutonomyPlatform { x, xiaohongshu, bilibili, wechat }
 
+enum DanmakuPlatform { bilibili, mock }
+
 const Object _unset = Object();
 
 class AppSettings {
@@ -81,6 +83,15 @@ class AppSettings {
     this.layoutSidebarWidth = 280.0,
     this.layoutRightPanelWidth = 380.0,
     this.layoutShowRightPanel = true,
+    this.danmakuEnabled = false,
+    this.danmakuPlatform = DanmakuPlatform.mock,
+    this.danmakuRoomId,
+    this.danmakuBatchIntervalSeconds = 20,
+    this.danmakuBatchSize = 50,
+    this.danmakuInjectToChatEnabled = false,
+    this.danmakuBilibiliSessData,
+    this.danmakuBilibiliBiliJct,
+    this.danmakuBilibiliBuvid3,
   });
 
   ModelRoute route;
@@ -140,6 +151,17 @@ class AppSettings {
   double layoutRightPanelWidth;
   bool layoutShowRightPanel;
 
+  // Danmaku settings
+  bool danmakuEnabled;
+  DanmakuPlatform danmakuPlatform;
+  int? danmakuRoomId;
+  int danmakuBatchIntervalSeconds;
+  int danmakuBatchSize;
+  bool danmakuInjectToChatEnabled;
+  String? danmakuBilibiliSessData;
+  String? danmakuBilibiliBiliJct;
+  String? danmakuBilibiliBuvid3;
+
   AppSettings copyWith({
     ModelRoute? route,
     String? llmProviderId,
@@ -193,6 +215,15 @@ class AppSettings {
     double? layoutSidebarWidth,
     double? layoutRightPanelWidth,
     bool? layoutShowRightPanel,
+    bool? danmakuEnabled,
+    DanmakuPlatform? danmakuPlatform,
+    Object? danmakuRoomId = _unset,
+    int? danmakuBatchIntervalSeconds,
+    int? danmakuBatchSize,
+    bool? danmakuInjectToChatEnabled,
+    Object? danmakuBilibiliSessData = _unset,
+    Object? danmakuBilibiliBiliJct = _unset,
+    Object? danmakuBilibiliBuvid3 = _unset,
   }) {
     return AppSettings(
       route: route ?? this.route,
@@ -269,6 +300,25 @@ class AppSettings {
       layoutRightPanelWidth:
           layoutRightPanelWidth ?? this.layoutRightPanelWidth,
       layoutShowRightPanel: layoutShowRightPanel ?? this.layoutShowRightPanel,
+      danmakuEnabled: danmakuEnabled ?? this.danmakuEnabled,
+      danmakuPlatform: danmakuPlatform ?? this.danmakuPlatform,
+      danmakuRoomId: danmakuRoomId == _unset
+          ? this.danmakuRoomId
+          : danmakuRoomId as int?,
+      danmakuBatchIntervalSeconds:
+          danmakuBatchIntervalSeconds ?? this.danmakuBatchIntervalSeconds,
+      danmakuBatchSize: danmakuBatchSize ?? this.danmakuBatchSize,
+      danmakuInjectToChatEnabled:
+          danmakuInjectToChatEnabled ?? this.danmakuInjectToChatEnabled,
+      danmakuBilibiliSessData: danmakuBilibiliSessData == _unset
+          ? this.danmakuBilibiliSessData
+          : danmakuBilibiliSessData as String?,
+      danmakuBilibiliBiliJct: danmakuBilibiliBiliJct == _unset
+          ? this.danmakuBilibiliBiliJct
+          : danmakuBilibiliBiliJct as String?,
+      danmakuBilibiliBuvid3: danmakuBilibiliBuvid3 == _unset
+          ? this.danmakuBilibiliBuvid3
+          : danmakuBilibiliBuvid3 as String?,
     );
   }
 
@@ -325,6 +375,15 @@ class AppSettings {
     'layout_sidebar_width': layoutSidebarWidth,
     'layout_right_panel_width': layoutRightPanelWidth,
     'layout_show_right_panel': layoutShowRightPanel,
+    'danmaku_enabled': danmakuEnabled,
+    'danmaku_platform': danmakuPlatform.name,
+    'danmaku_room_id': danmakuRoomId,
+    'danmaku_batch_interval_seconds': danmakuBatchIntervalSeconds,
+    'danmaku_batch_size': danmakuBatchSize,
+    'danmaku_inject_to_chat_enabled': danmakuInjectToChatEnabled,
+    'danmaku_bilibili_sess_data': danmakuBilibiliSessData,
+    'danmaku_bilibili_bili_jct': danmakuBilibiliBiliJct,
+    'danmaku_bilibili_buvid3': danmakuBilibiliBuvid3,
   };
 
   factory AppSettings.fromJson(Map<String, dynamic> json) => AppSettings(
@@ -428,6 +487,20 @@ class AppSettings {
     layoutRightPanelWidth:
         (json['layout_right_panel_width'] as num?)?.toDouble() ?? 380.0,
     layoutShowRightPanel: json['layout_show_right_panel'] as bool? ?? true,
+    danmakuEnabled: json['danmaku_enabled'] as bool? ?? false,
+    danmakuPlatform: DanmakuPlatform.values.firstWhere(
+      (platform) => platform.name == json['danmaku_platform'],
+      orElse: () => DanmakuPlatform.mock,
+    ),
+    danmakuRoomId: json['danmaku_room_id'] as int?,
+    danmakuBatchIntervalSeconds:
+        json['danmaku_batch_interval_seconds'] as int? ?? 20,
+    danmakuBatchSize: json['danmaku_batch_size'] as int? ?? 50,
+    danmakuInjectToChatEnabled:
+        json['danmaku_inject_to_chat_enabled'] as bool? ?? false,
+    danmakuBilibiliSessData: json['danmaku_bilibili_sess_data'] as String?,
+    danmakuBilibiliBiliJct: json['danmaku_bilibili_bili_jct'] as String?,
+    danmakuBilibiliBuvid3: json['danmaku_bilibili_buvid3'] as String?,
   );
 }
 

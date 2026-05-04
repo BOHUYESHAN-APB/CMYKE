@@ -10,11 +10,65 @@ import '../models/danmaku_adapter_state.dart';
 import 'event_bus.dart';
 import 'danmaku_adapter.dart';
 
+abstract class BilibiliSocketClient {
+  int get readyState;
+
+  StreamSubscription<dynamic> listen(
+    void Function(dynamic data) onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  });
+
+  void add(List<int> data);
+
+  Future<void> close();
+}
+
+typedef BilibiliSocketConnector = Future<BilibiliSocketClient> Function(
+  String url, {
+  Map<String, String>? headers,
+});
+
+class _WebSocketClient implements BilibiliSocketClient {
+  _WebSocketClient(this._socket);
+
+  final WebSocket _socket;
+
+  @override
+  int get readyState => _socket.readyState;
+
+  @override
+  StreamSubscription<dynamic> listen(
+    void Function(dynamic data) onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) {
+    return _socket.listen(
+      onData,
+      onError: onError,
+      onDone: onDone,
+      cancelOnError: cancelOnError,
+    );
+  }
+
+  @override
+  void add(List<int> data) => _socket.add(data);
+
+  @override
+  Future<void> close() => _socket.close();
+}
+
 class BilibiliDanmakuService implements DanmakuAdapter {
-  BilibiliDanmakuService({required RuntimeEventBus bus, http.Client? httpClient})
-      : _bus = bus,
+  BilibiliDanmakuService({
+    required RuntimeEventBus bus,
+    http.Client? httpClient,
+    BilibiliSocketConnector? socketConnector,
+  })  : _bus = bus,
         _http = httpClient ?? http.Client(),
-        _ownsHttp = httpClient == null {
+        _ownsHttp = httpClient == null,
+        _socketConnector = socketConnector ?? _defaultSocketConnector {
     _wbiSigner = _WbiSigner(_http);
     _stateController = StreamController<DanmakuAdapterState>.broadcast();
     _outputController = StreamController<DanmakuAdapterOutput>.broadcast();
@@ -23,11 +77,12 @@ class BilibiliDanmakuService implements DanmakuAdapter {
   final RuntimeEventBus _bus;
   final http.Client _http;
   final bool _ownsHttp;
+  final BilibiliSocketConnector _socketConnector;
   late final _WbiSigner _wbiSigner;
   late final StreamController<DanmakuAdapterState> _stateController;
   late final StreamController<DanmakuAdapterOutput> _outputController;
 
-  WebSocket? _socket;
+  BilibiliSocketClient? _socket;
   StreamSubscription<dynamic>? _socketSub;
   Timer? _heartbeatTimer;
   Timer? _reconnectTimer;
@@ -152,7 +207,7 @@ class BilibiliDanmakuService implements DanmakuAdapter {
     final wsUrl = _buildWsUrl(host);
     final headers = _buildHeaders(config);
 
-    final socket = await WebSocket.connect(wsUrl, headers: headers);
+    final socket = await _socketConnector(wsUrl, headers: headers);
     _socket = socket;
 
     _socketSub = socket.listen(
@@ -187,6 +242,13 @@ class BilibiliDanmakuService implements DanmakuAdapter {
     );
 
     _startHeartbeat(config.heartbeatInterval, config.protocolVersion);
+  }
+
+  static Future<BilibiliSocketClient> _defaultSocketConnector(
+    String url, {
+    Map<String, String>? headers,
+  }) async {
+    return _WebSocketClient(await WebSocket.connect(url, headers: headers));
   }
 
   Future<int> _resolveRoomId(_BilibiliConfig config) async {

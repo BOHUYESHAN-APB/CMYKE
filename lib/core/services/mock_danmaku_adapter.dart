@@ -9,13 +9,19 @@ class MockDanmakuAdapter implements DanmakuAdapter {
   MockDanmakuAdapter({
     this.eventInterval = const Duration(seconds: 2),
     this.autoGenerateEvents = true,
+    Random? random,
+    this.connectDelay = const Duration(milliseconds: 500),
+    this.disconnectDelay = const Duration(milliseconds: 200),
   }) {
+    _random = random ?? Random();
     _stateController = StreamController<DanmakuAdapterState>.broadcast();
     _outputController = StreamController<DanmakuAdapterOutput>.broadcast();
   }
 
   final Duration eventInterval;
   final bool autoGenerateEvents;
+  final Duration connectDelay;
+  final Duration disconnectDelay;
 
   late final StreamController<DanmakuAdapterState> _stateController;
   late final StreamController<DanmakuAdapterOutput> _outputController;
@@ -25,7 +31,7 @@ class MockDanmakuAdapter implements DanmakuAdapter {
   Timer? _eventTimer;
   bool _disposed = false;
 
-  static final _random = Random();
+  late final Random _random;
   static const _mockUsers = ['用户A', '用户B', '用户C', '观众D', '粉丝E', '路人F'];
   static const _mockMessages = [
     '666',
@@ -69,7 +75,7 @@ class MockDanmakuAdapter implements DanmakuAdapter {
     _updateState(const DanmakuAdapterState(phase: DanmakuAdapterPhase.connecting));
 
     // Simulate connection delay
-    await Future.delayed(const Duration(milliseconds: 500));
+    await Future.delayed(connectDelay);
 
     _updateState(const DanmakuAdapterState(phase: DanmakuAdapterPhase.connected));
 
@@ -84,7 +90,7 @@ class MockDanmakuAdapter implements DanmakuAdapter {
   Future<void> disconnect() async {
     _updateState(const DanmakuAdapterState(phase: DanmakuAdapterPhase.disconnecting));
     _stopEventGeneration();
-    await Future.delayed(const Duration(milliseconds: 200));
+    await Future.delayed(disconnectDelay);
     _updateState(const DanmakuAdapterState(phase: DanmakuAdapterPhase.disconnected));
     _roomId = null;
   }

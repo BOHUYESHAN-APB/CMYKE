@@ -1302,9 +1302,7 @@ class ChatEngine extends ChangeNotifier {
     if (session == null) {
       return;
     }
-    final standardProvider = _settingsRepository.findProvider(
-      _settingsRepository.settings.llmProviderId,
-    );
+    final standardProvider = _settingsRepository.interactionContract.main.provider;
     if (standardProvider == null) {
       await _chatRepository.updateMessageContent(
         assistantMessage.id,
@@ -3407,10 +3405,10 @@ $original
   }
 
   ProviderConfig? _resolveVisionProvider() {
-    final settings = _settingsRepository.settings;
-    final explicit = settings.visionProviderId?.trim();
-    if (explicit != null && explicit.isNotEmpty) {
-      return _settingsRepository.findProvider(explicit);
+    final contract = _settingsRepository.interactionContract;
+    final explicit = contract.vision.provider;
+    if (explicit != null) {
+      return explicit;
     }
     final main = _resolveSlowBrainProvider() ?? _resolveFastBrainProvider();
     if (main != null && main.capabilities.contains(ProviderCapability.vision)) {

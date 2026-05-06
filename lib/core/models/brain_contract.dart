@@ -1,4 +1,6 @@
 import 'app_settings.dart';
+import 'interaction_contract.dart';
+import 'interaction_profile.dart';
 
 enum BrainRole { left, right }
 
@@ -31,20 +33,20 @@ class BrainContract {
   });
 
   factory BrainContract.fromSettings(AppSettings settings) {
+    final bindings = settings.toInteractionBindings();
     final leftRoute = settings.route;
-    final leftProviderId = switch (leftRoute) {
-      ModelRoute.standard => settings.llmProviderId,
-      ModelRoute.realtime => settings.realtimeProviderId,
-      ModelRoute.omni => settings.omniProviderId,
+    final leftProviderId = bindings.leftBrainProviderId;
+    final leftLabel = switch (settings.interactionMode) {
+      InteractionMode.lightweight => '左脑（lightweight）',
+      InteractionMode.nativeRealtime => '左脑（nativeRealtime）',
+      InteractionMode.nativeOmni => '左脑（nativeOmni）',
+      InteractionMode.composite => '左脑（composite）',
     };
-    final leftLabel = switch (leftRoute) {
-      ModelRoute.standard => '左脑（standard）',
-      ModelRoute.realtime => '左脑（realtime）',
-      ModelRoute.omni => '左脑（omni）',
-    };
-    final escalationMode = switch (leftRoute) {
-      ModelRoute.standard => BrainEscalationMode.leftOnly,
-      ModelRoute.realtime || ModelRoute.omni => BrainEscalationMode.onDemand,
+    final escalationMode = switch (settings.interactionMode) {
+      InteractionMode.lightweight => BrainEscalationMode.leftOnly,
+      InteractionMode.nativeRealtime ||
+      InteractionMode.nativeOmni ||
+      InteractionMode.composite => BrainEscalationMode.onDemand,
     };
     return BrainContract(
       sourceRoute: leftRoute,
@@ -59,7 +61,43 @@ class BrainContract {
         role: BrainRole.right,
         label: '右脑（深度推理）',
         route: ModelRoute.standard,
-        providerId: settings.llmProviderId,
+        providerId: bindings.rightBrainProviderId,
+        primary: false,
+      ),
+      escalationMode: escalationMode,
+    );
+  }
+
+  factory BrainContract.fromInteractionContract(InteractionContract contract) {
+    final leftRoute = switch (contract.mode) {
+      InteractionMode.lightweight => ModelRoute.standard,
+      InteractionMode.nativeRealtime => ModelRoute.realtime,
+      InteractionMode.nativeOmni => ModelRoute.omni,
+      InteractionMode.composite => ModelRoute.standard,
+    };
+    final leftLabel = switch (contract.mode) {
+      InteractionMode.lightweight => '左脑（lightweight）',
+      InteractionMode.nativeRealtime => '左脑（nativeRealtime）',
+      InteractionMode.nativeOmni => '左脑（nativeOmni）',
+      InteractionMode.composite => '左脑（composite）',
+    };
+    final escalationMode = contract.options.allowRightBrainEscalation
+        ? BrainEscalationMode.onDemand
+        : BrainEscalationMode.leftOnly;
+    return BrainContract(
+      sourceRoute: leftRoute,
+      leftBrain: BrainEndpointContract(
+        role: BrainRole.left,
+        label: leftLabel,
+        route: leftRoute,
+        providerId: contract.leftBrain.providerId,
+        primary: true,
+      ),
+      rightBrain: BrainEndpointContract(
+        role: BrainRole.right,
+        label: '右脑（深度推理）',
+        route: ModelRoute.standard,
+        providerId: contract.rightBrain.providerId,
         primary: false,
       ),
       escalationMode: escalationMode,

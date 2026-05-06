@@ -5,8 +5,11 @@ import 'package:sqflite/sqflite.dart';
 
 import '../models/app_settings.dart';
 import '../models/brain_contract.dart';
+import '../models/interaction_contract.dart';
+import '../models/interaction_profile.dart';
 import '../models/provider_config.dart';
 import '../services/local_database.dart';
+import '../services/interaction_profile_resolver.dart';
 import '../services/local_storage.dart';
 
 class SettingsRepository extends ChangeNotifier {
@@ -18,6 +21,8 @@ class SettingsRepository extends ChangeNotifier {
 
   final LocalDatabase _database;
   final LocalStorage _legacyStorage;
+  final InteractionProfileResolver _interactionProfileResolver =
+      const InteractionProfileResolver();
   final List<ProviderConfig> _providers = [];
   AppSettings _settings = AppSettings(route: ModelRoute.standard);
 
@@ -25,10 +30,30 @@ class SettingsRepository extends ChangeNotifier {
   static const String _settingsFile = 'settings.json';
   static const String _providersTable = 'providers';
   static const String _settingsTable = 'app_settings';
+  static const String _interactionProfilesTable = 'interaction_profiles';
+
+  final List<InteractionProfile> _interactionProfiles = [];
 
   List<ProviderConfig> get providers => List.unmodifiable(_providers);
+  List<InteractionProfile> get interactionProfiles =>
+      List.unmodifiable(_interactionProfiles);
   AppSettings get settings => _settings;
-  BrainContract get brainContract => BrainContract.fromSettings(_settings);
+  InteractionProfile get activeInteractionProfile {
+    final activeId = _settings.resolvedActiveProfileId;
+    for (final profile in _interactionProfiles) {
+      if (profile.id == activeId) {
+        return profile;
+      }
+    }
+    return _settings.toDefaultInteractionProfile();
+  }
+
+  InteractionContract get interactionContract => _interactionProfileResolver
+      .resolve(profile: activeInteractionProfile, providers: _providers);
+
+  BrainContract get brainContract => BrainContract.fromInteractionContract(
+    interactionContract,
+  );
 
   List<ProviderConfig> providersByKind(ProviderKind kind) => _providers
       .where((provider) => provider.kind == kind)
@@ -84,9 +109,16 @@ class SettingsRepository extends ChangeNotifier {
       _settings = _settingsFromRow(settingsRows.first);
     }
 
+    final profileRows = await db.query(_interactionProfilesTable);
+    _interactionProfiles
+      ..clear()
+      ..addAll(profileRows.map(_interactionProfileFromRow));
+
     _ensureDefaults();
+    _ensureInteractionProfiles();
     notifyListeners();
     await _persistSettings(db);
+    await _persistInteractionProfiles(db);
   }
 
   Future<void> addProvider(ProviderConfig provider) async {
@@ -129,7 +161,22 @@ class SettingsRepository extends ChangeNotifier {
     final db = await _database.database;
     _settings = settings;
     _sanitizeSelections();
+    _ensureInteractionProfiles();
     await _persistSettings(db);
+    await _persistInteractionProfiles(db);
+    notifyListeners();
+  }
+
+  /// Sync the active profile mode when the user changes route.
+  Future<void> updateActiveProfileMode(InteractionMode mode) async {
+    final profile = activeInteractionProfile;
+    if (profile.mode == mode) return;
+    final updated = profile.copyWith(mode: mode);
+    _interactionProfiles.removeWhere((p) => p.id == updated.id);
+    _interactionProfiles.add(updated);
+    final db = await _database.database;
+    await _persistInteractionProfiles(db);
+    // Re-sync BrainContract since mode changed
     notifyListeners();
   }
 
@@ -194,6 +241,27 @@ class SettingsRepository extends ChangeNotifier {
     if (_settings.toolGatewayBaseUrl.trim().isEmpty) {
       _settings.toolGatewayBaseUrl = 'http://127.0.0.1:4891';
     }
+    if ((_settings.activeProfileId ?? '').trim().isEmpty) {
+      _settings.activeProfileId = _settings.resolvedActiveProfileId;
+    }
+  }
+
+  void _ensureInteractionProfiles() {
+    final defaultProfile = _settings.toDefaultInteractionProfile();
+    final index = _interactionProfiles.indexWhere(
+      (profile) => profile.id == defaultProfile.id,
+    );
+    if (index == -1) {
+      _interactionProfiles.add(defaultProfile);
+      return;
+    }
+    final existing = _interactionProfiles[index];
+    _interactionProfiles[index] = existing.copyWith(
+      mode: defaultProfile.mode,
+      bindings: defaultProfile.bindings,
+      options: defaultProfile.options,
+      updatedAt: defaultProfile.updatedAt,
+    );
   }
 
   void _sanitizeSelections() {
@@ -254,6 +322,19 @@ class SettingsRepository extends ChangeNotifier {
       _settingsToRow(_settings),
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+  }
+
+  Future<void> _persistInteractionProfiles(Database db) async {
+    await db.delete(_interactionProfilesTable);
+    final batch = db.batch();
+    for (final profile in _interactionProfiles) {
+      batch.insert(
+        _interactionProfilesTable,
+        _interactionProfileToRow(profile),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+    await batch.commit(noResult: true);
   }
 
   Future<void> _importLegacy(Database db) async {
@@ -363,6 +444,7 @@ class SettingsRepository extends ChangeNotifier {
         (route) => route.name == row['route'],
         orElse: () => ModelRoute.standard,
       ),
+      activeProfileId: row['active_profile_id'] as String?,
       llmProviderId: row['llm_provider_id'] as String?,
       embeddingProviderId: row['embedding_provider_id'] as String?,
       visionProviderId: row['vision_provider_id'] as String?,
@@ -459,6 +541,20 @@ class SettingsRepository extends ChangeNotifier {
       layoutRightPanelWidth:
           (row['layout_right_panel_width'] as num?)?.toDouble() ?? 380.0,
       layoutShowRightPanel: _toBool(row['layout_show_right_panel']) ?? true,
+      danmakuEnabled: _toBool(row['danmaku_enabled']) ?? false,
+      danmakuPlatform: DanmakuPlatform.values.firstWhere(
+        (platform) => platform.name == row['danmaku_platform'],
+        orElse: () => DanmakuPlatform.mock,
+      ),
+      danmakuRoomId: (row['danmaku_room_id'] as num?)?.toInt(),
+      danmakuBatchIntervalSeconds:
+          (row['danmaku_batch_interval_seconds'] as num?)?.toInt() ?? 20,
+      danmakuBatchSize: (row['danmaku_batch_size'] as num?)?.toInt() ?? 50,
+      danmakuInjectToChatEnabled:
+          _toBool(row['danmaku_inject_to_chat_enabled']) ?? false,
+      danmakuBilibiliSessData: row['danmaku_bilibili_sess_data'] as String?,
+      danmakuBilibiliBiliJct: row['danmaku_bilibili_bili_jct'] as String?,
+      danmakuBilibiliBuvid3: row['danmaku_bilibili_buvid3'] as String?,
     );
   }
 
@@ -466,6 +562,7 @@ class SettingsRepository extends ChangeNotifier {
     return {
       'id': 1,
       'route': settings.route.name,
+      'active_profile_id': settings.activeProfileId,
       'llm_provider_id': settings.llmProviderId,
       'embedding_provider_id': settings.embeddingProviderId,
       'vision_provider_id': settings.visionProviderId,
@@ -527,6 +624,40 @@ class SettingsRepository extends ChangeNotifier {
       'layout_sidebar_width': settings.layoutSidebarWidth,
       'layout_right_panel_width': settings.layoutRightPanelWidth,
       'layout_show_right_panel': settings.layoutShowRightPanel ? 1 : 0,
+      'danmaku_enabled': settings.danmakuEnabled ? 1 : 0,
+      'danmaku_platform': settings.danmakuPlatform.name,
+      'danmaku_room_id': settings.danmakuRoomId,
+      'danmaku_batch_interval_seconds': settings.danmakuBatchIntervalSeconds,
+      'danmaku_batch_size': settings.danmakuBatchSize,
+      'danmaku_inject_to_chat_enabled':
+          settings.danmakuInjectToChatEnabled ? 1 : 0,
+      'danmaku_bilibili_sess_data': settings.danmakuBilibiliSessData,
+      'danmaku_bilibili_bili_jct': settings.danmakuBilibiliBiliJct,
+      'danmaku_bilibili_buvid3': settings.danmakuBilibiliBuvid3,
+    };
+  }
+
+  InteractionProfile _interactionProfileFromRow(Map<String, Object?> row) {
+    return InteractionProfile.fromJson({
+      'id': row['id'],
+      'name': row['name'],
+      'mode': row['mode'],
+      'bindings': jsonDecode(row['bindings_json'] as String),
+      'options': jsonDecode(row['options_json'] as String),
+      'created_at': row['created_at'],
+      'updated_at': row['updated_at'],
+    });
+  }
+
+  Map<String, Object?> _interactionProfileToRow(InteractionProfile profile) {
+    return {
+      'id': profile.id,
+      'name': profile.name,
+      'mode': profile.mode.name,
+      'bindings_json': jsonEncode(profile.bindings.toJson()),
+      'options_json': jsonEncode(profile.options.toJson()),
+      'created_at': profile.createdAt.toIso8601String(),
+      'updated_at': profile.updatedAt.toIso8601String(),
     };
   }
 

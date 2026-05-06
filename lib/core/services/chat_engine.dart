@@ -10,7 +10,6 @@ import 'package:image/image.dart' as img;
 import 'package:speech_to_text/speech_to_text.dart';
 
 import '../models/app_settings.dart';
-import '../models/brain_contract.dart';
 import '../models/brain_reintegration.dart';
 import '../models/chat_attachment.dart';
 import '../models/chat_message.dart';
@@ -20,7 +19,10 @@ import '../models/llm_stream_event.dart';
 import '../models/lipsync_frame.dart';
 import '../models/memory_tier.dart';
 import '../models/memory_record.dart';
+import '../models/interaction_profile.dart';
 import '../models/provider_config.dart';
+import '../providers/system_stt_provider.dart';
+import '../providers/system_tts_provider.dart';
 import '../models/research_job.dart';
 import '../models/runtime_capability_snapshot.dart';
 import '../models/runtime_event.dart';
@@ -29,6 +31,8 @@ import '../prompts/persona_lumi.dart';
 import '../repositories/chat_repository.dart';
 import '../repositories/memory_repository.dart';
 import '../repositories/settings_repository.dart';
+import '../runtime/interaction_event.dart';
+import '../runtime/interaction_session.dart';
 import '../models/voice_transcript_event.dart';
 import 'audio_stream_player.dart';
 import 'brain_router.dart';
@@ -39,6 +43,7 @@ import 'runtime_event_arbitrator.dart';
 import 'speech_client.dart';
 import 'streaming_text_chunker.dart';
 import 'token_estimator.dart';
+import '../runtime/lightweight_interaction_runtime.dart';
 import 'universal_agent.dart';
 import 'runtime_hub.dart';
 import 'motion_agent.dart';
@@ -98,6 +103,10 @@ class ChatEngine extends ChangeNotifier {
     );
     _motionAgent = MotionAgent(llmClient: _llmClient);
     _memoryAgent = MemoryAgent(llmClient: _llmClient);
+    _lightweightInteractionRuntime = LightweightInteractionRuntime(
+      systemTtsProvider: SystemTtsProvider(ProviderConfig(id: '', name: '', kind: ProviderKind.tts, baseUrl: '', model: ''), tts: _tts),
+      systemSttProvider: SystemSttProvider(ProviderConfig(id: '', name: '', kind: ProviderKind.stt, baseUrl: '', model: ''), stt: _speech),
+    );
     _refreshTokenUsage();
   }
 
@@ -108,9 +117,10 @@ class ChatEngine extends ChangeNotifier {
   late final UniversalAgent _universalAgent;
   late final MotionAgent _motionAgent;
   late final MemoryAgent _memoryAgent;
-  final SpeechClient _speechClient = SpeechClient();
   final SpeechToText _speech = SpeechToText();
   final FlutterTts _tts = FlutterTts();
+  late final LightweightInteractionRuntime _lightweightInteractionRuntime;
+  final SpeechClient _speechClient = SpeechClient();
   final AudioStreamPlayer _audioPlayer = AudioStreamPlayer();
   StreamSubscription<bool>? _audioPlayingSubscription;
   StreamSubscription<DanmakuEvent>? _danmakuSubscription;
@@ -127,6 +137,8 @@ class ChatEngine extends ChangeNotifier {
   bool _memoryAgentRunning = false;
 
   StreamSubscription<LlmStreamEvent>? _streamSubscription;
+  StreamSubscription<InteractionEvent>? _interactionEventSubscription;
+  InteractionSession? _interactionSession;
   bool _isListening = false;
   bool _isTtsSpeaking = false;
   bool _isAudioPlaying = false;
@@ -405,6 +417,18 @@ class ChatEngine extends ChangeNotifier {
         ),
       );
     }
+    if (_settingsRepository.interactionContract.mode ==
+        InteractionMode.lightweight) {
+      await _runLightweightInteractionTurn(
+        normalizedText: normalizedText,
+        trimmed: trimmed,
+        assistantMessage: assistantMessage,
+        provider: provider,
+        systemPrompt: systemPrompt,
+        useRightBrainAssist: useRightBrainAssist,
+      );
+      return;
+    }
     _isStreaming = true;
     _updateTalkingState();
     notifyListeners();
@@ -674,6 +698,196 @@ class ChatEngine extends ChangeNotifier {
           },
           cancelOnError: true,
         );
+  }
+
+  Future<void> _runLightweightInteractionTurn({
+    required String normalizedText,
+    required String trimmed,
+    required ChatMessage assistantMessage,
+    required ProviderConfig provider,
+    required String systemPrompt,
+    required bool useRightBrainAssist,
+  }) async {
+    final session = _chatRepository.activeSession;
+    final messageHistory = session == null
+        ? <ChatMessage>[]
+        : _messageHistoryForPrompt(session);
+    final contextMessages = messageHistory
+        .map((m) => {'role': m.role.name, 'content': m.content})
+        .toList();
+
+    final runtimeSession = _lightweightInteractionRuntime.createSession(
+      contract: _settingsRepository.interactionContract,
+      systemPrompt: systemPrompt,
+    );
+    _interactionSession = runtimeSession;
+
+    _isStreaming = true;
+    _updateTalkingState();
+    notifyListeners();
+
+    final buffer = StringBuffer();
+    var receivedAudio = false;
+    final done = Completer<void>();
+
+    Future<void> finalizeSuccess() async {
+      if (done.isCompleted) {
+        return;
+      }
+      _isStreaming = false;
+      _updateTalkingState();
+      notifyListeners();
+      final raw = buffer.toString();
+      final provisional = _stripForbiddenAsides(raw);
+      if (provisional != raw) {
+        await _chatRepository.updateMessageContent(
+          assistantMessage.id,
+          provisional,
+          persist: false,
+        );
+      }
+      final content = await _postProcessAssistantText(
+        provider: provider,
+        content: provisional,
+        modelProvidedAudio: receivedAudio,
+      );
+      if (useRightBrainAssist) {
+        _setBrainReintegrationState(
+          _brainReintegrationState.copyWith(
+            phase: BrainReintegrationPhase.reintegrating,
+          ),
+        );
+      }
+      final parts = _splitAssistantResponse(content);
+      await _applyAssistantResponse(assistantMessage, parts);
+      if (useRightBrainAssist) {
+        await _chatRepository.addMessage(
+          ChatMessage(
+            id: DateTime.now().microsecondsSinceEpoch.toString(),
+            role: ChatRole.system,
+            content: '右脑整理完成，当前结果已回到左脑表达。',
+            createdAt: DateTime.now(),
+            sourceKind: ChatSourceKind.system,
+            priority: ChatPriority.low,
+          ),
+          persist: true,
+        );
+        _setBrainReintegrationState(const BrainReintegrationState.idle());
+      }
+      if (_shouldSpeakResponse(modelProvidedAudio: receivedAudio)) {
+        await _playTts(parts.join('\n'));
+      }
+      if (receivedAudio) {
+        await _audioPlayer.finish();
+      }
+      _refreshTokenUsage();
+      unawaited(
+        _maybeTriggerMemoryAgent(
+          userText: trimmed,
+          assistantText: parts.join('\n'),
+          sourceMessageId: assistantMessage.id,
+        ),
+      );
+      unawaited(
+        _maybeTriggerMotionAgent(
+          userText: trimmed,
+          assistantText: parts.join('\n'),
+        ),
+      );
+      done.complete();
+    }
+
+    Future<void> finalizeError(Object error) async {
+      if (done.isCompleted) {
+        return;
+      }
+      _isStreaming = false;
+      if (useRightBrainAssist) {
+        _setBrainReintegrationState(const BrainReintegrationState.idle());
+      }
+      _updateTalkingState();
+      notifyListeners();
+      await _audioPlayer.stop();
+      await _chatRepository.updateMessageContent(
+        assistantMessage.id,
+        '请求失败: $error',
+        persist: true,
+      );
+      done.complete();
+    }
+
+    _interactionEventSubscription = runtimeSession.events.listen((event) {
+      switch (event.type) {
+        case InteractionEventType.status:
+          if (event.status == 'interrupted' && !done.isCompleted) {
+            done.complete();
+          }
+          break;
+        case InteractionEventType.textDelta:
+          final delta = event.text ?? '';
+          buffer.write(delta);
+          final snapshot = buffer.toString();
+          final display = _shouldSoftCleanStreaming(snapshot)
+              ? _stripForbiddenAsides(snapshot)
+              : snapshot;
+          unawaited(
+            _chatRepository.updateMessageContent(
+              assistantMessage.id,
+              display,
+              persist: false,
+            ),
+          );
+          break;
+        case InteractionEventType.textComplete:
+          final text = event.text ?? '';
+          if (text.isNotEmpty) {
+            buffer
+              ..clear()
+              ..write(text);
+          }
+          break;
+        case InteractionEventType.audioChunk:
+          if (!_supportsStreamingAudio() || event.audioChunk == null) {
+            break;
+          }
+          receivedAudio = true;
+          unawaited(_playInteractionAudioChunk(event));
+          break;
+        case InteractionEventType.transcriptFinal:
+          break;
+        case InteractionEventType.error:
+          unawaited(finalizeError(event.error ?? StateError('Unknown error')));
+          break;
+        case InteractionEventType.done:
+          unawaited(finalizeSuccess());
+          break;
+      }
+    });
+
+    await runtimeSession.start();
+    unawaited(
+      runtimeSession.sendUserText(
+        normalizedText,
+        systemPrompt: systemPrompt,
+        contextMessages: contextMessages,
+      ),
+    );
+    await done.future;
+    await _disposeInteractionSession();
+  }
+
+  Future<void> _playInteractionAudioChunk(InteractionEvent event) async {
+    final format = event.audioFormat ?? _resolveTtsProvider()?.audioFormat ?? 'wav';
+    await _audioPlayer.start(contentType: _contentTypeForFormat(format));
+    await _audioPlayer.addChunk(event.audioChunk!);
+  }
+
+  Future<void> _disposeInteractionSession() async {
+    await _interactionEventSubscription?.cancel();
+    _interactionEventSubscription = null;
+    final session = _interactionSession;
+    _interactionSession = null;
+    await session?.dispose();
   }
 
   Future<void> sendTextWithAttachments(
@@ -1173,6 +1387,8 @@ class ChatEngine extends ChangeNotifier {
 
     await _streamSubscription?.cancel();
     _streamSubscription = null;
+    await _interactionSession?.interrupt();
+    await _disposeInteractionSession();
     _isStreaming = false;
     _isTtsSpeaking = false;
     _isAudioPlaying = false;
@@ -1605,11 +1821,11 @@ class ChatEngine extends ChangeNotifier {
   }
 
   ProviderConfig? _resolveFastBrainProvider() {
-    return _settingsRepository.resolveBrainProvider(BrainRole.left);
+    return _settingsRepository.interactionContract.leftBrain.provider;
   }
 
   ProviderConfig? _resolveSlowBrainProvider() {
-    return _settingsRepository.resolveBrainProvider(BrainRole.right);
+    return _settingsRepository.interactionContract.rightBrain.provider;
   }
 
   ProviderConfig? _resolveChatProvider(BrainRouteDecision decision) {
@@ -1689,13 +1905,12 @@ class ChatEngine extends ChangeNotifier {
   }
 
   ProviderConfig? _resolveTtsProvider() {
-    final settings = _settingsRepository.settings;
-    return _settingsRepository.findProvider(settings.ttsProviderId);
+    return _settingsRepository.interactionContract.tts.provider;
   }
 
   ProviderConfig? _resolveIncrementalTtsProvider() {
-    final settings = _settingsRepository.settings;
-    if (settings.route != ModelRoute.standard) {
+    if (_settingsRepository.interactionContract.mode !=
+        InteractionMode.lightweight) {
       return null;
     }
     if (!_supportsStreamingAudio()) {
@@ -1712,8 +1927,7 @@ class ChatEngine extends ChangeNotifier {
   }
 
   ProviderConfig? _resolveSttProvider() {
-    final settings = _settingsRepository.settings;
-    return _settingsRepository.findProvider(settings.sttProviderId);
+    return _settingsRepository.interactionContract.stt.provider;
   }
 
   Future<void> _playTts(String text) async {
@@ -3418,6 +3632,7 @@ $original
     RuntimeHub.instance.arbitrator.clearLane(RuntimeArbitrationLane.voice);
     RuntimeHub.instance.arbitrator.clearLane(RuntimeArbitrationLane.danmaku);
     _streamSubscription?.cancel();
+    _interactionEventSubscription?.cancel();
     _audioPlayingSubscription?.cancel();
     _danmakuSubscription?.cancel();
     _lipSyncTimer?.cancel();
@@ -3427,6 +3642,7 @@ $original
     // Best-effort teardown; don't block widget dispose.
     unawaited(_speech.stop());
     unawaited(_tts.stop());
+    unawaited(_interactionSession?.dispose());
     unawaited(_audioPlayer.stop());
     unawaited(_audioPlayer.dispose());
     super.dispose();

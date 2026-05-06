@@ -79,6 +79,38 @@
       "metadata": {},
       "createdAt": 1777912000735,
       "lastActivity": 1777912000735
+    },
+    {
+      "sessionID": "ses_207cbcb43ffeJbgq0AU0fVAdgG",
+      "workspaceRoot": "D:\\-Users-\\Documents\\GitHub\\CMYKE",
+      "checkpoints": [],
+      "metadata": {},
+      "createdAt": 1777985664190,
+      "lastActivity": 1777985664190
+    },
+    {
+      "sessionID": "ses_207cbcb11ffeJeQf7AfIaVFjqs",
+      "workspaceRoot": "D:\\-Users-\\Documents\\GitHub\\CMYKE",
+      "checkpoints": [],
+      "metadata": {},
+      "createdAt": 1777985664239,
+      "lastActivity": 1777985664239
+    },
+    {
+      "sessionID": "ses_207cbcb04ffe0AA72yO5iJZRVG",
+      "workspaceRoot": "D:\\-Users-\\Documents\\GitHub\\CMYKE",
+      "checkpoints": [],
+      "metadata": {},
+      "createdAt": 1777985664252,
+      "lastActivity": 1777985664252
+    },
+    {
+      "sessionID": "ses_207bfdc61ffeEF5onGCWUNMrNw",
+      "workspaceRoot": "D:\\-Users-\\Documents\\GitHub\\CMYKE",
+      "checkpoints": [],
+      "metadata": {},
+      "createdAt": 1777986446239,
+      "lastActivity": 1777986446239
     }
   ],
   "workspaces": [
@@ -94,10 +126,14 @@
         "ses_20c3c7342ffeeUbOGFPK67YUBe",
         "ses_20c3c6be5ffeOOn5B16XP1GpgS",
         "ses_20c2fd84cffen6OR4JbDyywx93",
-        "ses_20c2fcf22ffeCKbFW0YqoZs5vg"
+        "ses_20c2fcf22ffeCKbFW0YqoZs5vg",
+        "ses_207cbcb43ffeJbgq0AU0fVAdgG",
+        "ses_207cbcb11ffeJeQf7AfIaVFjqs",
+        "ses_207cbcb04ffe0AA72yO5iJZRVG",
+        "ses_207bfdc61ffeEF5onGCWUNMrNw"
       ],
       "globalContext": {},
-      "lastActivity": 1777912000735
+      "lastActivity": 1777986446239
     }
   ],
   "repositories": []

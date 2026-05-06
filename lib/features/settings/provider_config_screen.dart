@@ -9,6 +9,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../core/models/app_settings.dart';
 import '../../core/models/expression_event.dart';
+import '../../core/models/interaction_profile.dart';
 import '../../core/models/provider_config.dart';
 import '../../core/models/runtime_capability_snapshot.dart';
 import '../../core/models/stage_action.dart';
@@ -103,8 +104,17 @@ class _RuntimeTab extends StatelessWidget {
         _RouteSelector(
           route: settings.route,
           onChanged: (route) {
-            settingsRepository.updateSettings(settings.copyWith(route: route));
+            final updated = settings.copyWith(route: route);
+            // Keep the active profile in sync with the selected mode
+            final newMode = updated.interactionMode;
+            settingsRepository.updateActiveProfileMode(newMode);
+            settingsRepository.updateSettings(updated);
           },
+        ),
+        const SizedBox(height: 12),
+        _InteractionProfileCard(
+          settingsRepository: settingsRepository,
+          settings: settings,
         ),
         const SizedBox(height: 12),
         _HintCard(
@@ -616,6 +626,128 @@ class _SectionHeader extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _InteractionProfileCard extends StatelessWidget {
+  const _InteractionProfileCard({
+    required this.settingsRepository,
+    required this.settings,
+  });
+
+  final SettingsRepository settingsRepository;
+  final AppSettings settings;
+
+  String _modeLabel(InteractionMode mode) {
+    switch (mode) {
+      case InteractionMode.lightweight:
+        return '轻量模式';
+      case InteractionMode.nativeRealtime:
+        return 'Realtime 原生';
+      case InteractionMode.nativeOmni:
+        return 'Omni 原生';
+      case InteractionMode.composite:
+        return '组合模式';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final profile = settingsRepository.activeInteractionProfile;
+    final contract = settingsRepository.interactionContract;
+    final theme = Theme.of(context);
+
+    return Card(
+      color: theme.colorScheme.surfaceContainerHighest,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(
+                  'Profile: ${profile.name}',
+                  style: theme.textTheme
+                      .titleSmall
+                      ?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                const Spacer(),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primary.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    _modeLabel(profile.mode),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: theme.colorScheme.primary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                _BindingChip(
+                  label: 'LLM',
+                  id: contract.main.providerId ?? '—',
+                ),
+                const SizedBox(width: 8),
+                _BindingChip(
+                  label: 'TTS',
+                  id: contract.tts.providerId ?? '—',
+                ),
+                const SizedBox(width: 8),
+                _BindingChip(
+                  label: 'STT',
+                  id: contract.stt.providerId ?? '—',
+                ),
+              ],
+            ),
+            if (contract.options.allowRightBrainEscalation) ...[
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  _BindingChip(
+                    label: '右脑',
+                    id: contract.rightBrain.providerId ?? '—',
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _BindingChip extends StatelessWidget {
+  const _BindingChip({required this.label, required this.id});
+  final String label;
+  final String id;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        border: Border.all(color: Theme.of(context).dividerColor),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        '$label: $id',
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
     );
   }
 }

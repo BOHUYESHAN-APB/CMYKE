@@ -1,3 +1,5 @@
+import 'interaction_profile.dart';
+
 enum ModelRoute { standard, realtime, omni }
 
 enum PersonaMode { persona, standard }
@@ -27,6 +29,7 @@ const Object _unset = Object();
 class AppSettings {
   AppSettings({
     required this.route,
+    this.activeProfileId,
     this.llmProviderId,
     this.embeddingProviderId,
     this.visionProviderId,
@@ -95,6 +98,7 @@ class AppSettings {
   });
 
   ModelRoute route;
+  String? activeProfileId;
   String? llmProviderId;
   String? embeddingProviderId;
   String? visionProviderId;
@@ -164,6 +168,7 @@ class AppSettings {
 
   AppSettings copyWith({
     ModelRoute? route,
+    Object? activeProfileId = _unset,
     String? llmProviderId,
     String? embeddingProviderId,
     String? visionProviderId,
@@ -227,6 +232,9 @@ class AppSettings {
   }) {
     return AppSettings(
       route: route ?? this.route,
+      activeProfileId: activeProfileId == _unset
+          ? this.activeProfileId
+          : activeProfileId as String?,
       llmProviderId: llmProviderId ?? this.llmProviderId,
       embeddingProviderId: embeddingProviderId ?? this.embeddingProviderId,
       visionProviderId: visionProviderId ?? this.visionProviderId,
@@ -324,6 +332,7 @@ class AppSettings {
 
   Map<String, dynamic> toJson() => {
     'route': route.name,
+    'active_profile_id': activeProfileId,
     'llm_provider_id': llmProviderId,
     'embedding_provider_id': embeddingProviderId,
     'vision_provider_id': visionProviderId,
@@ -391,6 +400,7 @@ class AppSettings {
       (route) => route.name == json['route'],
       orElse: () => ModelRoute.standard,
     ),
+    activeProfileId: json['active_profile_id'] as String?,
     llmProviderId: json['llm_provider_id'] as String?,
     embeddingProviderId: json['embedding_provider_id'] as String?,
     visionProviderId: json['vision_provider_id'] as String?,
@@ -502,6 +512,69 @@ class AppSettings {
     danmakuBilibiliBiliJct: json['danmaku_bilibili_bili_jct'] as String?,
     danmakuBilibiliBuvid3: json['danmaku_bilibili_buvid3'] as String?,
   );
+
+  String get resolvedActiveProfileId {
+    final value = activeProfileId?.trim();
+    if (value != null && value.isNotEmpty) {
+      return value;
+    }
+    return 'profile_${route.name}_default';
+  }
+
+  InteractionMode get interactionMode => switch (route) {
+    ModelRoute.standard => InteractionMode.lightweight,
+    ModelRoute.realtime => InteractionMode.nativeRealtime,
+    ModelRoute.omni => InteractionMode.nativeOmni,
+  };
+
+  InteractionBindings toInteractionBindings() {
+    return InteractionBindings(
+      llmProviderId: llmProviderId,
+      embeddingProviderId: embeddingProviderId,
+      visionProviderId: visionProviderId,
+      ttsProviderId: ttsProviderId,
+      sttProviderId: sttProviderId,
+      realtimeProviderId: realtimeProviderId,
+      omniProviderId: omniProviderId,
+      leftBrainProviderId: switch (route) {
+        ModelRoute.standard => llmProviderId,
+        ModelRoute.realtime => realtimeProviderId,
+        ModelRoute.omni => omniProviderId,
+      },
+      rightBrainProviderId: llmProviderId,
+      motionAgentProviderId: motionAgentProviderId,
+      memoryAgentProviderId: memoryAgentProviderId,
+    );
+  }
+
+  InteractionOptions toInteractionOptions() {
+    return InteractionOptions(
+      incrementalTts: route == ModelRoute.standard,
+      allowBargeIn: route != ModelRoute.standard,
+      useNativeAudioInput: route != ModelRoute.standard,
+      useNativeAudioOutput: route != ModelRoute.standard,
+      allowRightBrainEscalation: route != ModelRoute.standard,
+    );
+  }
+
+  InteractionProfile toDefaultInteractionProfile({DateTime? now}) {
+    final timestamp = now ?? DateTime.now().toUtc();
+    final name = switch (interactionMode) {
+      InteractionMode.lightweight => '轻量模式',
+      InteractionMode.nativeRealtime => '实时交互模式',
+      InteractionMode.nativeOmni => 'Omni 模式',
+      InteractionMode.composite => '组合模式',
+    };
+    return InteractionProfile(
+      id: resolvedActiveProfileId,
+      name: name,
+      mode: interactionMode,
+      bindings: toInteractionBindings(),
+      options: toInteractionOptions(),
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    );
+  }
 }
 
 List<AutonomyPlatform> _parseAutonomyPlatforms(Object? raw) {

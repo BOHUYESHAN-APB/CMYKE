@@ -57,7 +57,7 @@ class LocalDatabase {
       return ffi.databaseFactoryFfi.openDatabase(
         dbPath,
         options: OpenDatabaseOptions(
-          version: 29,
+          version: 30,
           onConfigure: (db) async {
             await db.execute('PRAGMA foreign_keys = ON');
           },
@@ -68,7 +68,7 @@ class LocalDatabase {
     }
     return openDatabase(
       dbPath,
-      version: 29,
+      version: 30,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
       },
@@ -206,6 +206,7 @@ class LocalDatabase {
       CREATE TABLE app_settings (
         id INTEGER PRIMARY KEY,
         route TEXT NOT NULL,
+        active_profile_id TEXT,
         llm_provider_id TEXT,
         embedding_provider_id TEXT,
         vision_provider_id TEXT,
@@ -256,7 +257,27 @@ class LocalDatabase {
         layout_preset TEXT,
         layout_sidebar_width REAL,
         layout_right_panel_width REAL,
-        layout_show_right_panel INTEGER NOT NULL DEFAULT 1
+        layout_show_right_panel INTEGER NOT NULL DEFAULT 1,
+        danmaku_enabled INTEGER NOT NULL DEFAULT 0,
+        danmaku_platform TEXT,
+        danmaku_room_id INTEGER,
+        danmaku_batch_interval_seconds INTEGER NOT NULL DEFAULT 20,
+        danmaku_batch_size INTEGER NOT NULL DEFAULT 50,
+        danmaku_inject_to_chat_enabled INTEGER NOT NULL DEFAULT 0,
+        danmaku_bilibili_sess_data TEXT,
+        danmaku_bilibili_bili_jct TEXT,
+        danmaku_bilibili_buvid3 TEXT
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE interaction_profiles (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        bindings_json TEXT NOT NULL,
+        options_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
       )
     ''');
     await db.execute('''
@@ -522,6 +543,45 @@ class LocalDatabase {
       await db.execute('ALTER TABLE notes ADD COLUMN memory_tier TEXT');
       await db.execute('ALTER TABLE notes ADD COLUMN memory_record_id TEXT');
       await db.execute('ALTER TABLE notes ADD COLUMN memory_synced_at TEXT');
+    }
+    if (oldVersion < 30) {
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN active_profile_id TEXT',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN danmaku_enabled INTEGER NOT NULL DEFAULT 0',
+      );
+      await db.execute('ALTER TABLE app_settings ADD COLUMN danmaku_platform TEXT');
+      await db.execute('ALTER TABLE app_settings ADD COLUMN danmaku_room_id INTEGER');
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN danmaku_batch_interval_seconds INTEGER NOT NULL DEFAULT 20',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN danmaku_batch_size INTEGER NOT NULL DEFAULT 50',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN danmaku_inject_to_chat_enabled INTEGER NOT NULL DEFAULT 0',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN danmaku_bilibili_sess_data TEXT',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN danmaku_bilibili_bili_jct TEXT',
+      );
+      await db.execute(
+        'ALTER TABLE app_settings ADD COLUMN danmaku_bilibili_buvid3 TEXT',
+      );
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS interaction_profiles (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          mode TEXT NOT NULL,
+          bindings_json TEXT NOT NULL,
+          options_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+      ''');
     }
   }
 }
